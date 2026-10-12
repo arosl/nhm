@@ -15,8 +15,16 @@ import (
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
+
+// The tests resume claude without one on PATH (CI has no agent CLI):
+// the kinds' program checks see a claude binary that is an ELF file.
+func init() {
+	kinds.ResolveProgram = func(name string) (string, error) { return "/opt/" + name + "/bin/" + name, nil }
+	kinds.ProgramHead = func(string) ([]byte, error) { return []byte("\x7fELF\x02\x01\x01"), nil }
+}
 
 func u64(v uint64) *uint64 { return &v }
 
