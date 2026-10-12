@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/arosl/nhm/internal/core/hooks"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/store"
 )
 
 const maintainUsage = `Usage: nhm maintain [--once | --loop [--interval D]] [--mail-from NAME [--mail-to NAME]]
@@ -33,7 +36,9 @@ mails each new limit event (nhm limits).
 runs every 15 s. --loop repeats it every --interval (default 15s). One
 runner per herdr server: a second one exits 0 and says so. nhm doctor
 shows the last pass and its runner. Under ACFS's Bash, the pass does
-nothing.
+nothing. With --once, a herdr server that is not enrolled or does not
+run is nothing to do too: exit 0, the reason on one stdout line, nothing
+on stderr.
 `
 
 // maintainLockFile is the singleton lock in the instance directory.
@@ -58,11 +63,24 @@ func runMaintain(args []string, stdout, stderr io.Writer) int {
 	env := envelope{Command: "maintain"}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// ACFS's timer runs --once every 15 s whether or not nhm serves this
+	// herdr server: not enrolled and no server are nothing to do, as the
+	// Bash owning it is (acfs-9hkh.78).
+	skip := func(why string) int {
+		env.Result = maintainResult{Skipped: why, Names: []string{}, Limits: []limitReport{}, Warnings: []string{}}
+		return output(stdout, stderr, *asJSON, env, nil, exitOK, func(w io.Writer) { fmt.Fprintf(w, "nothing to do: %s\n", why) })
+	}
 	ie, err := openInstance(*socket)
 	if err != nil {
+		if !*loop && errors.Is(err, store.ErrNotEnrolled) {
+			return skip("this herdr server is not enrolled (nhm admin instance enroll)")
+		}
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
 	defer ie.db.Close()
+	if !*loop && !serverMayRun(ie.herdr.SocketPath) {
+		return skip("no herdr server runs on " + ie.herdr.SocketPath)
+	}
 	unlock, err := tryLock(filepath.Join(ie.inst.Dir, maintainLockFile))
 	if errors.Is(err, errLocked) {
 		env.Result = maintainResult{Skipped: "another nhm maintain runs for this herdr server"}
@@ -102,6 +120,18 @@ func runMaintain(args []string, stdout, stderr io.Writer) int {
 		case <-time.After(*interval):
 		}
 	}
+}
+
+// serverMayRun reports false only when nothing listens on the socket:
+// the file is missing, or the connection is refused (a socket left by a
+// server that stopped). Any other failure is the pass's to report.
+func serverMayRun(socket string) bool {
+	c, err := net.DialTimeout("unix", socket, 2*time.Second)
+	if err == nil {
+		_ = c.Close()
+		return true
+	}
+	return !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // maintainOptions are one pass's settings.
