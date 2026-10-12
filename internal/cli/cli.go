@@ -68,6 +68,9 @@ Usage:
   nhm --robot-send=S --panes=P --type=K (--msg=M | --msg-file=-) --op-id=ID |
       --robot-send-receipt=OP | --robot-ack=S [--op-id=ID] [--timeout=D]
                          ntm's robot dispatch flags, ntm's types
+  nhm quota [--json]     each plan's windows and the live agents per kind
+  nhm limits [session] [--once|--loop] [--dry-run] [--json]
+                         the agents a usage limit stopped
   nhm resolve <name|herdr-name|pane-id|--current> [--json]
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
@@ -129,6 +132,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runCapabilities(args[1:], stdout, stderr)
 	case "compatibility":
 		return runCompatibility(args[1:], stdout, stderr)
+	case "quota":
+		return runQuota(args[1:], stdout, stderr)
+	case "limits":
+		return runLimits(args[1:], stdout, stderr)
 	case "wait":
 		return runWait(args[1:], stdout, stderr)
 	case "interrupt":
