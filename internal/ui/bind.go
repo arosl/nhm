@@ -129,15 +129,21 @@ func closeIndex(s, delim string) int {
 }
 
 // codeOf is a TOML line without its comment: the text before the first #
-// outside a string. A line that opens a multi-line string is kept whole.
+// outside a string. A multi-line string that closes on the line is
+// skipped like any string; a line that leaves one open is kept whole.
 func codeOf(line string) string {
 	for i := 0; i < len(line); i++ {
 		switch line[i] {
 		case '#':
 			return line[:i]
 		case '"', '\'':
-			if strings.HasPrefix(line[i:], `"""`) || strings.HasPrefix(line[i:], `'''`) {
-				return line
+			if d := line[i:min(i+3, len(line))]; d == `"""` || d == `'''` {
+				j := closeIndex(line[i+3:], d)
+				if j < 0 {
+					return line
+				}
+				i += 3 + j - 1
+				continue
 			}
 			q := line[i]
 			for i++; i < len(line) && line[i] != q; i++ {

@@ -276,7 +276,10 @@ func printRun(w io.Writer, r ensemble.Run) {
 		}
 		fmt.Fprintln(w, line)
 	}
-	fmt.Fprintf(w, "results: %s\n", r.Dir)
+	fmt.Fprintf(w, "results: %s\n", r.ResultsDir())
+	if r.StaleClaim(time.Now()) {
+		fmt.Fprintf(w, "synthesis: claimed with no prompt sent for %s or more; synthesize may run again\n", ensemble.SynthesisClaimTimeout)
+	}
 }
 
 func printRunStatus(w io.Writer, st RunStatus) {

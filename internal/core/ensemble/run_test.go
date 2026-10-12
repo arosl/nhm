@@ -62,7 +62,7 @@ func start(t *testing.T, f *fakes, env RunEnv) Run {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := Start(context.Background(), env, cat, StartRequest{Preset: "project-diagnosis", Question: "Is the cache safe?", ProjectRoot: "/p"})
+	r, err := Start(context.Background(), env, cat, StartRequest{Preset: "project-diagnosis", Question: "Is the cache safe?", ProjectRoot: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

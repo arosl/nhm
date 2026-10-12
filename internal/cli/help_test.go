@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"strings"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -13,6 +13,12 @@ func TestHelpListsEveryAvailableRobotFlag(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("help = %d", code)
 	}
+	// Whole flags only: --robot-send must not pass on --robot-send-receipt
+	// (acfs-9hkh.69).
+	listed := map[string]bool{}
+	for _, f := range regexp.MustCompile(`--robot-[a-z0-9-]*[a-z0-9]`).FindAllString(out, -1) {
+		listed[f] = true
+	}
 	caps := robotCapabilities("json", time.Now())
 	available := 0
 	for _, c := range caps.Commands {
@@ -20,7 +26,7 @@ func TestHelpListsEveryAvailableRobotFlag(t *testing.T) {
 			continue
 		}
 		available++
-		if !strings.Contains(out, c.Flag) {
+		if !listed[c.Flag] {
 			t.Errorf("nhm help does not list %s, which --robot-capabilities offers", c.Flag)
 		}
 	}

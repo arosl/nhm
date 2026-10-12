@@ -28,6 +28,10 @@ func TestUsesKey(t *testing.T) {
 		{"[keys]\nnew_tab = \"prefix+a\" # was ctrl+t\n", true},
 		{"[keys]\nnew_tab = \"x#\" # \"prefix+a\"\n", false},
 		{"[keys]\nzoom = [\"x\", # 'prefix+a'\n  'y']\n", false},
+		// A one-line multi-line string, then a comment (acfs-9hkh.69).
+		{"[keys]\nnew_tab = \"\"\"x\"\"\" # 'prefix+a'\n", false},
+		{"[keys]\nnew_tab = '''x''' # 'prefix+a'\n", false},
+		{"[keys]\nnew_tab = \"\"\"prefix+a\"\"\" # note\n", true},
 	} {
 		if got := usesKey(tc.config, "prefix+a") != ""; got != tc.want {
 			t.Errorf("usesKey(%q) = %v, want %v", tc.config, got, tc.want)

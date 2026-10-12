@@ -2,17 +2,20 @@ package ensemble
 
 // Ensemble runs (plan-v8 2.11). A run is a group of agents, one per angle
 // of a preset, each started by nhm's spawn and prompted by nhm's send; it
-// needs nothing else from herdr. Its durable metadata is run.json in the
-// run's directory, beside the angles' artifacts:
+// needs nothing else from herdr. The agents write their results inside
+// the project, where a sandboxed agent may write. What nhm keeps (run.json,
+// the lock, the checked copies of the results) is in nhm's state
+// directory, which no agent is told to write:
 //
 //	<instance>/runs/<run-id>/run.json
-//	<instance>/runs/<run-id>/angle-<i>-<mode>.md
-//	<instance>/runs/<run-id>/synthesis.md
+//	<instance>/runs/<run-id>/checked-angle-<i>-<mode>.md
+//	<project>/.nhm/ensemble/<run-id>/angle-<i>-<mode>.md
+//	<project>/.nhm/ensemble/<run-id>/synthesis.md
 //
 // Each angle's prompt names its artifact and the first line it must hold:
 // "<!-- nhm-ensemble run=<id> angle=<i> mode=<mode> -->". synthesize
 // accepts an artifact only with that line, as a regular file inside the
-// run's directory, so an artifact always belongs to its run and angle. It
+// run's artifact directory, so an artifact always belongs to its run and angle. It
 // refuses when an angle is missing, unless partial, which records the
 // omissions. stop keeps every artifact and retires no agent.
 
@@ -81,8 +84,39 @@ type Run struct {
 	Omitted       []int             `json:"omitted_angles,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`
 	SynthesizedAt *time.Time        `json:"synthesized_at,omitempty"`
-	StoppedAt     *time.Time        `json:"stopped_at,omitempty"`
-	Dir           string            `json:"-"`
+	// SynthesisClaimedAt is when synthesize claimed the run; with no
+	// SynthesisOp after SynthesisClaimTimeout, the claim is stale.
+	SynthesisClaimedAt *time.Time `json:"synthesis_claimed_at,omitempty"`
+	StoppedAt          *time.Time `json:"stopped_at,omitempty"`
+	// ArtifactDir is where the agents write; "" (a run from before it)
+	// means Dir.
+	ArtifactDir string `json:"artifact_dir,omitempty"`
+	Dir         string `json:"-"`
+}
+
+// ResultsDir is where a run's agents write their results.
+func (r Run) ResultsDir() string {
+	if r.ArtifactDir != "" {
+		return r.ArtifactDir
+	}
+	return r.Dir
+}
+
+// SynthesisClaimTimeout is how long a synthesis claim may stand without
+// its send's operation. A synthesize that died between its claim and its
+// record (a crash, a kill) leaves such a claim; after this time the run
+// may be synthesized again. A send that claimed an operation is never
+// sent again.
+const SynthesisClaimTimeout = 15 * time.Minute
+
+// StaleClaim reports whether the run is synthesizing on a claim that a
+// dead synthesize left: no operation, and claimed SynthesisClaimTimeout
+// ago or more (or at an unknown time).
+func (r Run) StaleClaim(now time.Time) bool {
+	if r.Status != RunSynthesizing || r.SynthesisOp != "" {
+		return false
+	}
+	return r.SynthesisClaimedAt == nil || now.Sub(*r.SynthesisClaimedAt) >= SynthesisClaimTimeout
 }
 
 // RunEnv is what a run needs: the instance's runs directory, and nhm's
@@ -127,6 +161,9 @@ var (
 	markerLinePattern = regexp.MustCompile(`^<!-- nhm-ensemble run=(\S+) angle=([0-9]+) mode=(\S+) -->$`)
 )
 
+// newRunID makes a run id; tests replace it.
+var newRunID = NewRunID
+
 // NewRunID returns a run id: the UTC start time and six hex digits.
 func NewRunID(now time.Time) (string, error) {
 	b := make([]byte, 3)
@@ -160,7 +197,7 @@ func Start(ctx context.Context, env RunEnv, cat *Catalog, req StartRequest) (Run
 	if kind == "" {
 		kind = "claude"
 	}
-	id, err := NewRunID(env.now())
+	id, err := newRunID(env.now())
 	if err != nil {
 		return Run{}, err
 	}
@@ -171,9 +208,12 @@ func Start(ctx context.Context, env RunEnv, cat *Catalog, req StartRequest) (Run
 	r := Run{ID: id, Preset: p.Name, Strategy: p.Synthesis.Strategy, Question: req.Question, Session: session,
 		Group: id, ProjectRoot: req.ProjectRoot, Status: RunStarting, CreatedAt: env.now().UTC(),
 		Dir: filepath.Join(env.RunsDir, id)}
+	if req.ProjectRoot != "" {
+		r.ArtifactDir = filepath.Join(req.ProjectRoot, ".nhm", "ensemble", id)
+	}
 	for i, m := range modes {
 		r.Angles = append(r.Angles, Angle{Index: i, Mode: m.ID, Code: m.Code, Kind: kind, Model: req.Model,
-			Artifact: filepath.Join(r.Dir, fmt.Sprintf("angle-%d-%s.md", i, m.ID))})
+			Artifact: filepath.Join(r.ResultsDir(), fmt.Sprintf("angle-%d-%s.md", i, m.ID))})
 	}
 	if err := os.MkdirAll(env.RunsDir, 0o700); err != nil {
 		return r, fmt.Errorf("ensemble: %w", err)
@@ -181,6 +221,9 @@ func Start(ctx context.Context, env RunEnv, cat *Catalog, req StartRequest) (Run
 	// Mkdir, not MkdirAll: two runs never share a directory.
 	if err := os.Mkdir(r.Dir, 0o700); err != nil {
 		return r, fmt.Errorf("ensemble: run directory: %w", err)
+	}
+	if err := makeArtifactDir(r); err != nil {
+		return r, err
 	}
 	if err := save(r); err != nil {
 		return r, err
@@ -229,6 +272,30 @@ func Start(ctx context.Context, env RunEnv, cat *Catalog, req StartRequest) (Run
 		return r, err
 	}
 	return saved, serr
+}
+
+// makeArtifactDir makes the run's artifact directory in the project,
+// <project>/.nhm/ensemble/<run-id>, with a .gitignore of * beside the
+// runs so their results stay out of the project's git status. Like the
+// run's directory, it is never shared.
+func makeArtifactDir(r Run) error {
+	if r.ArtifactDir == "" {
+		return nil
+	}
+	parent := filepath.Dir(r.ArtifactDir)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("ensemble: artifact directory: %w", err)
+	}
+	ignore := filepath.Join(parent, ".gitignore")
+	if _, err := os.Lstat(ignore); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(ignore, []byte("*\n"), 0o644); err != nil {
+			return fmt.Errorf("ensemble: artifact directory: %w", err)
+		}
+	}
+	if err := os.Mkdir(r.ArtifactDir, 0o700); err != nil {
+		return fmt.Errorf("ensemble: artifact directory: %w", err)
+	}
+	return nil
 }
 
 // settleStart records a start's outcome under the run's lock. A stop that
@@ -403,6 +470,10 @@ type ArtifactState struct {
 // MaxArtifactBytes caps an angle's artifact: a larger file is not valid.
 const MaxArtifactBytes = 1 << 20
 
+// afterLstat runs between readArtifact's Lstat and its open; tests swap
+// the file there.
+var afterLstat = func(string) {}
+
 // Artifacts checks each angle's artifact.
 func Artifacts(r Run) []ArtifactState {
 	out := make([]ArtifactState, 0, len(r.Angles))
@@ -422,11 +493,12 @@ func Artifacts(r Run) []ArtifactState {
 // saw, no larger than MaxArtifactBytes. What synthesize hands on is the
 // content read here, never the path again.
 func readArtifact(r Run, a Angle) ([]byte, string) {
-	rel, err := filepath.Rel(r.Dir, a.Artifact)
+	rel, err := filepath.Rel(r.ResultsDir(), a.Artifact)
 	if err != nil || strings.HasPrefix(rel, "..") || filepath.Dir(rel) != "." {
-		return nil, "not in the run's directory"
+		return nil, "not in the run's artifact directory"
 	}
 	info, err := os.Lstat(a.Artifact)
+	afterLstat(a.Artifact)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return nil, "missing"
@@ -504,11 +576,14 @@ func Synthesize(ctx context.Context, env RunEnv, req SynthesizeRequest) (Run, er
 	var valid []ArtifactState
 	var omitted []int
 	r, err := update(ctx, env.RunsDir, req.RunID, func(r *Run) error {
-		switch r.Status {
-		case RunRunning:
-		case RunSynthesizing:
+		switch {
+		case r.Status == RunRunning:
+		case r.StaleClaim(env.now()):
+			// A synthesize died between its claim and its record: claim
+			// again (SynthesisClaimTimeout).
+		case r.Status == RunSynthesizing:
 			return fmt.Errorf("%w: %s (synthesis prompt %s)", ErrSynthesizing, r.ID, firstOf(r.SynthesisOp, "in flight"))
-		case RunStopped:
+		case r.Status == RunStopped:
 			return fmt.Errorf("%w: %s", ErrRunStopped, r.ID)
 		default:
 			return fmt.Errorf("%w: %s is %s", ErrNotRunning, r.ID, r.Status)
@@ -541,8 +616,9 @@ func Synthesize(ctx context.Context, env RunEnv, req SynthesizeRequest) (Run, er
 		if to == "" {
 			to = r.Angles[valid[0].Index].MailName
 		}
-		r.Status, r.SynthesisTo, r.Omitted = RunSynthesizing, to, omitted
-		r.Synthesis, r.SynthesisOp, r.SynthesizedAt = filepath.Join(r.Dir, "synthesis.md"), "", nil
+		claimed := env.now().UTC()
+		r.Status, r.SynthesisTo, r.Omitted, r.SynthesisClaimedAt = RunSynthesizing, to, omitted, &claimed
+		r.Synthesis, r.SynthesisOp, r.SynthesizedAt = filepath.Join(r.ResultsDir(), "synthesis.md"), "", nil
 		return nil
 	})
 	if err != nil {
@@ -557,7 +633,7 @@ func Synthesize(ctx context.Context, env RunEnv, req SynthesizeRequest) (Run, er
 		if serr != nil && res.OperationID == "" {
 			// Nothing was claimed, so nothing was sent.
 			if cur.Status == RunSynthesizing {
-				cur.Status, cur.SynthesisTo, cur.Omitted, cur.Synthesis = RunRunning, "", nil, ""
+				cur.Status, cur.SynthesisTo, cur.Omitted, cur.Synthesis, cur.SynthesisClaimedAt = RunRunning, "", nil, "", nil
 			}
 			return nil
 		}
