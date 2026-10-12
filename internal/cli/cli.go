@@ -43,6 +43,8 @@ Usage:
                          focus a session's workspace and zoom one pane
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
+  nhm admin takeover | admin handback (--dry-run | --yes)
+                         move this server's agents from ACFS's Bash to nhm, or back
   nhm new <session>      create the workspace only
   nhm status [session] [--watch] [--json]
                          one row per agent: slot, name, kind, state, mail

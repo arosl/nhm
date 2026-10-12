@@ -51,9 +51,9 @@ var (
 
 // Owner is the content of owner.toml.
 type Owner struct {
-	Owner      string    `toml:"owner"`
-	Generation int64     `toml:"generation"`
-	UpdatedAt  time.Time `toml:"updated_at"`
+	Owner      string    `toml:"owner" json:"owner"`
+	Generation int64     `toml:"generation" json:"generation"`
+	UpdatedAt  time.Time `toml:"updated_at" json:"updated_at"`
 }
 
 // ReadOwner reads owner.toml in an instance directory.
