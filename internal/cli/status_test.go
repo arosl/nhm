@@ -22,6 +22,9 @@ import (
 // binds IcyKnoll in an enrolled instance.
 func swarmInstance(t *testing.T) *herdrtest.Server {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("ACFS_HOME", "")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HERDR_SOCKET_PATH", "")

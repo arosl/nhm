@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/guards"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -135,6 +137,8 @@ func doctorChecks(ctx context.Context, socket string, withMail bool) []doctorChe
 		}
 	}
 
+	checks = append(checks, guardChecks(ctx)...)
+
 	if withMail {
 		c, err := agentmail.NewClient("")
 		if err == nil {
@@ -145,6 +149,35 @@ func doctorChecks(ctx context.Context, socket string, withMail bool) []doctorChe
 				Fix: "start Agent Mail (am serve-http), or set AGENT_MAIL_URL; status shows mail as unknown until then"})
 		} else {
 			add(doctorCheck{Name: "agent mail", Result: checkOK, Detail: c.URL})
+		}
+	}
+	return checks
+}
+
+// guardChecks reports each guard per kind (plan-v8 2.14), in the project
+// of the cwd when there is one. A missing guard is a warning here: spawn
+// refuses the kind until it is configured.
+func guardChecks(ctx context.Context) []doctorCheck {
+	env := guards.Env{}
+	if s, err := projectScope(ctx, "", ""); err == nil {
+		env.ProjectRoot = s.ProjectRoot
+	}
+	var checks []doctorCheck
+	for _, kind := range guards.Kinds {
+		for _, r := range guards.Check(kind, env) {
+			c := doctorCheck{Name: "guard " + kind + " " + r.Guard, Detail: string(r.State)}
+			switch r.State {
+			case guards.Configured, guards.VerifiedForLaunch:
+				c.Result = checkOK
+				if len(r.Sources) > 0 {
+					c.Detail += " (" + strings.Join(r.Sources, ", ") + ")"
+				}
+			case guards.Unsupported:
+				c.Result, c.Detail = checkOK, c.Detail+": "+r.Detail
+			default:
+				c.Result, c.Detail, c.Fix = checkWarn, c.Detail+": "+r.Detail, r.Fix
+			}
+			checks = append(checks, c)
 		}
 	}
 	return checks
