@@ -78,8 +78,14 @@ func runMaintain(args []string, stdout, stderr io.Writer) int {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
 	defer ie.db.Close()
-	if !*loop && !serverMayRun(ie.herdr.SocketPath) {
-		return skip("no herdr server runs on " + ie.herdr.SocketPath)
+	if !*loop {
+		up, err := serverRuns(ie.herdr.SocketPath)
+		if err != nil {
+			return output(stdout, stderr, *asJSON, env, err, exitError, nil)
+		}
+		if !up {
+			return skip("no herdr server runs on " + ie.herdr.SocketPath)
+		}
 	}
 	unlock, err := tryLock(filepath.Join(ie.inst.Dir, maintainLockFile))
 	if errors.Is(err, errLocked) {
@@ -122,16 +128,23 @@ func runMaintain(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// serverMayRun reports false only when nothing listens on the socket:
-// the file is missing, or the connection is refused (a socket left by a
-// server that stopped). Any other failure is the pass's to report.
-func serverMayRun(socket string) bool {
+// serverRuns reports false only when nothing listens on the socket: the
+// file is missing, or the connection is refused (a socket left by a
+// server that stopped). A path the kernel will not take (over the
+// sockaddr limit: EINVAL, ENAMETOOLONG) cannot tell, and is an error,
+// never a quiet skip. Any other failure is the pass's to report.
+func serverRuns(socket string) (bool, error) {
 	c, err := net.DialTimeout("unix", socket, 2*time.Second)
-	if err == nil {
+	switch {
+	case err == nil:
 		_ = c.Close()
-		return true
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ECONNREFUSED):
+		return false, nil
+	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENAMETOOLONG):
+		return false, fmt.Errorf("cannot tell whether a herdr server runs on %s: %w", socket, err)
 	}
-	return !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED)
+	return true, nil
 }
 
 // maintainOptions are one pass's settings.

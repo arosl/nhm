@@ -2,6 +2,7 @@ package cli
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,14 +47,16 @@ func TestMaintainOnceIsQuietWhenThereIsNothingToServe(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		missing := filepath.Join(t.TempDir(), "herdr.sock")
+		// Socket paths stay under the kernel's limit (107 bytes) whatever
+		// TMPDIR is: a long one gives EINVAL, which is no "no server".
+		missing := filepath.Join(shortDir(t), "herdr.sock")
 		if _, _, err := store.Enroll(root, missing, "default", time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		quiet(t, "no herdr server runs on "+missing, "--socket", missing)
 
 		// A socket file a stopped server left behind refuses connections.
-		stale := filepath.Join(t.TempDir(), "stale.sock")
+		stale := filepath.Join(shortDir(t), "stale.sock")
 		l, err := net.ListenUnix("unix", &net.UnixAddr{Name: stale, Net: "unix"})
 		if err != nil {
 			t.Fatal(err)
@@ -70,4 +73,35 @@ func TestMaintainOnceIsQuietWhenThereIsNothingToServe(t *testing.T) {
 		s, _ := cliInstance(t) // ACFS's Bash owns a fresh enrolment
 		quiet(t, "", "--socket", s.SocketPath)
 	})
+}
+
+// A socket path the kernel will not take cannot tell whether a server
+// runs: the pass fails, it is never a quiet skip.
+func TestMaintainOnceFailsWhenItCannotTell(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	root, err := store.StateRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := filepath.Join(shortDir(t), strings.Repeat("d", 120), "herdr.sock")
+	if _, _, err := store.Enroll(root, long, "default", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runVerb(runMaintain, "--once", "--socket", long)
+	if code != exitError || strings.Contains(out, "nothing to do") || !strings.Contains(errOut, "cannot tell whether a herdr server runs") {
+		t.Fatalf("maintain --once on a %d-byte socket path = %d %q %q", len(long), code, out, errOut)
+	}
+}
+
+// shortDir is a fresh directory under /tmp, so a socket path in it fits
+// the kernel's sockaddr_un limit however long TMPDIR is.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "nhm-s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }

@@ -438,7 +438,8 @@ func TestWaitBudget(t *testing.T) {
 // request. It returns the socket path.
 func rawServer(t *testing.T, lines ...string) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "herdrraw")
+	// Under /tmp, not TMPDIR: a long TMPDIR passes the socket path limit.
+	dir, err := os.MkdirTemp("/tmp", "herdrraw")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -70,8 +70,9 @@ const writeTimeout = 2 * time.Second
 // New starts a stub and stops it when the test ends.
 func New(t testing.TB) *Server {
 	t.Helper()
-	// t.TempDir paths can pass the 108-byte limit of a socket path.
-	dir, err := os.MkdirTemp("", "herdrtest")
+	// t.TempDir paths can pass the 108-byte limit of a socket path, and so
+	// can any path under a long TMPDIR: the socket goes under /tmp.
+	dir, err := os.MkdirTemp("/tmp", "herdrtest")
 	if err != nil {
 		t.Fatalf("herdrtest: %v", err)
 	}
