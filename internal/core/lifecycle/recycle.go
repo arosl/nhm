@@ -199,7 +199,7 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	// Start the successor in the same pane, under the same name, in a
 	// fresh context, and bump the generation.
 	res.Stage = StageStart
-	argv := spawn.LaunchArgv(a, b.Model, "", env.LaunchSettings)
+	argv := spawn.LaunchArgv(a, b.Model, b.Effort, env.LaunchSettings)
 	ms := readyWait.Milliseconds()
 	alias := b.HerdrAlias
 	if alias == "" {
@@ -217,7 +217,7 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 		return fail(StageStart, fmt.Errorf("the successor waits at a dialog in pane %s; answer it there", b.PaneID))
 	}
 	occ := bindings.Occupant{WorkspaceID: b.WorkspaceID, TabID: b.TabID, PaneID: b.PaneID, HerdrAlias: alias, Kind: b.Kind,
-		Model: b.Model, LaunchID: b.LaunchID, Evidence: []bindings.Evidence{{Kind: "recycle", Detail: "successor of generation " + fmt.Sprint(b.Generation)}}}
+		Model: b.Model, Effort: b.Effort, LaunchID: b.LaunchID, Evidence: []bindings.Evidence{{Kind: "recycle", Detail: "successor of generation " + fmt.Sprint(b.Generation)}}}
 	if info.AgentSession != nil {
 		s := info.AgentSession
 		occ.NativeSession = &bindings.NativeSession{Source: s.Source, Agent: s.Agent, Kind: s.Kind, Value: s.Value}

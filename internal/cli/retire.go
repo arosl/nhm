@@ -24,9 +24,33 @@ import (
 // verbs hold it through bounded steps only (a recycle's stop waits 30 s).
 const lifecycleLockWait = 10 * time.Second
 
-// lifecycleFacts reads Agent Mail, git and br for retire and reap; tests
-// replace it, so they never reach the host's tools.
-var lifecycleFacts lifecycle.Facts = lifecycle.CLI{}
+// lifecycleFacts reads Agent Mail, git and br for retire and reap; nil is
+// the CLI with nhm's configured bead databases. Tests replace it, so they
+// never reach the host's tools.
+var lifecycleFacts lifecycle.Facts
+
+// beadDBs are the bead databases of nhm's config ([lifecycle] bead_dbs)
+// and of NHM_BEAD_DBS (absolute paths, separated by ':').
+func beadDBs() ([]string, error) {
+	var dbs []string
+	if dir, err := os.UserConfigDir(); err == nil {
+		list, err := lifecycle.LoadBeadDBs(dir + "/nhm/config.toml")
+		if err != nil {
+			return nil, err
+		}
+		dbs = append(dbs, list...)
+	}
+	for _, p := range strings.Split(os.Getenv("NHM_BEAD_DBS"), ":") {
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "/") {
+			return nil, fmt.Errorf("NHM_BEAD_DBS takes absolute paths, not %q", p)
+		}
+		dbs = append(dbs, p)
+	}
+	return dbs, nil
+}
 
 // lifecycleEnv is the lifecycle verbs' environment on an open instance.
 func (ie *instanceEnv) lifecycleEnv() (lifecycle.Env, error) {
@@ -34,10 +58,14 @@ func (ie *instanceEnv) lifecycleEnv() (lifecycle.Env, error) {
 	if err != nil {
 		return lifecycle.Env{}, err
 	}
+	facts := lifecycleFacts
+	if facts == nil {
+		facts = lifecycle.CLI{LoadBeadDBs: beadDBs}
+	}
 	home, _ := os.UserHomeDir()
 	configHome, _ := agentmail.ConfigHome()
 	senv := ie.sendEnv()
-	return lifecycle.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, Mail: mail, Facts: lifecycleFacts,
+	return lifecycle.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, Mail: mail, Facts: facts,
 		InstanceDir: ie.inst.Dir, Home: home, MailConfigHome: configHome, Caller: os.Getenv("HERDR_PANE_ID"),
 		Send:           func(ctx context.Context, r send.Request) (send.Result, error) { return send.Send(ctx, senv, r) },
 		Handoff:        lifecycle.DefaultHandoff("", ""),
@@ -388,7 +416,8 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 		res, kerr = lifecycle.Kill(ctx, lenv, ws, *yes)
 		return kerr
 	})
-	if errors.Is(err, lifecycle.ErrRefused) || (err != nil && !*yes) {
+	// Only a rule's refusal exits 2; herdr or Agent Mail failing is 1.
+	if errors.Is(err, lifecycle.ErrRefused) {
 		code = exitRefused
 	}
 	env.Result = res

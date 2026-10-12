@@ -18,8 +18,11 @@ func (cliFacts) Reservations(context.Context, string) ([]lifecycle.Reservation, 
 func (cliFacts) ReservedEver(context.Context, string, string) ([]string, error) { return nil, nil }
 func (cliFacts) DirtyFiles(context.Context, string) ([]string, error)           { return nil, nil }
 func (cliFacts) Worktrees(context.Context, string) ([]string, error)            { return nil, nil }
-func (cliFacts) WorktreeState(context.Context, string) (bool, bool, error)      { return false, true, nil }
-func (cliFacts) RemoveWorktree(context.Context, string, string) error           { return nil }
+func (cliFacts) Fetch(context.Context, string) error                            { return nil }
+func (cliFacts) WorktreeState(context.Context, string) (lifecycle.WorktreeInfo, error) {
+	return lifecycle.WorktreeInfo{Merged: true}, nil
+}
+func (cliFacts) RemoveWorktree(context.Context, string, string) error { return nil }
 func (f cliFacts) Assigned(context.Context, string, string) ([]lifecycle.Bead, error) {
 	return f.assigned, nil
 }

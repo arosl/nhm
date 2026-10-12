@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -150,6 +151,8 @@ type fakeFacts struct {
 	dirty        []string
 	worktrees    []string
 	wtState      map[string][2]bool
+	ignored      map[string][]string
+	fetchErr     error
 	assigned     map[string][]Bead
 	closed       []string
 	fail         error
@@ -164,9 +167,10 @@ func (f *fakeFacts) ReservedEver(_ context.Context, _, agent string) ([]string, 
 }
 func (f *fakeFacts) DirtyFiles(context.Context, string) ([]string, error) { return f.dirty, nil }
 func (f *fakeFacts) Worktrees(context.Context, string) ([]string, error)  { return f.worktrees, nil }
-func (f *fakeFacts) WorktreeState(_ context.Context, wt string) (bool, bool, error) {
+func (f *fakeFacts) Fetch(context.Context, string) error                  { return f.fetchErr }
+func (f *fakeFacts) WorktreeState(_ context.Context, wt string) (WorktreeInfo, error) {
 	s := f.wtState[wt]
-	return s[0], s[1], nil
+	return WorktreeInfo{Dirty: s[0], Merged: s[1], Ignored: f.ignored[wt]}, nil
 }
 func (f *fakeFacts) RemoveWorktree(_ context.Context, _, wt string) error {
 	f.removed = append(f.removed, wt)
@@ -542,7 +546,7 @@ func TestReapAndKill(t *testing.T) {
 		t.Fatalf("kill over a job = %v", err)
 	}
 	w.h.jobs = nil
-	if _, err := Kill(ctx, w.env, "w1", false); err == nil || !strings.Contains(err.Error(), "--yes") {
+	if _, err := Kill(ctx, w.env, "w1", false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("kill without --yes = %v", err)
 	}
 	res, err := Kill(ctx, w.env, "w1", true)
@@ -615,8 +619,17 @@ func TestExportImport(t *testing.T) {
 	if err != nil || !res.Done {
 		t.Fatal(err)
 	}
-	w.bind(t, "BlueLake", "w1:p2", herdr.StatusIdle)
-	dir := t.TempDir()
+	blue := w.bind(t, "BlueLake", "w1:p2", herdr.StatusIdle)
+	setEffort(t, w, blue.ID, "high")
+	// An existing directory that is not an empty 0700 one is refused.
+	shared := t.TempDir()
+	if err := os.Chmod(shared, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExportTo(ctx, w.env, "/p", shared, nil); err == nil || !strings.Contains(err.Error(), "mode 775") {
+		t.Fatalf("export into a shared dir = %v", err)
+	}
+	dir := filepath.Join(t.TempDir(), "export")
 	x, err := ExportTo(ctx, w.env, "/p", dir, []string{"BlueLake"})
 	if err != nil || len(x.Bindings) != 1 || x.Bindings[0].Token != "tok-BlueLake" {
 		t.Fatalf("export = %+v %v", x, err)
@@ -635,6 +648,206 @@ func TestExportImport(t *testing.T) {
 	}
 	if tok, err := store.ReadSecret(target.env.InstanceDir, list[0].ID); err != nil || tok != "tok-BlueLake" {
 		t.Fatalf("token = %q %v", tok, err)
+	}
+	if list[0].Effort != "high" {
+		t.Fatalf("effort = %q", list[0].Effort)
+	}
+}
+
+func setEffort(t *testing.T, w *world, id, effort string) {
+	t.Helper()
+	if _, err := w.db.SQL().Exec(`UPDATE bindings SET effort = ? WHERE binding_id = ?`, effort, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An export comes from another host: a bad field refuses the whole
+// import, and a planted link is never followed.
+func TestImportValidation(t *testing.T) {
+	ctx := context.Background()
+	good := func() Export {
+		return Export{Version: 1, Project: "/p", Keep: []string{},
+			Bindings: []ExportedBinding{{BindingID: "bnd-1", MailName: "IcyKnoll", Kind: "claude", Model: "opus", ProjectID: "proj",
+				NativeSession: &bindings.NativeSession{Value: "sess-1"}}},
+			Transcripts: []ExportTranscript{}}
+	}
+	write := func(t *testing.T, x Export) string {
+		dir := t.TempDir()
+		data, _ := json.Marshal(x)
+		writeFile(t, filepath.Join(dir, "export.json"), string(data))
+		return dir
+	}
+	for name, mutate := range map[string]func(*Export){
+		"session climbs out":    func(x *Export) { x.Bindings[0].NativeSession.Value = "../../../.ssh" },
+		"model reads as a flag": func(x *Export) { x.Bindings[0].Model = "--dangerously-skip-permissions" },
+		"relative project":      func(x *Export) { x.Project = "p" },
+		"unclean project":       func(x *Export) { x.Project = "/p/../etc" },
+		"unknown kind":          func(x *Export) { x.Bindings[0].Kind = "bash" },
+		"transcript path": func(x *Export) {
+			x.Transcripts = []ExportTranscript{{BindingID: "bnd-1", File: "../x", Reason: "retire"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := good()
+			mutate(&x)
+			w := newWorld(t)
+			if _, _, err := ImportFrom(ctx, w.env, write(t, x)); err == nil || !strings.Contains(err.Error(), "nothing imported") {
+				t.Fatalf("= %v", err)
+			}
+			if list, _ := w.env.Bindings.List(ctx, bindings.Filter{}); len(list) != 0 {
+				t.Fatalf("imported %d bindings", len(list))
+			}
+		})
+	}
+	// A transcript in the export that is a link: not followed, not copied.
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	writeFile(t, secret, "do not copy\n")
+	x := good()
+	x.Transcripts = []ExportTranscript{{BindingID: "bnd-1", File: "link.jsonl", Reason: "retire"}}
+	dir := write(t, x)
+	if err := os.MkdirAll(filepath.Join(dir, "transcripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "transcripts", "link.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	w := newWorld(t)
+	_, notes, err := ImportFrom(ctx, w.env, dir)
+	if err != nil || !strings.Contains(strings.Join(notes, "|"), "link.jsonl") {
+		t.Fatalf("import with a linked transcript = %v %v", notes, err)
+	}
+	var n int
+	if err := w.db.SQL().QueryRow(`SELECT COUNT(*) FROM transcripts`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("transcripts = %d %v", n, err)
+	}
+}
+
+// copyFile never reads through a link, and never writes through one at
+// its destination.
+func TestCopyFileNoFollow(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "bashrc")
+	writeFile(t, victim, "keep me\n")
+	src := filepath.Join(dir, "src.jsonl")
+	writeFile(t, src, "data\n")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := copyFile(link, filepath.Join(dir, "out")); err == nil {
+		t.Fatal("a linked source was read")
+	}
+	dst := filepath.Join(dir, "dst.jsonl")
+	if err := os.Symlink(victim, dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, dst+".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := copyFile(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "keep me\n" {
+		t.Fatalf("the link's target was written: %q", data)
+	}
+	if fi, err := os.Lstat(dst); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("dst = %v %v", fi, err)
+	}
+}
+
+func TestRetireWorktreeChecks(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct{ path, alias string }{{"/data/tmp/icyknoll-check.x1", "icyknoll"}, {"/w/icyknoll/wt", "icyknoll"}} {
+		if !namesAgent(c.path, c.alias) {
+			t.Errorf("%s does not name %s", c.path, c.alias)
+		}
+	}
+	if namesAgent("/data/tmp/icyknollx", "icyknoll") || namesAgent("/data/tmp/xicyknoll-y", "icyknoll") {
+		t.Error("a name inside another word matched")
+	}
+	w := newWorld(t)
+	w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
+	w.facts.worktrees = []string{"/tmp/icyknoll-wt"}
+	w.facts.wtState["/tmp/icyknoll-wt"] = [2]bool{false, true}
+	w.facts.fetchErr = errors.New("network unreachable")
+	if res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll"}); !errors.Is(err, ErrRefused) ||
+		!strings.Contains(strings.Join(res.Refusals, "|"), "merged is unknown") {
+		t.Fatalf("no fetch = %v %v", res.Refusals, err)
+	}
+	w.facts.fetchErr = nil
+	w.facts.ignored = map[string][]string{"/tmp/icyknoll-wt": {".beads/"}}
+	if res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll"}); !errors.Is(err, ErrRefused) ||
+		!strings.Contains(strings.Join(res.Refusals, "|"), ".beads/") {
+		t.Fatalf("ignored files = %v %v", res.Refusals, err)
+	}
+}
+
+// The effort a binding was launched with goes to its resume and its
+// recycle; a resume --run waits for the binding's lock.
+func TestEffortAndResumeLock(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	b := w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusDone)
+	setEffort(t, w, b.ID, "high")
+	p, err := Resume(ctx, w.env, b.ID, false)
+	if err != nil || !strings.Contains(strings.Join(p.Argv, " "), "--effort high") {
+		t.Fatalf("resume argv = %v %v", p.Argv, err)
+	}
+	delete(w.h.agents, "w1:p1")
+	unlock, err := send.LockTarget(ctx, w.env.InstanceDir, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resume(ctx, w.env, b.ID, true); err == nil || !strings.Contains(err.Error(), "being recycled") || len(w.h.starts) != 0 {
+		t.Fatalf("resume under the lock = %v, starts %v", err, w.h.starts)
+	}
+	unlock()
+	if _, err := Resume(ctx, w.env, b.ID, true); err != nil || !strings.Contains(w.h.starts[0], "--effort high") {
+		t.Fatalf("resume = %v, starts %v", err, w.h.starts)
+	}
+	if nb, _ := w.env.Bindings.Get(ctx, b.ID); nb.Effort != "high" {
+		t.Fatalf("effort after resume = %q", nb.Effort)
+	}
+
+	w = newWorld(t)
+	b = w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusDone)
+	setEffort(t, w, b.ID, "high")
+	if _, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "x"}); err != nil || !strings.Contains(w.h.starts[0], "--effort high") {
+		t.Fatalf("recycle = %v, starts %v", err, w.h.starts)
+	}
+	if nb, _ := w.env.Bindings.Get(ctx, b.ID); nb.Effort != "high" {
+		t.Fatalf("effort after recycle = %q", nb.Effort)
+	}
+}
+
+func TestBeadDBs(t *testing.T) {
+	root := t.TempDir()
+	if _, err := (CLI{}).beadDBs(root); !errors.Is(err, ErrNoBeadDB) {
+		t.Fatalf("no db = %v", err)
+	}
+	dbs, err := CLI{BeadDBs: []string{"/acfs/.beads/beads.db"}}.beadDBs(root)
+	if err != nil || len(dbs) != 1 || strings.Join(dbs[0], " ") != "--db /acfs/.beads/beads.db" {
+		t.Fatalf("configured = %v %v", dbs, err)
+	}
+	writeFile(t, filepath.Join(root, ".beads", "beads.db"), "")
+	own := filepath.Join(root, ".beads", "beads.db")
+	if dbs, _ = (CLI{BeadDBs: []string{"/x.db"}}).beadDBs(root); len(dbs) != 2 || strings.Join(dbs[0], " ") != "--db "+own {
+		t.Fatalf("own and configured = %v", dbs)
+	}
+	// The config's databases are read only when beads are looked up, and
+	// a bad config fails that lookup.
+	bad := CLI{LoadBeadDBs: func() ([]string, error) { return nil, errors.New("relative path") }}
+	if _, err := bad.beadDBs(root); err == nil || !strings.Contains(err.Error(), "relative path") {
+		t.Fatalf("bad config = %v", err)
+	}
+	cfg := filepath.Join(root, "config.toml")
+	writeFile(t, cfg, "[lifecycle]\nbead_dbs = [\"/acfs/.beads/beads.db\"]\n")
+	if list, err := LoadBeadDBs(cfg); err != nil || len(list) != 1 {
+		t.Fatalf("LoadBeadDBs = %v %v", list, err)
+	}
+	writeFile(t, cfg, "[lifecycle]\nbead_dbs = [\"rel.db\"]\n")
+	if _, err := LoadBeadDBs(cfg); err == nil {
+		t.Fatal("a relative bead db was accepted")
 	}
 }
 

@@ -231,6 +231,41 @@ func LoadKeep(paths ...string) ([]string, error) {
 	return names, nil
 }
 
+// LoadBeadDBs reads [lifecycle] bead_dbs from nhm's config: the bead
+// databases retire and reap search besides a project's own, for agents
+// whose beads live in another repository. A missing file has none; an
+// unknown [lifecycle] key or a relative path fails.
+func LoadBeadDBs(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var f struct {
+		Lifecycle map[string]any `toml:"lifecycle"`
+	}
+	if _, err := toml.Decode(string(data), &f); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	var dbs []string
+	for key, v := range f.Lifecycle {
+		list, ok := v.([]any)
+		if key != "bead_dbs" || !ok {
+			return nil, fmt.Errorf("%s: [lifecycle] takes only bead_dbs, a list of paths", path)
+		}
+		for _, x := range list {
+			s, ok := x.(string)
+			if !ok || !filepath.IsAbs(s) {
+				return nil, fmt.Errorf("%s: lifecycle.bead_dbs takes absolute paths", path)
+			}
+			dbs = append(dbs, s)
+		}
+	}
+	return dbs, nil
+}
+
 // KillResult is a kill of a workspace.
 type KillResult struct {
 	WorkspaceID string         `json:"workspace_id"`
@@ -278,7 +313,7 @@ func Kill(ctx context.Context, env Env, workspaceID string, yes bool) (KillResul
 		return res, fmt.Errorf("%w: %s", ErrRefused, strings.Join(refusals, " | "))
 	}
 	if !yes {
-		return res, errors.New("kill closes the workspace and retires its agents: give --yes")
+		return res, fmt.Errorf("%w: kill closes the workspace and retires its agents: give --yes", ErrRefused)
 	}
 	res.Agents = res.Agents[:0]
 	for _, b := range list {

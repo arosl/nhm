@@ -5,11 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/send"
+	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/kinds"
@@ -214,15 +220,63 @@ func Resume(ctx context.Context, env Env, target string, run bool) (ResumePlan, 
 	if err != nil {
 		return ResumePlan{}, err
 	}
+	if !run {
+		p, err := planResume(ctx, env, b)
+		return p, err
+	}
+	// The binding's lock, as recycle holds it: a recycle or a send in
+	// progress refuses, and nothing starts a second agent in the pane
+	// between the check and the start.
+	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	unlock, err := send.LockTarget(lctx, env.InstanceDir, b.ID)
+	cancel()
+	switch {
+	case errors.Is(err, send.ErrTargetBusy):
+		return ResumePlan{MailName: b.MailName, BindingID: b.ID, PaneID: b.PaneID},
+			fmt.Errorf("%s is being recycled or sent to; try again when that ends", b.MailName)
+	case err != nil:
+		return ResumePlan{MailName: b.MailName, BindingID: b.ID, PaneID: b.PaneID}, err
+	}
+	defer unlock()
+	if b, err = env.Bindings.Get(ctx, b.ID); err != nil {
+		return ResumePlan{}, err
+	}
+	p, err := planResume(ctx, env, b)
+	if err != nil {
+		return p, err
+	}
+	if !p.Ready {
+		return p, errors.New(p.Reason)
+	}
+	a := kinds.Lookup(b.Kind)
+	ms := readyWait.Milliseconds()
+	alias := b.HerdrAlias
+	if alias == "" {
+		alias = strings.ToLower(b.MailName)
+	}
+	if _, err := env.Herdr.AgentStart(ctx, herdr.AgentStartParams{Name: alias, Kind: a.Name, PaneID: b.PaneID, Args: p.Argv[1:], TimeoutMS: &ms}); err != nil {
+		return p, err
+	}
+	occ := bindings.Occupant{WorkspaceID: b.WorkspaceID, TabID: b.TabID, PaneID: b.PaneID, HerdrAlias: alias, Kind: b.Kind,
+		Model: b.Model, Effort: b.Effort, LaunchID: b.LaunchID, NativeSession: b.NativeSession,
+		Evidence: []bindings.Evidence{{Kind: "resume", Detail: "nhm admin recover resume --run"}}}
+	if _, err := env.Bindings.Occupy(ctx, b.ID, b.Generation, occ); err != nil {
+		return p, fmt.Errorf("binding: %w", err)
+	}
+	p.Started = true
+	return p, nil
+}
+
+// planResume is a binding's resume argv and whether its pane can take it.
+func planResume(ctx context.Context, env Env, b bindings.Binding) (ResumePlan, error) {
 	p := ResumePlan{MailName: b.MailName, BindingID: b.ID, PaneID: b.PaneID}
 	a := kinds.Lookup(b.Kind)
 	session := ""
 	if b.NativeSession != nil {
 		session = b.NativeSession.Value
 	}
-	// The model, the kind's default effort and the guard hooks, as the
-	// launch had them.
-	p.Argv = a.Resume(session, b.Model, "", env.LaunchSettings)
+	// The model, the effort and the guard hooks, as the launch had them.
+	p.Argv = a.Resume(session, b.Model, b.Effort, env.LaunchSettings)
 	switch {
 	case b.Status == bindings.Retired:
 		return p, fmt.Errorf("%s is retired", b.MailName)
@@ -242,24 +296,6 @@ func Resume(ctx context.Context, env Env, target string, run bool) (ResumePlan, 
 	} else {
 		p.Ready = true
 	}
-	if !run {
-		return p, nil
-	}
-	if !p.Ready {
-		return p, errors.New(p.Reason)
-	}
-	ms := readyWait.Milliseconds()
-	alias := b.HerdrAlias
-	if _, err := env.Herdr.AgentStart(ctx, herdr.AgentStartParams{Name: alias, Kind: a.Name, PaneID: b.PaneID, Args: p.Argv[1:], TimeoutMS: &ms}); err != nil {
-		return p, err
-	}
-	occ := bindings.Occupant{WorkspaceID: b.WorkspaceID, TabID: b.TabID, PaneID: b.PaneID, HerdrAlias: alias, Kind: b.Kind,
-		Model: b.Model, LaunchID: b.LaunchID, NativeSession: b.NativeSession,
-		Evidence: []bindings.Evidence{{Kind: "resume", Detail: "nhm admin recover resume --run"}}}
-	if _, err := env.Bindings.Occupy(ctx, b.ID, b.Generation, occ); err != nil {
-		return p, fmt.Errorf("binding: %w", err)
-	}
-	p.Started = true
 	return p, nil
 }
 
@@ -281,6 +317,7 @@ type ExportedBinding struct {
 	MailName      string                  `json:"mail_name"`
 	Kind          string                  `json:"kind"`
 	Model         string                  `json:"model,omitempty"`
+	Effort        string                  `json:"effort,omitempty"`
 	ProjectID     string                  `json:"project_id"`
 	NativeSession *bindings.NativeSession `json:"native_session,omitempty"`
 	Token         string                  `json:"token,omitempty"`
@@ -305,12 +342,15 @@ func ExportTo(ctx context.Context, env Env, project, dir string, keep []string) 
 	if err != nil {
 		return x, err
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "transcripts"), 0o700); err != nil {
+	if err := exportDir(dir); err != nil {
+		return x, err
+	}
+	if err := os.Mkdir(filepath.Join(dir, "transcripts"), 0o700); err != nil {
 		return x, err
 	}
 	for _, b := range list {
-		eb := ExportedBinding{BindingID: b.ID, MailName: b.MailName, Kind: b.Kind, Model: b.Model, ProjectID: b.ProjectID,
-			NativeSession: b.NativeSession}
+		eb := ExportedBinding{BindingID: b.ID, MailName: b.MailName, Kind: b.Kind, Model: b.Model, Effort: b.Effort,
+			ProjectID: b.ProjectID, NativeSession: b.NativeSession}
 		eb.Token, _ = store.ReadSecret(env.InstanceDir, b.ID)
 		x.Bindings = append(x.Bindings, eb)
 		rows, err := env.DB.SQL().QueryContext(ctx, `SELECT path, reason FROM transcripts WHERE binding_id = ?`, b.ID)
@@ -349,7 +389,22 @@ func ExportTo(ctx context.Context, env Env, project, dir string, keep []string) 
 // binding here is skipped. It returns the keep list for the operator's
 // config.
 func ImportFrom(ctx context.Context, env Env, dir string) ([]string, []string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "export.json"))
+	// A regular file only: no link, and no FIFO or device that would
+	// block or stream (O_NONBLOCK keeps the open itself from blocking).
+	f, err := os.OpenFile(filepath.Join(dir, "export.json"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("export.json is not a regular file")
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "transcripts")); err == nil && !fi.IsDir() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("transcripts in the export is not a directory (a link is not followed)")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 64<<20))
+	_ = f.Close()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -360,12 +415,18 @@ func ImportFrom(ctx context.Context, env Env, dir string) ([]string, []string, e
 	if x.Version != 1 {
 		return nil, nil, fmt.Errorf("export.json: version %d is not 1", x.Version)
 	}
+	// An export comes from another host: every field that reaches a path,
+	// an argv or the store is checked, and one bad field refuses all.
+	if err := validateExport(x); err != nil {
+		return nil, nil, fmt.Errorf("export.json: %w; nothing imported", err)
+	}
 	var notes []string
 	ids := map[string]string{}
 	for _, eb := range x.Bindings {
 		b, err := env.Bindings.Create(ctx, bindings.New{MailName: eb.MailName, MailProjectKey: x.Project, ProjectID: eb.ProjectID,
-			Provenance: bindings.Imported, Occupant: bindings.Occupant{Kind: eb.Kind, Model: eb.Model, NativeSession: eb.NativeSession,
-				Evidence: []bindings.Evidence{{Kind: "import", Detail: "host move from binding " + eb.BindingID}}}})
+			Provenance: bindings.Imported, Occupant: bindings.Occupant{Kind: eb.Kind, Model: eb.Model, Effort: eb.Effort,
+				NativeSession: eb.NativeSession,
+				Evidence:      []bindings.Evidence{{Kind: "import", Detail: "host move from binding " + eb.BindingID}}}})
 		if err != nil {
 			notes = append(notes, eb.MailName+": skipped: "+err.Error())
 			continue
@@ -395,4 +456,96 @@ func ImportFrom(ctx context.Context, env Env, dir string) ([]string, []string, e
 		}
 	}
 	return x.Keep, notes, nil
+}
+
+// exportDir makes an export's directory, or accepts an existing one only
+// when it is an empty directory of this user with mode 0700: an export
+// holds tokens, and a shared or prepared directory could hold links that
+// the writes would follow.
+func exportDir(dir string) error {
+	err := os.Mkdir(dir, 0o700)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	switch {
+	case !fi.IsDir():
+		return fmt.Errorf("%s exists and is not a directory", dir)
+	case fi.Mode().Perm() != 0o700:
+		return fmt.Errorf("%s exists with mode %o: an export needs a new directory, or an empty one of mode 0700", dir, fi.Mode().Perm())
+	case !ok || int(st.Uid) != os.Getuid():
+		return fmt.Errorf("%s is not yours", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("%s is not empty", dir)
+	}
+	return nil
+}
+
+var (
+	mailNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,63}$`)
+	idPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	reasonPattern   = regexp.MustCompile(`^[a-z][a-z-]{0,31}$`)
+)
+
+// validateExport checks every field of an export that reaches a path, an
+// argv or the store.
+func validateExport(x Export) error {
+	if !filepath.IsAbs(x.Project) || filepath.Clean(x.Project) != x.Project {
+		return fmt.Errorf("project %q is not a clean absolute path", x.Project)
+	}
+	ids := map[string]bool{}
+	for i, eb := range x.Bindings {
+		var bad []string
+		if !idPattern.MatchString(eb.BindingID) {
+			bad = append(bad, "binding_id")
+		}
+		if !mailNamePattern.MatchString(eb.MailName) {
+			bad = append(bad, "mail_name")
+		}
+		if _, ok := kinds.Get(eb.Kind); !ok {
+			bad = append(bad, "kind")
+		}
+		if eb.Model != "" && !spawn.ValidModel(eb.Model) {
+			bad = append(bad, "model")
+		}
+		if eb.Effort != "" && !kinds.EffortPattern.MatchString(eb.Effort) {
+			bad = append(bad, "effort")
+		}
+		if !idPattern.MatchString(eb.ProjectID) {
+			bad = append(bad, "project_id")
+		}
+		if eb.NativeSession != nil && !kinds.SessionPattern.MatchString(eb.NativeSession.Value) {
+			bad = append(bad, "native_session")
+		}
+		if strings.ContainsAny(eb.Token, " \t\r\n") {
+			bad = append(bad, "token")
+		}
+		if len(bad) > 0 {
+			return fmt.Errorf("bindings[%d] (%q): bad %s", i, eb.MailName, strings.Join(bad, ", "))
+		}
+		ids[eb.BindingID] = true
+	}
+	for i, t := range x.Transcripts {
+		if !ids[t.BindingID] || filepath.Base(t.File) != t.File || strings.HasPrefix(t.File, ".") || !reasonPattern.MatchString(t.Reason) {
+			return fmt.Errorf("transcripts[%d] (%q): needs an exported binding, a plain file name and a reason", i, t.File)
+		}
+	}
+	for i, k := range x.Keep {
+		if !mailNamePattern.MatchString(k) {
+			return fmt.Errorf("keep[%d] (%q) is not an Agent Mail name", i, k)
+		}
+	}
+	return nil
 }

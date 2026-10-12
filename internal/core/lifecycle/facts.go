@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -47,9 +49,12 @@ type Facts interface {
 	DirtyFiles(ctx context.Context, root string) ([]string, error)
 	// Worktrees are the checkout's worktree paths.
 	Worktrees(ctx context.Context, root string) ([]string, error)
-	// WorktreeState says whether a worktree is dirty and whether its HEAD
-	// is merged to origin/main.
-	WorktreeState(ctx context.Context, wt string) (dirty, merged bool, err error)
+	// Fetch updates origin/main, so that "merged" is about what origin
+	// has now.
+	Fetch(ctx context.Context, root string) error
+	// WorktreeState says whether a worktree is dirty, whether its HEAD is
+	// merged to origin/main, and which ignored files it holds.
+	WorktreeState(ctx context.Context, wt string) (WorktreeInfo, error)
 	RemoveWorktree(ctx context.Context, root, wt string) error
 	// Assigned are the agent's open beads (in progress), with their
 	// latest handoff comment.
@@ -59,7 +64,14 @@ type Facts interface {
 }
 
 // CLI reads the facts with the am, git and br commands, argv only.
-type CLI struct{}
+type CLI struct {
+	// BeadDBs are bead databases searched besides the project's own.
+	BeadDBs []string
+	// LoadBeadDBs, when set, gives more of them, read only when beads
+	// are looked up (so a bad config fails only the verbs that read
+	// beads).
+	LoadBeadDBs func() ([]string, error)
+}
 
 func run(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, factTimeout)
@@ -158,23 +170,59 @@ func (CLI) Worktrees(ctx context.Context, root string) ([]string, error) {
 	return list, nil
 }
 
-// WorktreeState reads the worktree's status and whether its HEAD is an
-// ancestor of origin/main.
-func (CLI) WorktreeState(ctx context.Context, wt string) (bool, bool, error) {
-	out, err := run(ctx, wt, "git", "status", "--porcelain")
+// WorktreeInfo is a worktree's state as retire needs it.
+type WorktreeInfo struct {
+	Dirty  bool
+	Merged bool
+	// Ignored are the ignored files and dirs that `git worktree remove`
+	// would delete, build caches left out.
+	Ignored []string
+}
+
+// buildCaches are ignored dirs that a worktree remove may delete: they
+// are rebuilt, never work.
+var buildCaches = map[string]bool{"node_modules": true, "target": true, "dist": true, "build": true,
+	".cache": true, "__pycache__": true, ".venv": true, ".next": true, ".turbo": true}
+
+// Fetch runs `git fetch --quiet origin main`.
+func (CLI) Fetch(ctx context.Context, root string) error {
+	_, err := run(ctx, root, "git", "fetch", "--quiet", "origin", "main")
+	return err
+}
+
+// WorktreeState reads the worktree's status with its ignored files and
+// whether its HEAD is an ancestor of origin/main.
+func (CLI) WorktreeState(ctx context.Context, wt string) (WorktreeInfo, error) {
+	var info WorktreeInfo
+	out, err := run(ctx, wt, "git", "status", "--porcelain=v1", "-z", "--ignored=matching")
 	if err != nil {
-		return false, false, err
+		return info, err
 	}
-	dirty := len(bytes.TrimSpace(out)) > 0
+	for _, rec := range strings.Split(string(out), "\x00") {
+		switch {
+		case len(rec) < 4:
+		case strings.HasPrefix(rec, "!! "):
+			// Only a cache directory itself is exempt (git lists a wholly
+			// ignored directory as one "dir/" entry); an ignored file
+			// inside a dir named like one still counts.
+			p := strings.TrimSuffix(rec[3:], "/")
+			if !strings.HasSuffix(rec, "/") || !buildCaches[path.Base(p)] {
+				info.Ignored = append(info.Ignored, rec[3:])
+			}
+		default:
+			info.Dirty = true
+		}
+	}
 	_, err = run(ctx, wt, "git", "merge-base", "--is-ancestor", "HEAD", "origin/main")
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
-		return dirty, true, nil
+		info.Merged = true
+		return info, nil
 	case errors.As(err, &exit) && exit.ExitCode() == 1:
-		return dirty, false, nil
+		return info, nil
 	}
-	return dirty, false, err
+	return info, err
 }
 
 // RemoveWorktree runs `git worktree remove` without --force.
@@ -193,12 +241,59 @@ type brIssue struct {
 // brList runs `br list --status S --assignee A --limit 0 --json`, whose
 // output is {"issues": [...], "has_more": ...}. A page that is not the
 // whole list is an error: a bead left out could be work in progress.
-func brList(ctx context.Context, root, status, agent string) ([]brIssue, error) {
-	out, err := run(ctx, root, "br", "list", "--status", status, "--assignee", agent, "--limit", "0", "--json")
+func brList(ctx context.Context, root string, db []string, status, agent string) ([]brIssue, error) {
+	args := append(append([]string{}, db...), "list", "--status", status, "--assignee", agent, "--limit", "0", "--json")
+	out, err := run(ctx, root, "br", args...)
 	if err != nil {
 		return nil, err
 	}
 	return parseBrList(out)
+}
+
+// ErrNoBeadDB means no bead database can be searched for a project, so a
+// handoff cannot be verified.
+var ErrNoBeadDB = errors.New("no bead database: the project has no .beads and nhm's config names none ([lifecycle] bead_dbs or NHM_BEAD_DBS)")
+
+// beadDBs are the databases to search: the project's own (br finds it
+// from root) and every one the config names, as br's leading arguments.
+// An agent's beads may live in another repository's database (nhm's own
+// beads are ACFS's), so a project's database alone could find nothing
+// and pass every check.
+// projectBeadDB is the database file of root's .beads: beads.db, else the
+// only *.db there; "" when there is none.
+func projectBeadDB(root string) string {
+	dir := filepath.Join(root, ".beads")
+	if fi, err := os.Stat(filepath.Join(dir, "beads.db")); err == nil && fi.Mode().IsRegular() {
+		return filepath.Join(dir, "beads.db")
+	}
+	if list, _ := filepath.Glob(filepath.Join(dir, "*.db")); len(list) == 1 {
+		return list[0]
+	}
+	return ""
+}
+
+func (c CLI) beadDBs(root string) ([][]string, error) {
+	var dbs [][]string
+	// The project's own database by its path, so BEADS_DB in the
+	// environment cannot put another one in its place.
+	if own := projectBeadDB(root); own != "" {
+		dbs = append(dbs, []string{"--db", own})
+	}
+	extra := c.BeadDBs
+	if c.LoadBeadDBs != nil {
+		more, err := c.LoadBeadDBs()
+		if err != nil {
+			return nil, fmt.Errorf("the bead databases of nhm's config: %w", err)
+		}
+		extra = append(append([]string{}, extra...), more...)
+	}
+	for _, db := range extra {
+		dbs = append(dbs, []string{"--db", db})
+	}
+	if len(dbs) == 0 {
+		return nil, ErrNoBeadDB
+	}
+	return dbs, nil
 }
 
 func parseBrList(out []byte) ([]brIssue, error) {
@@ -220,8 +315,30 @@ func parseBrList(out []byte) ([]brIssue, error) {
 
 // Assigned reads `br list --status in_progress --assignee A` and each
 // bead's comments.
-func (CLI) Assigned(ctx context.Context, root, agent string) ([]Bead, error) {
-	issues, err := brList(ctx, root, "in_progress", agent)
+func (c CLI) Assigned(ctx context.Context, root, agent string) ([]Bead, error) {
+	dbs, err := c.beadDBs(root)
+	if err != nil {
+		return nil, err
+	}
+	var beads []Bead
+	seen := map[string]bool{}
+	for _, db := range dbs {
+		found, err := assignedIn(ctx, root, db, agent)
+		if err != nil {
+			return nil, err
+		}
+		for _, b := range found {
+			if !seen[b.ID] {
+				seen[b.ID] = true
+				beads = append(beads, b)
+			}
+		}
+	}
+	return beads, nil
+}
+
+func assignedIn(ctx context.Context, root string, db []string, agent string) ([]Bead, error) {
+	issues, err := brList(ctx, root, db, "in_progress", agent)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +348,8 @@ func (CLI) Assigned(ctx context.Context, root, agent string) ([]Bead, error) {
 			continue
 		}
 		b := Bead{ID: is.ID, Title: is.Title, Status: is.Status}
-		out, err := run(ctx, root, "br", "comments", "list", is.ID, "--json")
+		args := append(append([]string{}, db...), "comments", "list", is.ID, "--json")
+		out, err := run(ctx, root, "br", args...)
 		if err != nil {
 			return nil, err
 		}
@@ -258,15 +376,23 @@ func IsHandoff(text string) bool {
 }
 
 // Closed reads `br list --status closed --assignee A`.
-func (CLI) Closed(ctx context.Context, root, agent string) ([]string, error) {
-	issues, err := brList(ctx, root, "closed", agent)
+func (c CLI) Closed(ctx context.Context, root, agent string) ([]string, error) {
+	dbs, err := c.beadDBs(root)
 	if err != nil {
 		return nil, err
 	}
 	var ids []string
-	for _, is := range issues {
-		if is.Assignee == "" || is.Assignee == agent {
-			ids = append(ids, is.ID)
+	seen := map[string]bool{}
+	for _, db := range dbs {
+		issues, err := brList(ctx, root, db, "closed", agent)
+		if err != nil {
+			return nil, err
+		}
+		for _, is := range issues {
+			if (is.Assignee == "" || is.Assignee == agent) && !seen[is.ID] {
+				seen[is.ID] = true
+				ids = append(ids, is.ID)
+			}
 		}
 	}
 	return ids, nil

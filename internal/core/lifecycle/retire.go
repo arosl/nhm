@@ -218,6 +218,21 @@ func index(ctx context.Context, env Env, b bindings.Binding, path string, warnin
 	}
 }
 
+// namesAgent reports a worktree path with a part that is the agent's
+// name: a path element, or one of its words split at '-', '_' and '.'
+// ("/data/tmp/icyknoll-check.x1" names icyknoll; "/data/tmp/icyknollx"
+// does not).
+func namesAgent(path, alias string) bool {
+	for _, el := range strings.Split(strings.ToLower(path), "/") {
+		for _, word := range strings.FieldsFunc(el, func(r rune) bool { return r == '-' || r == '_' || r == '.' }) {
+			if word == alias {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // priorOperation reads the operation a retry names; ok is false for a new
 // or empty id.
 func priorOperation(ctx context.Context, env Env, id string) (store.Operation, bool, error) {
@@ -362,24 +377,37 @@ func check(ctx context.Context, env Env, req RetireRequest, b bindings.Binding, 
 		}
 	}
 
-	// Its worktrees: a path that names the agent, as the Bash finds them.
+	// Its worktrees: a path with a part that names the agent exactly.
 	wts, err := env.Facts.Worktrees(ctx, project)
 	if err != nil {
 		refuse("git worktree list cannot be read: %v", err)
 	}
+	fetched := false
+	var fetchErr error
 	for _, wt := range wts {
-		if wt == project || !strings.Contains(strings.ToLower(wt), alias) {
+		if wt == project || !namesAgent(wt, alias) {
 			continue
 		}
 		res.Worktrees = append(res.Worktrees, wt)
-		dirty, merged, err := env.Facts.WorktreeState(ctx, wt)
+		// "Merged" is about origin as it is now: fetch once, and refuse
+		// when that fails rather than trust a stale origin/main.
+		if !fetched {
+			fetched, fetchErr = true, env.Facts.Fetch(ctx, project)
+		}
+		if fetchErr != nil {
+			refuse("origin cannot be fetched, so whether worktree %s is merged is unknown: %v", wt, fetchErr)
+			continue
+		}
+		info, err := env.Facts.WorktreeState(ctx, wt)
 		switch {
 		case err != nil:
 			refuse("worktree %s cannot be read: %v", wt, err)
-		case dirty:
+		case info.Dirty:
 			refuse("worktree %s has uncommitted changes", wt)
-		case !merged:
+		case !info.Merged:
 			refuse("worktree %s is not merged to origin/main", wt)
+		case len(info.Ignored) > 0:
+			refuse("worktree %s holds ignored files that removing it would delete: %s", wt, strings.Join(info.Ignored, ", "))
 		case req.CleanupWorktrees:
 			plan.merged = append(plan.merged, wt)
 			act("remove merged worktree %s (git worktree remove, never forced)", wt)

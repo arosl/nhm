@@ -142,6 +142,10 @@ func (r *Request) Validate() error {
 
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
+// ValidModel reports a model name nhm puts into an argv: it starts with a
+// letter or digit, so it never reads as a flag.
+func ValidModel(model string) bool { return modelPattern.MatchString(model) }
+
 // Count is the number of agents the request starts.
 func (r *Request) Count() int {
 	n := 0

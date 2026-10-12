@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
@@ -120,9 +121,12 @@ func Preserve(ctx context.Context, db *store.DB, instanceDir string, b bindings.
 		return p, err
 	}
 	p.Bytes, p.SHA256 = n, sum
-	if p.NativeSession != "" {
+	// Only a plain session id names a companion dir: an id from an import
+	// could otherwise climb out of the transcript's dir. A symlink is not
+	// followed.
+	if p.NativeSession != "" && kinds.SessionPattern.MatchString(p.NativeSession) {
 		companion := filepath.Join(filepath.Dir(original), p.NativeSession)
-		if fi, err := os.Stat(companion); err == nil && fi.IsDir() {
+		if fi, err := os.Lstat(companion); err == nil && fi.IsDir() {
 			p.Companions, _ = copyTree(companion, p.Path+".companion", maxCompanionBytes)
 		}
 	}
@@ -138,17 +142,29 @@ func Preserve(ctx context.Context, db *store.DB, instanceDir string, b bindings.
 	return p, nil
 }
 
+// copyFile copies a regular file. The source is opened without following
+// a symlink, and checked to be a regular file on the open descriptor; the
+// copy goes to a new temp file (O_EXCL, so a planted file or link there is
+// never written through) and is renamed onto dst, which replaces a link at
+// dst instead of following it.
 func copyFile(src, dst string) (int64, string, error) {
-	in, err := os.Open(src)
+	// O_NONBLOCK: a FIFO fails the regular-file check below instead of
+	// blocking the open.
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return 0, "", err
 	}
 	defer in.Close()
-	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if fi, err := in.Stat(); err != nil {
+		return 0, "", err
+	} else if !fi.Mode().IsRegular() {
+		return 0, "", fmt.Errorf("%s is not a regular file", src)
+	}
+	out, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".tmp-*")
 	if err != nil {
 		return 0, "", err
 	}
+	tmp := out.Name()
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(out, h), in)
 	if cerr := out.Close(); err == nil {
@@ -159,6 +175,7 @@ func copyFile(src, dst string) (int64, string, error) {
 		return 0, "", err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
 		return 0, "", err
 	}
 	return n, hex.EncodeToString(h.Sum(nil)), nil

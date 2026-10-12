@@ -202,6 +202,11 @@ ALTER TABLE feedback ADD COLUMN claimed_at TEXT;
 ALTER TABLE feedback ADD COLUMN claim_token TEXT;
 ALTER TABLE feedback ADD COLUMN stage TEXT;
 `,
+	// 5 (nhm.lifecycle): the effort the agent was launched with, so a
+	// recycle or a resume launches its successor with the same one.
+	`
+ALTER TABLE bindings ADD COLUMN effort TEXT;
+`,
 }
 
 // SchemaVersion is the user_version this build writes.
