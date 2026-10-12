@@ -405,6 +405,15 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 	} else if herdr.ErrorCode(err) == "" {
 		return finish(StatusFailed, "herdr", err.Error())
 	}
+	// A moved pane keeps its old id as an alias, so agent.get by the
+	// binding's pane can answer from another workspace. The binding's
+	// workspace is the session's: never prompt outside it.
+	if agent != nil && (agent.PaneID != cur.PaneID || (agent.WorkspaceID != "" && agent.WorkspaceID != cur.WorkspaceID)) {
+		rc.Result.Gate = GateUnsafe
+		return finish(StatusRefused, "gate_"+string(GateUnsafe), fmt.Sprintf(
+			"the agent moved: herdr answers from pane %s in workspace %s; the binding says %s in %s",
+			agent.PaneID, agent.WorkspaceID, cur.PaneID, cur.WorkspaceID))
+	}
 	g, reason := DeliveryGate(cur, agent)
 	rc.Result.Gate = g
 	if agent == nil {
@@ -435,7 +444,19 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 		rc.Result.StateAfter = string(after.AgentStatus)
 		return finish(status, "", "")
 	}
-	return finish(status, code, err.Error())
+	reason = err.Error()
+	if code == herdr.CodeAgentPromptStalled && rc.Baseline != nil {
+		// exp.3: a fast turn can end inside herdr's five seconds. A
+		// completion past the baseline makes delivery likely, but a person
+		// or another writer could have caused it, so the status stays.
+		if now, gerr := env.Herdr.AgentGet(ctx, cur.PaneID); gerr == nil && now.CompletionSeq != nil &&
+			*now.CompletionSeq > rc.Baseline.StateChangeSeq {
+			rc.Result.StateAfter = string(now.AgentStatus)
+			reason += fmt.Sprintf("; a turn completed after the baseline (completion_seq %d > %d), so delivery is likely",
+				*now.CompletionSeq, rc.Baseline.StateChangeSeq)
+		}
+	}
+	return finish(status, code, reason)
 }
 
 // buildTemplate loads the template, or wraps the message as one that is

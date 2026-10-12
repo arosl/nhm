@@ -33,6 +33,8 @@ type fakeHerdr struct {
 	agents    map[string]herdr.AgentInfo
 	promptErr map[string]error
 	prompts   []promptCall
+	// onErr runs, under the lock, when a prompt fails.
+	onErr func(pane string)
 }
 
 func newFake() *fakeHerdr {
@@ -72,6 +74,9 @@ func (f *fakeHerdr) AgentPrompt(_ context.Context, p herdr.AgentPromptParams) (h
 	defer f.mu.Unlock()
 	f.prompts = append(f.prompts, promptCall{pane: p.Target, text: p.Text, wait: p.Wait})
 	if err := f.promptErr[p.Target]; err != nil {
+		if f.onErr != nil {
+			f.onErr(p.Target)
+		}
 		return herdr.AgentInfo{}, err
 	}
 	a := f.agents[p.Target]
@@ -269,6 +274,50 @@ func TestPromptErrorsMapToSubmissions(t *testing.T) {
 	}
 	if states["0.1"] != robot.AdmissionUnknown || states["1.1"] != robot.AdmissionRejected || states["2.1"] != robot.AdmissionRejected {
 		t.Fatalf("admissions = %v", states)
+	}
+}
+
+func TestNeverPromptsOutsideTheWorkspace(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	// The pane moved to w2. Its old id stays an alias, so agent.get by
+	// w1:p1 answers with the agent in w2:p5; the binding still says w1.
+	a := w.fake.agents["w1:p1"]
+	a.PaneID, a.WorkspaceID = "w2:p5", "w2"
+	w.fake.agents["w1:p1"] = a
+	dry, err := Send(ctx, w.env, base(Request{Message: "hi", DryRun: true, WhenAny: true}))
+	if err != nil || dry.Targets[0].Status != StatusRefused {
+		t.Fatalf("dry run = %+v %v", dry.Targets, err)
+	}
+	res, err := Send(ctx, w.env, base(Request{Message: "hi", WhenAny: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := res.Targets[0]
+	if rc.Status != StatusRefused || rc.ErrorCode != "gate_unsafe" || !strings.Contains(rc.Result.Reason, "w2") || w.fake.promptCount() != 0 {
+		t.Fatalf("moved = %+v, %d prompts", rc, w.fake.promptCount())
+	}
+}
+
+func TestStallWithACompletionStaysPossible(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	w.fake.promptErr["w1:p1"] = &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentPromptStalled}
+	// The turn ran and ended inside herdr's five seconds (exp.3).
+	w.fake.onErr = func(pane string) {
+		a := w.fake.agents[pane]
+		a.AgentStatus, a.StateChangeSeq, a.CompletionSeq = herdr.StatusDone, u64(12), u64(12)
+		w.fake.agents[pane] = a
+	}
+	res, err := Send(ctx, w.env, base(Request{Message: "hi"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := res.Targets[0]
+	if rc.Status != StatusPossiblySubmitted || !strings.Contains(rc.Result.Reason, "completion_seq 12 > 10") || rc.Result.StateAfter != "done" {
+		t.Fatalf("stall = %+v", rc)
 	}
 }
 
