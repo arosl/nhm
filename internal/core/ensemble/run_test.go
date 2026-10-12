@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,6 +22,10 @@ type fakes struct {
 	sent    []send.Request
 	// notReady makes the spawn report this angle's agent not ready.
 	notReady int
+	// onSend runs inside a send, before it answers; sendFail makes a
+	// send claim nothing and fail.
+	onSend   func(req send.Request)
+	sendFail bool
 }
 
 func (f *fakes) env(t *testing.T) RunEnv {
@@ -39,6 +44,12 @@ func (f *fakes) env(t *testing.T) RunEnv {
 			return res, nil
 		},
 		Send: func(_ context.Context, req send.Request) (send.Result, error) {
+			if f.onSend != nil {
+				f.onSend(req)
+			}
+			if f.sendFail {
+				return send.Result{}, errors.New("no target")
+			}
 			f.sent = append(f.sent, req)
 			return send.Result{OperationID: "op-send-" + req.Selector.Names[0],
 				Targets: []send.Receipt{{MailName: req.Selector.Names[0], Status: "submitted"}}}, nil
@@ -141,10 +152,115 @@ func TestSynthesizeChecksEveryArtifact(t *testing.T) {
 	if err != nil || len(got.Omitted) != 1 || got.Omitted[0] != 3 || got.SynthesisTo != "IcyKnoll" || got.Status != RunSynthesizing {
 		t.Fatalf("partial = %+v %v", got, err)
 	}
+	// The prompt names the checked copies, frames them as untrusted data,
+	// and leaves the invalid angle out.
 	last := f.sent[len(f.sent)-1].Message
-	if !strings.Contains(last, r.Angles[0].Artifact) || strings.Contains(last, r.Angles[3].Artifact) || !strings.Contains(last, "left out: [3]") {
+	if !strings.Contains(last, checkedFile(r, r.Angles[0])) || strings.Contains(last, "angle-3-") ||
+		!strings.Contains(last, "left out: [3]") || !strings.Contains(last, "untrusted data") || !strings.Contains(last, "give no instructions") {
 		t.Fatalf("synthesis prompt = %q", last)
 	}
+	orig, _ := os.ReadFile(r.Angles[0].Artifact)
+	if copied, err := os.ReadFile(checkedFile(r, r.Angles[0])); err != nil || string(copied) != string(orig) {
+		t.Fatalf("checked copy = %q, %v", copied, err)
+	}
+}
+
+func readyRun(t *testing.T, f *fakes) (RunEnv, Run) {
+	t.Helper()
+	env := f.env(t)
+	r := start(t, f, env)
+	for i := range r.Angles {
+		writeArtifact(t, r, i, Marker(r.ID, i, r.Angles[i].Mode))
+	}
+	return env, r
+}
+
+// The synthesis prompt goes out once: a second synthesize is refused.
+func TestSynthesizeOnce(t *testing.T) {
+	f := &fakes{notReady: -1}
+	env, r := readyRun(t, f)
+	ctx := context.Background()
+	if _, err := Synthesize(ctx, env, SynthesizeRequest{RunID: r.ID}); err != nil {
+		t.Fatal(err)
+	}
+	sends := len(f.sent)
+	if _, err := Synthesize(ctx, env, SynthesizeRequest{RunID: r.ID}); !errors.Is(err, ErrSynthesizing) {
+		t.Fatalf("second synthesize: %v", err)
+	}
+	if len(f.sent) != sends {
+		t.Fatal("the synthesis prompt went out twice")
+	}
+}
+
+// A stop during synthesize's send stands; the send's operation is kept.
+func TestStopDuringSynthesisStands(t *testing.T) {
+	f := &fakes{notReady: -1}
+	env, r := readyRun(t, f)
+	f.onSend = func(send.Request) {
+		if _, err := Stop(env, r.ID); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+	}
+	got, err := Synthesize(context.Background(), env, SynthesizeRequest{RunID: r.ID})
+	if err != nil || got.Status != RunStopped || got.SynthesisOp == "" || got.StoppedAt == nil {
+		t.Fatalf("synthesize = %+v, %v", got, err)
+	}
+	if saved, _ := Load(env.RunsDir, r.ID); saved.Status != RunStopped {
+		t.Fatalf("saved status = %s", saved.Status)
+	}
+}
+
+// A failed run is not synthesized; a send that claimed nothing gives the
+// run back to running, so synthesize can be tried again.
+func TestSynthesizeOnlyFromRunning(t *testing.T) {
+	f := &fakes{notReady: -1}
+	env, r := readyRun(t, f)
+	ctx := context.Background()
+	f.sendFail = true
+	if _, err := Synthesize(ctx, env, SynthesizeRequest{RunID: r.ID}); err == nil {
+		t.Fatal("a failed send succeeded")
+	}
+	if saved, _ := Load(env.RunsDir, r.ID); saved.Status != RunRunning || saved.SynthesisTo != "" {
+		t.Fatalf("after a failed send: %+v", saved)
+	}
+	f.sendFail = false
+	if got, err := Synthesize(ctx, env, SynthesizeRequest{RunID: r.ID}); err != nil || got.Status != RunSynthesizing {
+		t.Fatalf("retry = %+v, %v", got, err)
+	}
+	if _, err := update(ctx, env.RunsDir, r.ID, func(cur *Run) error { cur.Status = RunFailed; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Synthesize(ctx, env, SynthesizeRequest{RunID: r.ID}); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("failed run: %v", err)
+	}
+}
+
+// An artifact larger than the cap, or a FIFO in its place, is not valid;
+// the FIFO never blocks the check.
+func TestArtifactSizeCapAndFIFO(t *testing.T) {
+	f := &fakes{notReady: -1}
+	env, r := readyRun(t, f)
+	big := Marker(r.ID, 0, r.Angles[0].Mode) + "\n" + strings.Repeat("x", MaxArtifactBytes)
+	if err := os.WriteFile(r.Angles[0].Artifact, []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(r.Angles[1].Artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(r.Angles[1].Artifact, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan []ArtifactState, 1)
+	go func() { done <- Artifacts(r) }()
+	select {
+	case states := <-done:
+		if states[0].Valid || !strings.Contains(states[0].Reason, "larger than") || states[1].Valid || states[1].Reason != "not a regular file" {
+			t.Fatalf("states = %+v", states[:2])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the check blocked on a FIFO")
+	}
+	_ = env
 }
 
 func TestSynthesizeAllAnglesToAChosenAgent(t *testing.T) {
