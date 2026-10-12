@@ -1,0 +1,158 @@
+package wait
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/store"
+)
+
+// interruptKeys is each kind's interrupt key (plan-v8 2.6). Esc stops
+// the turn of Claude, Codex and omp and keeps the session. The key of
+// agy and pi is not checked yet, so nhm refuses them instead of guessing.
+var interruptKeys = map[string][]string{
+	"claude": {"Escape"},
+	"codex":  {"Escape"},
+	"omp":    {"Escape"},
+}
+
+// InterruptKeys returns a kind's interrupt key, or nil when nhm has no
+// checked key for the kind.
+func InterruptKeys(kind string) []string { return interruptKeys[kind] }
+
+// Interrupt statuses.
+const (
+	InterruptSent    = "sent"
+	InterruptRefused = "refused"
+	InterruptFailed  = "failed"
+)
+
+// VerbInterrupt is the operation verb.
+const VerbInterrupt = "interrupt"
+
+// InterruptTarget is one agent's interrupt.
+type InterruptTarget struct {
+	BindingID   string            `json:"binding_id"`
+	MailName    string            `json:"mail_name"`
+	PaneID      string            `json:"pane_id"`
+	Slot        string            `json:"slot,omitempty"`
+	Kind        string            `json:"kind"`
+	Generation  int64             `json:"generation"`
+	Keys        []string          `json:"keys,omitempty"`
+	StateBefore herdr.AgentStatus `json:"state_before,omitempty"`
+	Status      string            `json:"status"`
+	Reason      string            `json:"reason,omitempty"`
+}
+
+// InterruptResult is an interrupt operation.
+type InterruptResult struct {
+	OperationID string            `json:"operation_id"`
+	Existing    bool              `json:"existing"`
+	Status      string            `json:"status"`
+	Targets     []InterruptTarget `json:"targets"`
+}
+
+// InterruptRequest names the targets. OperationID is --op-id.
+type InterruptRequest struct {
+	OperationID string
+	Scope       any
+	Targets     []bindings.Binding
+}
+
+// frozenTarget is one target as the claim records it; the claim's
+// fingerprint covers the frozen targets.
+type frozenTarget struct {
+	BindingID  string `json:"binding_id"`
+	Generation int64  `json:"generation"`
+}
+
+// Interrupt sends each target's interrupt key, once per operation id. A
+// repeated operation id sends nothing and reports the stored status.
+// Each target is checked again first: the same generation, an agent of
+// the binding's kind in the pane, and a checked key for the kind.
+func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req InterruptRequest, now func() time.Time) (InterruptResult, error) {
+	frozen := make([]frozenTarget, len(req.Targets))
+	for i, b := range req.Targets {
+		frozen[i] = frozenTarget{BindingID: b.ID, Generation: b.Generation}
+	}
+	claim, err := db.ClaimOperation(ctx, store.ClaimRequest{
+		ID: req.OperationID, Verb: VerbInterrupt, Scope: req.Scope,
+		Request: map[string]any{"targets": frozen},
+	}, now())
+	if err != nil {
+		return InterruptResult{}, err
+	}
+	res := InterruptResult{OperationID: claim.Operation.ID, Targets: []InterruptTarget{}}
+	if claim.Existing {
+		res.Existing, res.Status = true, claim.Operation.Status
+		return res, nil
+	}
+	sent, failed := 0, 0
+	for _, b := range req.Targets {
+		t := interruptOne(ctx, h, bs, b)
+		switch t.Status {
+		case InterruptSent:
+			sent++
+		case InterruptFailed:
+			failed++
+		}
+		res.Targets = append(res.Targets, t)
+	}
+	switch {
+	case sent == len(req.Targets):
+		res.Status = "done"
+	case sent > 0:
+		res.Status = "partial"
+	case failed > 0:
+		res.Status = "failed"
+	default:
+		res.Status = "refused"
+	}
+	if err := db.SetOperationStatus(ctx, res.OperationID, res.Status, true, now()); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding) InterruptTarget {
+	t := InterruptTarget{BindingID: b.ID, MailName: b.MailName, PaneID: b.PaneID, Slot: b.Slot, Kind: b.Kind, Generation: b.Generation}
+	refuse := func(reason string) InterruptTarget {
+		t.Status, t.Reason = InterruptRefused, reason
+		return t
+	}
+	cur, err := bs.Get(ctx, b.ID)
+	if err != nil {
+		t.Status, t.Reason = InterruptFailed, err.Error()
+		return t
+	}
+	if cur.Generation != b.Generation || cur.Status != bindings.Active || cur.PaneID != b.PaneID {
+		return refuse(fmt.Sprintf("the binding changed since selection (generation %d, %s, pane %s)", cur.Generation, cur.Status, cur.PaneID))
+	}
+	t.Keys = InterruptKeys(cur.Kind)
+	if t.Keys == nil {
+		return refuse("nhm has no checked interrupt key for kind " + cur.Kind)
+	}
+	a, err := h.AgentGet(ctx, cur.PaneID)
+	if err != nil {
+		if code := herdr.ErrorCode(err); code != "" {
+			return refuse("herdr: " + code)
+		}
+		t.Status, t.Reason = InterruptFailed, err.Error()
+		return t
+	}
+	t.StateBefore = a.AgentStatus
+	if a.Agent != "" && a.Agent != cur.Kind {
+		return refuse(fmt.Sprintf("the pane holds a %s agent; the binding is %s", a.Agent, cur.Kind))
+	}
+	if err := h.AgentSendKeys(ctx, cur.PaneID, t.Keys...); err != nil {
+		// A transport error after the write may still have delivered the
+		// key; an interrupt is safe to repeat by hand.
+		t.Status, t.Reason = InterruptFailed, err.Error()
+		return t
+	}
+	t.Status = InterruptSent
+	return t
+}
