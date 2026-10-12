@@ -1,6 +1,7 @@
 package kinds
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -72,6 +73,58 @@ func TestProgramContentLongWrapper(t *testing.T) {
 		if got := ProgramIsKind("codex", "codex"); got != c.want {
 			t.Errorf("%s (%d bytes): %v, want %v", c.name, len(wrapper), got, c.want)
 		}
+	}
+}
+
+// An absolute-node shebang does not depend on PATH (acfs-9hkh.86): a
+// system node (an ELF named node, root-owned, in a root-owned directory,
+// neither group- nor world-writable) is accepted under a systemd-like PATH
+// without node; anything else needs to be the node on PATH.
+func TestSystemNodeShebang(t *testing.T) {
+	oldHead, oldResolve, oldRoot := ProgramHead, ResolveProgram, RootOwned
+	ProgramHead = realProgramHead
+	t.Cleanup(func() { ProgramHead, ResolveProgram, RootOwned = oldHead, oldResolve, oldRoot })
+	root, err := os.MkdirTemp("/tmp", "nhm-node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	node := func(dir, content string, dirMode os.FileMode) string {
+		d := filepath.Join(root, dir)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(d, dirMode); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(d, "node")
+		if err := os.WriteFile(p, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	elf := "\x7fELF\x02\x01\x01\x00"
+	sys := node("usr/bin", elf, 0o755)
+	groupDir := node("shared/bin", elf, 0o775)
+	notELF := node("script/bin", "#!/bin/sh\n", 0o755)
+	shebang := func(p string) []byte { return []byte("#!" + p + "\n") }
+
+	// A systemd-like PATH: no node on it.
+	ResolveProgram = func(string) (string, error) { return "", errors.New("node not on PATH") }
+	RootOwned = func(os.FileInfo) bool { return true }
+	for p, want := range map[string]bool{sys: true, groupDir: false, notELF: false} {
+		if got := nodeShebang(shebang(p)); got != want {
+			t.Errorf("systemd PATH, root-owned %s: %v, want %v", strings.TrimPrefix(p, root), got, want)
+		}
+	}
+	RootOwned = func(os.FileInfo) bool { return false }
+	if nodeShebang(shebang(sys)) {
+		t.Error("systemd PATH: a node that root does not own was accepted")
+	}
+	// A shell PATH whose node is that file: accepted whoever owns it.
+	ResolveProgram = func(string) (string, error) { return filepath.EvalSymlinks(sys) }
+	if !nodeShebang(shebang(sys)) {
+		t.Error("shell PATH: the node on PATH was refused")
 	}
 }
 

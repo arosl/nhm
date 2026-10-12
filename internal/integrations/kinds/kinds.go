@@ -312,9 +312,13 @@ func pathNamesKind(path, kind string) bool {
 }
 
 // nodeShebang: the first line is exactly "#!/usr/bin/env node", or an
-// absolute node with no arguments that is the node on PATH. Arguments
-// (env -S node --require …, node -e …) can run other code, and a node
-// elsewhere (/tmp/x/node) is any program named node.
+// absolute node with no arguments that is either a system node (an ELF
+// file named node, owned by root, in a root-owned directory, neither
+// writable by group or others) or the node on PATH. The system-node rule
+// does not depend on PATH, so a systemd unit whose PATH lacks node
+// accepts the same scripts as a shell (acfs-9hkh.86). Arguments (env -S
+// node --require …, node -e …) can run other code, and a node elsewhere
+// (/tmp/x/node, a user's writable dir) is any program named node.
 func nodeShebang(head []byte) bool {
 	line, _, _ := bytes.Cut(head[2:], []byte("\n"))
 	fields := strings.Fields(string(line))
@@ -328,8 +332,34 @@ func nodeShebang(head []byte) bool {
 	if err != nil {
 		return false
 	}
+	if systemNode(resolved) {
+		return true
+	}
 	onPath, err := ResolveProgram("node")
 	return err == nil && resolved == onPath
+}
+
+// systemNode reports a resolved path that is an ELF file named node, owned
+// by root, in a root-owned directory, with neither writable by group or
+// others: only root could have put it there.
+func systemNode(resolved string) bool {
+	if filepath.Base(resolved) != "node" {
+		return false
+	}
+	for _, p := range []string{resolved, filepath.Dir(resolved)} {
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode().Perm()&0o022 != 0 || !RootOwned(fi) {
+			return false
+		}
+	}
+	head, err := ProgramHead(resolved)
+	return err == nil && bytes.HasPrefix(head, []byte("\x7fELF"))
+}
+
+// RootOwned reports a file owned by uid 0; tests replace it.
+var RootOwned = func(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == 0
 }
 
 // Effort returns the effort args for effort (the kind's default when
