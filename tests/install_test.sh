@@ -190,6 +190,40 @@ else
   pass "a malformed pin is refused"
 fi
 
+# One pin per platform, as ACFS passes them: the install uses its own.
+this="linux-$(go env GOARCH 2> /dev/null || echo amd64)"
+other="linux-riscv64"
+home="$work/home-platform"
+mkdir -p "$home"
+if pinned_install "$home" --archive-sha256 "$other=$wrong" --archive-sha256 "$this=$pin" 2> "$work/log10" &&
+  [[ "$(cat "$home/.local/share/nhm/releases/$version/.archive-sha256")" == "$pin" ]]; then
+  pass "of one pin per platform, the install uses this platform's"
+else
+  fail "per-platform pins: $(cat "$work/log10")"
+fi
+home="$work/home-platform-env"
+mkdir -p "$home"
+if NHM_ARCHIVE_SHA256="$other=$wrong $this=$pin" pinned_install "$home" 2> "$work/log11" &&
+  [[ "$(cat "$home/.local/share/nhm/releases/$version/.archive-sha256")" == "$pin" ]]; then
+  pass "NHM_ARCHIVE_SHA256 takes the same per-platform pins"
+else
+  fail "NHM_ARCHIVE_SHA256 pins: $(cat "$work/log11")"
+fi
+home="$work/home-platform-none"
+mkdir -p "$home"
+if pinned_install "$home" --archive-sha256 "$other=$pin" 2> "$work/log12"; then
+  fail "pins for other platforms only are refused"
+elif grep -q "name no archive for $this" "$work/log12" && [[ ! -e "$home/.local/share/nhm/releases/$version" ]]; then
+  pass "pins for other platforms only are refused, and nothing is unpacked"
+else
+  fail "pins for other platforms only: $(cat "$work/log12")"
+fi
+if pinned_install "$home" --archive-sha256 "$this=short" 2> /dev/null; then
+  fail "a malformed platform pin is refused"
+else
+  pass "a malformed platform pin is refused"
+fi
+
 if [[ $fails -eq 0 ]]; then
   echo "RESULT: pass"
 else

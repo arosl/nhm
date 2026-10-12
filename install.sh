@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # Install an nhm release for the current user.
 #
-# Usage: install.sh [--version <x.y.z>|latest] [--archive-sha256 <hex>]
+# Usage: install.sh [--version <x.y.z>|latest] [--archive-sha256 [<platform>=]<hex>]...
 #
 # Downloads nhm-<version>-<platform>.tar.zst and SHA256SUMS from the same
 # tagged release of arosl/nhm, checks the archive against SHA256SUMS, and
 # unpacks it to ~/.local/share/nhm/releases/<version>/. With
 # --archive-sha256, the archive must also have that SHA-256: a pin kept
-# outside the release (ACFS keeps one per platform in checksums.yaml), so
-# a re-uploaded archive and SHA256SUMS are refused too. The unpacked
+# outside the release (ACFS keeps one per platform beside its install.sh
+# pin), so a re-uploaded archive and SHA256SUMS are refused too. Give it
+# once per platform as <platform>=<hex> (linux-amd64=..., linux-arm64=...)
+# and the install uses this machine's; a plain <hex> pins whatever this
+# machine's archive is. Pins that name no pin for this platform refuse
+# the install. The unpacked
 # release records its archive's SHA-256 in .archive-sha256; with a pin,
 # only a release unpacked from the pinned archive counts as installed,
 # and any other is fetched again and replaced. Then it points
@@ -19,7 +23,7 @@
 #
 # Environment:
 #   NHM_VERSION       the version, when --version is not given
-#   NHM_ARCHIVE_SHA256 the pin, when --archive-sha256 is not given
+#   NHM_ARCHIVE_SHA256 the pins, separated by spaces, when no --archive-sha256 is given
 #   NHM_RELEASE_BASE  the release download base (tests use a file:// URL);
 #                     default https://github.com/arosl/nhm/releases/download
 #   XDG_DATA_HOME     default ~/.local/share
@@ -29,7 +33,9 @@ set -euo pipefail
 repo_url="https://github.com/arosl/nhm"
 base="${NHM_RELEASE_BASE:-$repo_url/releases/download}"
 version="${NHM_VERSION:-latest}"
-pin="${NHM_ARCHIVE_SHA256:-}"
+# NHM_ARCHIVE_SHA256 takes the same forms, separated by spaces.
+read -ra pins <<< "${NHM_ARCHIVE_SHA256:-}"
+pins_given=false
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 bin_dir="${NHM_BIN_DIR:-$HOME/.local/bin}"
 
@@ -52,25 +58,26 @@ while [[ $# -gt 0 ]]; do
       ;;
     --archive-sha256)
       [[ $# -ge 2 ]] || die "--archive-sha256 needs a value"
-      pin="$2"
+      [[ "$pins_given" == true ]] || pins=()
+      pins_given=true
+      pins+=("$2")
       shift 2
       ;;
     --archive-sha256=*)
-      pin="${1#--archive-sha256=}"
+      [[ "$pins_given" == true ]] || pins=()
+      pins_given=true
+      pins+=("${1#--archive-sha256=}")
       shift
       ;;
     -h | --help)
       # Static text: under `curl ... | bash` there is no script file to read.
-      printf '%s\n' "usage: install.sh [--version <x.y.z>|latest] [--archive-sha256 <hex>]" \
+      printf '%s\n' "usage: install.sh [--version <x.y.z>|latest] [--archive-sha256 [<platform>=]<hex>]..." \
         "Installs nhm to ~/.local/share/nhm/releases/<version>/ and links ~/.local/bin/nhm." >&2
       exit 0
       ;;
     *) die "unknown argument: $1" ;;
   esac
 done
-
-pin="${pin,,}"
-[[ -z "$pin" || "$pin" =~ ^[0-9a-f]{64}$ ]] || die "--archive-sha256 needs 64 hex digits"
 
 for tool in curl tar zstd sha256sum; do
   command -v "$tool" > /dev/null 2>&1 || die "$tool is required"
@@ -86,6 +93,28 @@ case "$(uname -m)" in
   *) die "no nhm build for $(uname -m)" ;;
 esac
 platform="$os-$arch"
+
+# This machine's pin: a <platform>=<hex> for it, else a plain <hex>.
+pin=""
+plain=""
+for p in "${pins[@]}"; do
+  p="${p,,}"
+  case "$p" in
+    *=*)
+      [[ "${p#*=}" =~ ^[0-9a-f]{64}$ && "${p%%=*}" =~ ^[a-z0-9]+-[a-z0-9]+$ ]] ||
+        die "--archive-sha256 takes <platform>=<64 hex digits>, not '$p'"
+      [[ "${p%%=*}" != "$platform" ]] || pin="${p#*=}"
+      ;;
+    *)
+      [[ "$p" =~ ^[0-9a-f]{64}$ ]] || die "--archive-sha256 needs 64 hex digits, not '$p'"
+      plain="$p"
+      ;;
+  esac
+done
+[[ -n "$pin" ]] || pin="$plain"
+if (( ${#pins[@]} > 0 )) && [[ -z "$pin" ]]; then
+  die "the --archive-sha256 pins name no archive for $platform; nothing was installed"
+fi
 
 if [[ "$version" == latest ]]; then
   # The latest-release URL redirects to .../releases/tag/v<version>.
