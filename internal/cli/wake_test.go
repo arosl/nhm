@@ -170,6 +170,32 @@ func TestMaintainDeliversRecordsTheRunnerAndIsASingleton(t *testing.T) {
 	}
 }
 
+// send --thread runs a wake pass on the targets: the target works on
+// the prompt, so its mail stays pending for maintenance.
+func TestSendThreadWakesTheTargets(t *testing.T) {
+	s, inst, h := newSendInstance(t)
+	mail := newFakeAgentMail(t)
+	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
+	ownNhm(t, inst)
+	mail.set("IcyKnoll", msg(21, "SageOak", "acfs-2", "to"))
+	code, out, errOut := run("send", "swarm", "Read mail on acfs-2.", "--name", "IcyKnoll", "--thread", "acfs-2", "--socket", s.SocketPath)
+	if code != exitOK {
+		t.Fatalf("exit %d: %s %s", code, out, errOut)
+	}
+	if sent := h.sent(); len(sent) != 1 || sent[0] != "w1:p1=Read mail on acfs-2." {
+		t.Fatalf("sent = %v", sent)
+	}
+	db, err := store.Open(inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.SQL().QueryRow(`SELECT COUNT(*) FROM wake WHERE message_id = '21' AND announced_at IS NULL`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("pending rows = %d, %v", n, err)
+	}
+}
+
 func TestMailInboxListsAndMarksRead(t *testing.T) {
 	s, inst, _ := newSendInstance(t)
 	mail := newFakeAgentMail(t)

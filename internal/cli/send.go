@@ -15,6 +15,7 @@ import (
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/wait"
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
@@ -59,8 +60,10 @@ returns the stored receipt. nhm never resends on its own.
 Per target: submitted, possibly submitted (herdr did not confirm; never
 retried), refused or failed. --wait then waits for each target (nhm
 wait --after-op). --dry-run prints the targets and the prompt and writes
-nothing. --thread and --group come with later releases and are refused
-until then.
+nothing. --thread ID says that a mail on that Agent Mail thread goes with
+the prompt: after the send (and --wait), nhm runs a wake pass on the
+targets (nhm wake --recipients <targets> --once), so the mail is read.
+--group comes with a later release and is refused until then.
 
 --with-memory puts CM's rules for the prompt before it, --with-cass
 CASS's hits; both are best-effort, in a framed block of reference
@@ -135,7 +138,7 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&f.memoryQuery, "memory-query", "", "the CM and CASS query (default: the prompt's start)")
 	fs.BoolVar(&f.cassCheck, "cass-check", false, "the CASS duplicate check (the default)")
 	fs.BoolVar(&f.noCassCheck, "no-cass-check", false, "no CASS duplicate check")
-	fs.StringVar(&f.thread, "thread", "", "an Agent Mail thread (comes with nhm.wake)")
+	fs.StringVar(&f.thread, "thread", "", "an Agent Mail thread whose mail goes with the prompt; wakes the targets after the send")
 	fs.StringVar(&f.group, "group", "", "a spawn group (comes with nhm.spawn)")
 	fs.StringVar(&f.opID, "op-id", "", "operation id, for an idempotent retry")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print the targets and the prompt; send nothing")
@@ -196,7 +199,35 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 			return output(stdout, stderr, f.asJSON, env, err, exitError, nil)
 		}
 	}
+	if f.thread != "" && !res.DryRun && res.OperationID != "" {
+		env.Warnings = append(env.Warnings, ie.wakeTargets(ctx, res)...)
+	}
 	return output(stdout, stderr, f.asJSON, env, nil, sendExit(res, waited), func(w io.Writer) { printSend(w, res, waited) })
+}
+
+// wakeTargets runs a wake pass on a send's bound targets (send
+// --thread): a target that is busy keeps its pending mail, and
+// maintenance delivers it. It returns warnings; the send's outcome does
+// not change.
+func (ie *instanceEnv) wakeTargets(ctx context.Context, res send.Result) []string {
+	w, err := ie.wakeEnv(true)
+	if err != nil {
+		return []string{"wake: " + err.Error()}
+	}
+	targets := []bindings.Binding{}
+	for _, rc := range res.Targets {
+		if rc.BindingID == "" {
+			continue
+		}
+		if b, err := w.Bindings.Get(ctx, rc.BindingID); err == nil {
+			targets = append(targets, b)
+		}
+	}
+	wr, err := ie.wakePass(ctx, w, targets, wake.TriggerManual)
+	if err != nil {
+		return []string{"wake: " + err.Error()}
+	}
+	return wr.Warnings
 }
 
 // sendWithWait is send --wait's JSON result.
@@ -211,8 +242,6 @@ func laterFlags(fs *flag.FlagSet, f sendFlags) error {
 	var later []string
 	fs.Visit(func(fl *flag.Flag) {
 		switch {
-		case fl.Name == "thread":
-			later = append(later, "--thread (nhm.wake, acfs-9hkh.15)")
 		case fl.Name == "group":
 			later = append(later, "--group (nhm.spawn, acfs-9hkh.19)")
 		}

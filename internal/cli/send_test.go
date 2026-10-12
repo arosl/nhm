@@ -142,7 +142,6 @@ func TestSendVerb(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"send", "swarm", "x", "--with-cass", "--no-cass", "--socket", sock},
-		{"send", "swarm", "x", "--thread", "t1", "--socket", sock},
 		{"send", "swarm", "x", "--msg", "y", "--socket", sock},
 		{"send", "swarm", "--socket", sock},
 		{"send", "swarm", "x", "--state", "sleepy", "--socket", sock},
