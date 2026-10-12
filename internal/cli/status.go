@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
@@ -74,8 +75,21 @@ func (r *reader) close() {
 	}
 }
 
+// beadsInProgress lists a project's beads in progress by assignee, in the
+// bead databases retire searches (the project's .beads and nhm's
+// configured ones), for each agent's bead (METHOD-MATRIX E14,
+// acfs-9hkh.82). A project with no bead database has none. Tests replace
+// it.
+var beadsInProgress = func(ctx context.Context, root string) (map[string][]string, error) {
+	got, err := lifecycle.CLI{LoadBeadDBs: beadDBs}.InProgress(ctx, root)
+	if errors.Is(err, lifecycle.ErrNoBeadDB) {
+		return nil, nil
+	}
+	return got, err
+}
+
 func (r *reader) model(ctx context.Context, projectKey string) *snapshot.Model {
-	deps := snapshot.Deps{Herdr: r.herdr, DB: r.db, Mail: r.mail,
+	deps := snapshot.Deps{Herdr: r.herdr, DB: r.db, Mail: r.mail, Beads: beadsInProgress,
 		Guards: func(kind, projectRoot string) []guards.Result {
 			return guards.Check(kind, guards.Env{ProjectRoot: projectRoot})
 		}}
@@ -267,9 +281,20 @@ func wsLabel(m *snapshot.Model, id string) string {
 	return id
 }
 
+// beadCell is an agent's bead in progress, with "+N" when it has more.
+func beadCell(beads []string) string {
+	switch len(beads) {
+	case 0:
+		return "-"
+	case 1:
+		return beads[0]
+	}
+	return fmt.Sprintf("%s +%d", beads[0], len(beads)-1)
+}
+
 func printStatus(w io.Writer, m *snapshot.Model) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SESSION\tSLOT\tNAME\tKIND\tMODEL\tSTATE\tMAIL\tGUARDS\tPANE")
+	fmt.Fprintln(tw, "SESSION\tSLOT\tNAME\tKIND\tMODEL\tSTATE\tBEAD\tMAIL\tGUARDS\tPANE")
 	for _, a := range m.Agents {
 		name, model := dash(a.HerdrName), "-"
 		if a.Binding != nil {
@@ -282,16 +307,16 @@ func printStatus(w io.Writer, m *snapshot.Model) {
 		if a.Limit != "" {
 			state += " (at limit)"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, a.WorkspaceID), dash(a.Slot), name, a.Kind, model,
-			state, mailCell(a.Mail, a.Binding != nil), guardsCell(a.Guards), a.PaneID)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, a.WorkspaceID), dash(a.Slot), name, a.Kind, model,
+			state, beadCell(a.Beads), mailCell(a.Mail, a.Binding != nil), guardsCell(a.Guards), a.PaneID)
 	}
 	for _, b := range m.Absent {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
-			dash(b.Model), "absent", "-", "-", dash(b.PaneID))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
+			dash(b.Model), "absent", "-", "-", "-", dash(b.PaneID))
 	}
 	for _, b := range m.Displaced {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
-			dash(b.Model), "displaced", "-", "-", dash(b.PaneID))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
+			dash(b.Model), "displaced", "-", "-", "-", dash(b.PaneID))
 	}
 	_ = tw.Flush()
 	if len(m.Agents)+len(m.Absent)+len(m.Displaced) == 0 {

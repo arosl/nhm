@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ const (
 	SourceBindings = "bindings"
 	SourceMail     = "agent_mail"
 	SourceQuota    = "quota"
+	SourceBeads    = "beads"
 )
 
 // SourceHealth is how one source did in this build.
@@ -80,6 +82,9 @@ type Deps struct {
 	// LimitsFile is the limits-seen.json that `nhm limits` keeps; "" or
 	// a missing file means no limit was seen.
 	LimitsFile string
+	// Beads lists the beads in progress in a project's bead databases,
+	// by assignee (an Agent Mail name); nil skips the beads.
+	Beads func(ctx context.Context, projectRoot string) (map[string][]string, error)
 }
 
 // Options select and bound a build.
@@ -143,6 +148,12 @@ type Agent struct {
 	Guards map[string]guards.State `json:"guards,omitempty"`
 	// Limit is the limit line `nhm limits` last saw on the agent's screen.
 	Limit string `json:"limit,omitempty"`
+	// Bead is the bound agent's bead in progress (br, in its project's
+	// bead databases), the first by id when it has several; null when it
+	// has none or the beads were not read (the beads source says why).
+	// Beads lists them all (METHOD-MATRIX E14, acfs-9hkh.82).
+	Bead  *string  `json:"bead"`
+	Beads []string `json:"beads,omitempty"`
 }
 
 // BindingRef is the binding of an agent's pane.
@@ -294,11 +305,12 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 	return m
 }
 
-// skipOrEnrich runs stage 3: the local files (guards, limits) and then
-// Agent Mail.
+// skipOrEnrich runs stage 3: the local files (guards, limits), the beads
+// and then Agent Mail.
 func (m *Model) skipOrEnrich(ctx context.Context, deps Deps, now func() time.Time, opts Options) {
 	m.addGuards(deps.Guards)
 	m.addLimits(deps.LimitsFile)
+	m.addBeads(ctx, deps.Beads, now, orDefault(opts.LocalTimeout, defaultLocalTimeout))
 	if deps.Mail == nil {
 		m.Sources[SourceMail] = SourceHealth{Source: SourceMail, Status: Skipped, CollectedAt: now().UTC()}
 		return
@@ -329,6 +341,47 @@ func (m *Model) addGuards(check func(kind, projectRoot string) []guards.Result) 
 		}
 		a.Guards = cache[key]
 	}
+}
+
+// addBeads gives each bound agent its beads in progress: one read per
+// project, under one deadline. A project whose beads cannot be read
+// leaves its agents' bead null and makes the source unavailable, naming
+// the project; the other projects still count.
+func (m *Model) addBeads(ctx context.Context, list func(context.Context, string) (map[string][]string, error),
+	now func() time.Time, d time.Duration) {
+	if list == nil {
+		m.Sources[SourceBeads] = SourceHealth{Source: SourceBeads, Status: Skipped, CollectedAt: now().UTC()}
+		return
+	}
+	m.stage(SourceBeads, now, d, ctx, func(c context.Context) error {
+		byProject := map[string]map[string][]string{}
+		var failed []string
+		for i := range m.Agents {
+			a := &m.Agents[i]
+			if a.Binding == nil || a.Binding.ProjectKey == "" {
+				continue
+			}
+			root := a.Binding.ProjectKey
+			beads, done := byProject[root]
+			if !done {
+				var err error
+				if beads, err = list(c, root); err != nil {
+					failed = append(failed, root+": "+err.Error())
+					beads = nil
+				}
+				byProject[root] = beads
+			}
+			if ids := beads[a.Binding.MailName]; len(ids) > 0 {
+				sorted := append([]string(nil), ids...)
+				sort.Strings(sorted)
+				a.Bead, a.Beads = &sorted[0], sorted
+			}
+		}
+		if len(failed) > 0 {
+			return errors.New(strings.Join(failed, "; "))
+		}
+		return nil
+	})
 }
 
 // addLimits marks the agents whose pane showed a limit line.

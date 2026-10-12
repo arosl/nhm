@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,6 +115,50 @@ func TestStatusVerb(t *testing.T) {
 	}
 	if code, out, _ := run("status", "other", "--no-mail", "--socket", s.SocketPath); code != 0 || !strings.Contains(out, "no agents") {
 		t.Fatalf("empty session = %d %s", code, out)
+	}
+}
+
+// METHOD-MATRIX E14 (acfs-9hkh.82): every agent row has "bead", the bound
+// agent's bead in progress or null; the table has a BEAD column; beads
+// that cannot be read leave the bead null and say why.
+func TestStatusShowsEachAgentsBead(t *testing.T) {
+	s := swarmInstance(t)
+	old := beadsInProgress
+	t.Cleanup(func() { beadsInProgress = old })
+	beadsInProgress = func(context.Context, string) (map[string][]string, error) {
+		return map[string][]string{"IcyKnoll": {"acfs-7", "acfs-3"}}, nil
+	}
+	code, out, _ := run("status", "swarm", "--no-mail", "--json", "--socket", s.SocketPath)
+	agents := envelopeOf(t, out)["result"].(map[string]any)["agents"].([]any)
+	if code != 0 || len(agents) == 0 {
+		t.Fatalf("status = %d %s", code, out)
+	}
+	found := false
+	for _, a := range agents {
+		row := a.(map[string]any)
+		bead, has := row["bead"]
+		if !has {
+			t.Fatalf("a row has no bead: %v", row)
+		}
+		if b, ok := row["binding"].(map[string]any); ok && b["mail_name"] == "IcyKnoll" {
+			found = bead == "acfs-3"
+		} else if bead != nil {
+			t.Fatalf("%v has bead %v", row["pane_id"], bead)
+		}
+	}
+	if !found {
+		t.Fatalf("IcyKnoll's bead is not acfs-3: %v", agents)
+	}
+	code, out, _ = run("status", "swarm", "--no-mail", "--socket", s.SocketPath)
+	if code != 0 || !strings.Contains(out, "BEAD") || !strings.Contains(out, "acfs-3 +1") {
+		t.Fatalf("table = %d\n%s", code, out)
+	}
+	beadsInProgress = func(context.Context, string) (map[string][]string, error) {
+		return nil, errors.New("br: database locked")
+	}
+	code, out, errOut := run("status", "swarm", "--no-mail", "--socket", s.SocketPath)
+	if code != 0 || !strings.Contains(errOut, "beads is unavailable") || strings.Contains(out, "acfs-3") {
+		t.Fatalf("beads down = %d\n%s%s", code, out, errOut)
 	}
 }
 

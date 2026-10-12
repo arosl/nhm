@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,49 @@ func TestBuildJoinsHerdrAndBindings(t *testing.T) {
 	}
 	if len(m.Workspaces) != 2 || m.Workspaces[0].ID != "w1" || m.Workspaces[0].AgentCount != 3 {
 		t.Fatalf("workspaces = %+v", m.Workspaces)
+	}
+}
+
+// METHOD-MATRIX E14 (acfs-9hkh.82): each bound agent's bead in progress,
+// read once per project; null when it has none, when the agent is
+// unbound, or when the project's beads cannot be read (then the source
+// is degraded and names the project).
+func TestBuildAddsEachAgentsBead(t *testing.T) {
+	db, h := setup(t)
+	calls := map[string]int{}
+	beads := func(_ context.Context, root string) (map[string][]string, error) {
+		calls[root]++
+		return map[string][]string{"IcyKnoll": {"acfs-2", "acfs-1"}, "Somebody": {"acfs-9"}}, nil
+	}
+	m := Build(context.Background(), Deps{Herdr: h, DB: db, Beads: beads}, Options{})
+	if calls["/p"] != 1 || len(calls) != 1 || m.Sources[SourceBeads].Status != Fresh {
+		t.Fatalf("calls %v, source %+v", calls, m.Sources[SourceBeads])
+	}
+	icy, blue, unbound := m.Agents[0], m.Agents[1], m.Agents[2]
+	if icy.Bead == nil || *icy.Bead != "acfs-1" || strings.Join(icy.Beads, ",") != "acfs-1,acfs-2" {
+		t.Fatalf("IcyKnoll bead %v beads %v", icy.Bead, icy.Beads)
+	}
+	if blue.Bead != nil || unbound.Bead != nil || unbound.Beads != nil {
+		t.Fatalf("BlueLake %v, unbound %v", blue.Bead, unbound.Bead)
+	}
+	// The JSON row always has "bead", null when there is none.
+	data, _ := json.Marshal(blue)
+	if !strings.Contains(string(data), `"bead":null`) {
+		t.Fatalf("BlueLake's row = %s", data)
+	}
+
+	broken := func(context.Context, string) (map[string][]string, error) {
+		return nil, errors.New("br: database locked")
+	}
+	m = Build(context.Background(), Deps{Herdr: h, DB: db, Beads: broken}, Options{})
+	if m.Agents[0].Bead != nil || m.Sources[SourceBeads].Status != Unavailable ||
+		!strings.Contains(m.Sources[SourceBeads].Error, "/p: br: database locked") || !strings.Contains(strings.Join(m.Degraded(), ","), SourceBeads) {
+		t.Fatalf("broken beads: agent %v, source %+v", m.Agents[0].Bead, m.Sources[SourceBeads])
+	}
+
+	m = Build(context.Background(), Deps{Herdr: h, DB: db}, Options{})
+	if m.Sources[SourceBeads].Status != Skipped || m.Agents[0].Bead != nil {
+		t.Fatalf("no Beads dep: %+v", m.Sources[SourceBeads])
 	}
 }
 
