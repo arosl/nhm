@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // realProgramHead reads real files, for the content tests.
@@ -39,15 +41,35 @@ func TestProgramContent(t *testing.T) {
 	}
 	codexJS := file("bun/node_modules/@openai/codex/bin/codex.js", "#!/usr/bin/env node\nimport x\n")
 	pyCodex := file("py/codex/bin/codex", "#!/usr/bin/env python3\nimport x\n")
+	bunDir := filepath.Dir(file("dotbun/bin/bun", "\x7fELF\x02\x01\x01\x00"))
+	node := file("nodejs/bin/node", "\x7fELF\x02\x01\x01\x00")
+	otherNode := file("tmp/x/node", "\x7fELF\x02\x01\x01\x00")
+	notBun := file("shbin/sh", "\x7fELF\x02\x01\x01\x00")
+	if err := os.MkdirAll(filepath.Join(root, "linkbun"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(notBun, filepath.Join(root, "linkbun", "bun")); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := func(bun, script string) string {
+		return "#!/bin/bash\nexec \"" + bun + "/bun\" \"" + script + "\" \"$@\"\n"
+	}
 	for path, want := range map[string]bool{
 		file("a/claude/versions/2.1.296", "\x7fELF\x02\x01\x01\x00"): true,
 		codexJS: true,
-		file("b/codex/bin/codex", "#!/usr/bin/node --no-warnings\n"):                                         true,
-		file("c/codex/bin/codex", "#!/usr/bin/env -S node --flag\n"):                                         true,
-		file("d/codex/bin/codex", "#!/bin/bash\nexec \"/h/.bun/bin/bun\" \""+codexJS+"\" \"$@\"\n"):          true,
-		file("e/codex/bin/codex", "#!/bin/bash\nexec \"/h/.bun/bin/bun\" \""+pyCodex+"\" \"$@\"\n"):          false,
-		file("f/codex/bin/codex", "#!/bin/bash\nexec \"/h/.bun/bin/bun\" \""+codexJS+"\" \"$@\"\nrm -r ~\n"): false,
-		file("g/codex/bin/codex", "#!/bin/sh\necho hi\n"):                                                    false,
+		file("b/codex/bin/codex", "#!"+node+"\n"):                                    true,
+		file("b2/codex/bin/codex", "#!"+node+" --no-warnings\n"):                     false,
+		file("b3/codex/bin/codex", "#!"+otherNode+"\n"):                              false,
+		file("c/codex/bin/codex", "#!/usr/bin/env -S node --flag\n"):                 false,
+		file("c2/codex/bin/codex", "#!/usr/bin/env -S node --require /tmp/x\n"):      false,
+		file("d/codex/bin/codex", wrapper(bunDir, codexJS)):                          true,
+		file("d2/codex/bin/codex", wrapper("/h/.bun/bin", codexJS)):                  false, // no bun there
+		file("d3/codex/bin/codex", wrapper("$(evil)", codexJS)):                      false,
+		file("d4/codex/bin/codex", wrapper("`evil`", codexJS)):                       false,
+		file("d5/codex/bin/codex", wrapper(filepath.Join(root, "linkbun"), codexJS)): false, // resolves to sh
+		file("e/codex/bin/codex", wrapper(bunDir, pyCodex)):                          false,
+		file("f/codex/bin/codex", wrapper(bunDir, codexJS)+"rm -r ~\n"):              false,
+		file("g/codex/bin/codex", "#!/bin/sh\necho hi\n"):                            false,
 		pyCodex: false,
 		file("h/codex/bin/codex", "#!/usr/bin/env bun\n"):              false,
 		file("i/codex/bin/codex", "MZ\x90\x00"):                        false,
@@ -55,11 +77,43 @@ func TestProgramContent(t *testing.T) {
 		file("k/codex/bin/pypy3", "\x7fELF\x02\x01\x01\x00"):           false,
 		file("l/codex/node_modules/.bin/tsx", "#!/usr/bin/env node\n"): false,
 	} {
-		withResolved(t, path)
+		withResolvedNode(t, path, node)
 		if got := ProgramIsKind("codex", "codex") || ProgramIsKind("claude", "claude"); got != want {
 			t.Errorf("%s: %v, want %v", strings.TrimPrefix(path, root), got, want)
 		}
 	}
+	// A FIFO is not read: opening it must not wait for a writer.
+	fifo := filepath.Join(root, "fifo", "codex", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(fifo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withResolvedNode(t, fifo, node)
+	done := make(chan bool, 1)
+	go func() { done <- ProgramIsKind("codex", "codex") }()
+	select {
+	case got := <-done:
+		if got {
+			t.Error("a FIFO counts as the codex CLI")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ProgramIsKind blocked on a FIFO")
+	}
+}
+
+// withResolvedNode resolves every kind to resolved, and node to node.
+func withResolvedNode(t *testing.T, resolved, node string) {
+	t.Helper()
+	old := ResolveProgram
+	ResolveProgram = func(name string) (string, error) {
+		if name == "node" {
+			return node, nil
+		}
+		return resolved, nil
+	}
+	t.Cleanup(func() { ResolveProgram = old })
 }
 
 func withResolved(t *testing.T, resolved string) {
@@ -323,15 +377,23 @@ session_start = true
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--settings\", \"{session}\"]\n",
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--mcp-config\", \"{session}\"]\n",
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"-e\", \"{session}\"]\n",
-		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--extensions\", \"resume\", \"{session}\"]\n",
-		"[kinds.gemini]\nlaunch_args = [\"--yolo\"]\nresume_argv = [\"gemini\", \"--yolo\", \"-e\", \"resume\", \"{session}\"]\n",
-		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\", \"-r\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--extensions\", \"--resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nlaunch_args = [\"--yolo\"]\nresume_argv = [\"gemini\", \"--yolo\", \"-e\", \"--resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\", \"--resume\", \"{session}\"]\n",
 		// No "--" anywhere: nhm's flags would become prompt text.
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\", \"--\"]\n",
 		// The resume flag follows the kind or a launch_arg: an argument
 		// before it could take it as its value (the review of ce21b11).
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--mcp-config\", \"--resume\", \"{session}\"]\n",
-		"[kinds.gemini]\nlaunch_args = [\"--yolo\"]\nresume_argv = [\"gemini\", \"--yolo\", \"-x\", \"-r\", \"{session}\"]\n",
+		"[kinds.gemini]\nlaunch_args = [\"--yolo\"]\nresume_argv = [\"gemini\", \"--yolo\", \"-x\", \"--resume\", \"{session}\"]\n",
+		// resume_flags come from each kind's own allowlist (acfs-9hkh.79):
+		// a short flag or --session-file is no resume flag, and a kind nhm
+		// has checked no flags of has no resume.
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"-c\", \"{session}\"]\nresume_flags = [\"-c\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"-r\", \"{session}\"]\nresume_flags = [\"-r\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--session-file\", \"{session}\"]\nresume_flags = [\"--session-file\"]\n",
+		"[kinds.copilot]\nresume_argv = [\"copilot\", \"--session-file\", \"{session}\"]\nresume_flags = [\"--session-file\"]\n",
+		"[kinds.kimi]\nresume_argv = [\"kimi\", \"--resume\", \"{session}\"]\nresume_flags = [\"--resume\"]\n",
 		// resume_flags are per kind, declared, and name a resume or a
 		// session: without them, or with a file-loading flag, no resume.
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\nresume_flags = []\n",
@@ -357,30 +419,29 @@ session_start = true
 		// The placement cases declare every usual resume flag, so each
 		// fails on its own rule, not on missing resume_flags.
 		if strings.Contains(bad, "resume_argv") && !strings.Contains(bad, "resume_flags") {
-			bad += "resume_flags = [\"--resume\", \"-r\", \"resume\"]\n"
+			bad += "resume_flags = [\"--resume\"]\n"
 		}
 		write(bad)
 		if err := NewRegistry().LoadConfig(path); err == nil {
 			t.Errorf("accepted:\n%s", bad)
 		}
 	}
-	// An agent CLI that herdr starts, with the session as a named flag's
-	// value, or after the resume subcommand.
-	for _, good := range []string{
-		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\nresume_flags = [\"--resume\"]\n",
-		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"resume\", \"{session}\"]\nresume_flags = [\"resume\"]\n",
-		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"-r\", \"{session}\", \"--quiet\"]\nresume_flags = [\"-r\"]\n",
-		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--session-id\", \"{session}\"]\nresume_flags = [\"--session-id\"]\n",
+	// An agent CLI that herdr starts, with the session as the value of one
+	// of the kind's documented resume flags.
+	for _, good := range []struct{ kind, config string }{
+		{"gemini", "[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\nresume_flags = [\"--resume\"]\n"},
+		{"cursor", "[kinds.cursor]\nmodel_flag = \"-m\"\nresume_argv = [\"cursor\", \"--resume\", \"{session}\", \"--quiet\"]\nresume_flags = [\"--resume\"]\n"},
+		{"copilot", "[kinds.copilot]\nmodel_flag = \"-m\"\nresume_argv = [\"copilot\", \"--resume\", \"{session}\"]\nresume_flags = [\"--resume\"]\n"},
 	} {
-		write(good)
+		write(good.config)
 		r := NewRegistry()
 		if err := r.LoadConfig(path); err != nil {
-			t.Fatalf("refused:\n%s%v", good, err)
+			t.Fatalf("refused:\n%s%v", good.config, err)
 		}
-		g, _ := r.Get("gemini")
+		g, _ := r.Get(good.kind)
 		// nhm's flags follow the session id, before the kind's own tail.
 		if got := g.Resume("s-9", "flash", "", ""); len(got) < 5 || got[2] != "s-9" || got[3] != "-m" || got[4] != "flash" {
-			t.Fatalf("gemini resume = %v", got)
+			t.Fatalf("%s resume = %v", good.kind, got)
 		}
 	}
 }

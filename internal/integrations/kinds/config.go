@@ -180,11 +180,22 @@ var herdrAgentKinds = map[string]bool{"pi": true, "claude": true, "codex": true,
 	"kimi": true, "kiro": true, "droid": true, "amp": true, "grok": true, "hermes": true, "kilo": true,
 	"qodercli": true, "qwen": true, "letta": true, "maki": true, "muse": true}
 
-// resumeFlagName is a declared resume flag: the subcommand "resume", a
-// short flag, or a long flag that names a resume or a session. {session}
-// after any other flag could name a file the CLI loads (--settings,
-// --mcp-config), and SessionPattern accepts "evil.json".
-var resumeFlagName = regexp.MustCompile(`^(?:resume|-[a-zA-Z]|--[a-z0-9-]*(?:resume|session)[a-z0-9-]*)$`)
+// resumeFlagsByKind are the resume flags each CLI documents for a session
+// id, checked against its docs (acfs-9hkh.79): claude --resume/-r, codex's
+// resume subcommand, gemini --resume, opencode --session/-s, copilot
+// --resume, cursor --resume. {session} after any other flag could name a
+// file the CLI loads (--settings, --mcp-config, --session-file), and
+// SessionPattern accepts "evil.json"; a shape rule let any short flag
+// through. A kind without an entry has no resume until its flags are
+// checked and added here.
+var resumeFlagsByKind = map[string][]string{
+	"claude":   {"--resume", "-r"},
+	"codex":    {"resume"},
+	"gemini":   {"--resume"},
+	"opencode": {"--session", "-s"},
+	"copilot":  {"--resume"},
+	"cursor":   {"--resume"},
+}
 
 // checkResumeArgv: the program is the kind itself, by its bare name, and
 // one of the agent CLIs herdr starts; then arguments without control
@@ -205,9 +216,13 @@ func checkResumeArgv(kind string, argv, launchArgs, flags []string) error {
 	if len(flags) == 0 {
 		return fmt.Errorf("resume_flags: name the CLI's own resume flag")
 	}
+	known, ok := resumeFlagsByKind[kind]
+	if !ok {
+		return fmt.Errorf("resume_flags: nhm knows no resume flag of %s yet", kind)
+	}
 	for _, f := range flags {
-		if !resumeFlagName.MatchString(f) {
-			return fmt.Errorf("resume_flags: %q is not resume, a short flag, or a long flag naming a resume or a session", f)
+		if !slices.Contains(known, f) {
+			return fmt.Errorf("resume_flags: %q is not a resume flag of %s (%v)", f, kind, known)
 		}
 	}
 	prog := argv[0]

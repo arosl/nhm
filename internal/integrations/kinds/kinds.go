@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/arosl/nhm/internal/integrations/kinds/claude"
 	"github.com/arosl/nhm/internal/integrations/kinds/codex"
@@ -213,11 +214,15 @@ var notAgentCLIs = regexp.MustCompile(`^(?:[a-z]*sh|busybox|env|python|pypy|perl
 // ProgramHead returns the first bytes of a file. A variable so tests need
 // no agent CLI installed.
 var ProgramHead = func(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	// O_NONBLOCK: opening a FIFO for reading would wait for a writer.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
 	buf := make([]byte, 512)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -261,11 +266,26 @@ func isKindExecutable(resolved, kind string, wrapperAllowed bool) bool {
 		return true
 	}
 	m := bunWrapper.FindSubmatch(head)
-	if !wrapperAllowed || m == nil {
+	if !wrapperAllowed || m == nil || !isBunBinary(string(m[1])+"/bun") || strings.ContainsAny(string(m[2]), "$`\\") {
 		return false
 	}
 	target, err := filepath.EvalSymlinks(string(m[2]))
 	return err == nil && isKindExecutable(target, kind, false)
+}
+
+// isBunBinary: the wrapper's bun path is a literal (inside the wrapper's
+// double quotes, $, a backtick or \ would make sh expand it), and it
+// resolves to an ELF binary named bun.
+func isBunBinary(path string) bool {
+	if strings.ContainsAny(path, "$`\\") {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || filepath.Base(resolved) != "bun" {
+		return false
+	}
+	head, err := ProgramHead(resolved)
+	return err == nil && bytes.HasPrefix(head, []byte("\x7fELF"))
 }
 
 // pathNamesKind: a part of the path is the kind, or starts with "<kind>-".
@@ -279,26 +299,25 @@ func pathNamesKind(path, kind string) bool {
 	return false
 }
 
-// nodeShebang: the first line runs node, directly (#!/usr/bin/node) or
-// through env (#!/usr/bin/env node, #!/usr/bin/env -S node --flag).
+// nodeShebang: the first line is exactly "#!/usr/bin/env node", or an
+// absolute node with no arguments that is the node on PATH. Arguments
+// (env -S node --require …, node -e …) can run other code, and a node
+// elsewhere (/tmp/x/node) is any program named node.
 func nodeShebang(head []byte) bool {
 	line, _, _ := bytes.Cut(head[2:], []byte("\n"))
 	fields := strings.Fields(string(line))
-	if len(fields) == 0 {
-		return false
-	}
-	if filepath.Base(fields[0]) == "node" {
+	switch {
+	case len(fields) == 2 && fields[0] == "/usr/bin/env" && fields[1] == "node":
 		return true
-	}
-	if filepath.Base(fields[0]) != "env" {
+	case len(fields) != 1 || !filepath.IsAbs(fields[0]) || filepath.Base(fields[0]) != "node":
 		return false
 	}
-	for _, f := range fields[1:] {
-		if !strings.HasPrefix(f, "-") {
-			return f == "node"
-		}
+	resolved, err := filepath.EvalSymlinks(fields[0])
+	if err != nil {
+		return false
 	}
-	return false
+	onPath, err := ResolveProgram("node")
+	return err == nil && resolved == onPath
 }
 
 // Effort returns the effort args for effort (the kind's default when
