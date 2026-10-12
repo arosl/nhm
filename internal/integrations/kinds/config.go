@@ -22,7 +22,7 @@ import (
 //	resume_argv = ["mycli", "--resume", "{session}"]
 //	new_session = "/new"
 //	exit_command = "/quit"
-//	interrupt_keys = ["Escape"]
+//	interrupt_keys = ["esc"]
 //	quota_pool = "mycli"
 //	limit = "usage limit reached"
 //	code_review = true

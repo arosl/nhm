@@ -222,7 +222,7 @@ func TestInterruptVerb(t *testing.T) {
 	// The caller (w1:p2) is left out unless --include-self.
 	t.Setenv("HERDR_PANE_ID", "w1:p2")
 	code, out, errOut := runVerb(runInterrupt, "swarm", "--op-id", "op-int-1", "--socket", s.SocketPath)
-	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): sent Escape") || strings.Contains(out, "BlueLake") {
+	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): sent esc") || strings.Contains(out, "BlueLake") {
 		t.Fatalf("interrupt = %d %s %s", code, out, errOut)
 	}
 	// The same op id sends nothing.
@@ -237,7 +237,7 @@ func TestInterruptVerb(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if strings.Join(sent, " ") != "w1:p1=Escape w1:p1=Escape w1:p2=Escape" {
+	if strings.Join(sent, " ") != "w1:p1=esc w1:p1=esc w1:p2=esc" {
 		t.Fatalf("keys = %v", sent)
 	}
 }

@@ -87,6 +87,8 @@ type Adapter struct {
 	// ExitCommand is the prompt that ends the agent.
 	ExitCommand string `json:"exit_command,omitempty"`
 	// InterruptKeys stop a turn and keep the session; nil: not checked.
+	// Key names are herdr's: "esc" is canonical (herdr agent send-keys
+	// --help), "enter", "down".
 	InterruptKeys []string `json:"interrupt_keys,omitempty"`
 	// QuotaPool is the pool the kind's usage counts against;
 	// QuotaSource says where nhm reads it ("" when the kind exposes none).
@@ -114,6 +116,12 @@ type Adapter struct {
 	// SessionStartContext: what a SessionStart hook prints reaches the
 	// agent's context (nhm's name reminder).
 	SessionStartContext bool `json:"session_start_context"`
+	// Program is the program name an Agent Mail identity records.
+	Program string `json:"program"`
+	// TrustKeys answers the kind's folder-trust dialog on a screen: the
+	// keys that say yes, or nil when the screen is not exactly that
+	// dialog (spawn --trust-folder).
+	TrustKeys func(screen string) []string `json:"-"`
 	// Cannot lists what nhm cannot prove for this kind.
 	Cannot []string `json:"cannot,omitempty"`
 	// Builtin is false for a kind from config.
@@ -153,6 +161,35 @@ func fromClaude(e Event, bound string, launch bool) Decision {
 	return Decision{Verdict: d.Verdict, Reason: d.Reason, Compacted: d.Compacted, Resumed: d.Resumed, TakeSession: d.TakeSession}
 }
 
+// The folder-trust dialogs, as ACFS's herdr_agents_trust_keys reads them:
+// the exact question and the selected answer, or nothing.
+var (
+	claudeTrustCursorNo  = regexp.MustCompile(`(?m)❯ *No, exit`)
+	claudeTrustYesLine   = regexp.MustCompile(`(?m)^ *Yes, I trust this folder`)
+	claudeTrustCursorYes = regexp.MustCompile(`(?m)❯ *Yes, I trust this folder`)
+	codexTrustCursor     = regexp.MustCompile(`(?m)› *1\. Trust and continue`)
+)
+
+func claudeTrust(screen string) []string {
+	if !strings.Contains(screen, "Is this a project you created or one you trust?") {
+		return nil
+	}
+	switch {
+	case claudeTrustCursorNo.MatchString(screen) && claudeTrustYesLine.MatchString(screen):
+		return []string{"down", "enter"}
+	case claudeTrustCursorYes.MatchString(screen):
+		return []string{"enter"}
+	}
+	return nil
+}
+
+func codexTrust(screen string) []string {
+	if strings.Contains(screen, "Trust this folder?") && codexTrustCursor.MatchString(screen) {
+		return []string{"enter"}
+	}
+	return nil
+}
+
 func fromCodex(e Event, bound string, launch bool) Decision {
 	d := codex.Classify(codex.Event{HookEvent: e.HookEvent, Source: e.Source, SessionID: e.SessionID}, bound, launch)
 	return Decision{Verdict: d.Verdict, Reason: d.Reason, Compacted: d.Compacted, Resumed: d.Resumed, TakeSession: d.TakeSession}
@@ -162,9 +199,9 @@ func fromCodex(e Event, bound string, launch bool) Decision {
 func builtins() []Adapter {
 	return []Adapter{
 		{
-			Name: "claude", NTMType: "claude", Flags: []string{"cc"}, ModelFlag: "--model",
+			Name: "claude", NTMType: "claude", Program: "claude-code", TrustKeys: claudeTrust, Flags: []string{"cc"}, ModelFlag: "--model",
 			ResumeArgv: []string{"claude", "--resume", "{session}"}, NewSession: "/clear", ExitCommand: "/exit",
-			InterruptKeys: []string{"Escape"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
+			InterruptKeys: []string{"esc"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true},
 			Limit:      regexp.MustCompile(`(?i)usage limit reached|you('|’)ve (hit|reached) your ([a-z0-9-]+ )?limit|(5-hour|session|weekly|opus|sonnet) limit reached|rate_limit_error|api error: 429`),
 			Transcript: Transcript{Dir: ".claude/projects", Format: "claude-jsonl"}, CodeReview: true,
@@ -174,9 +211,9 @@ func builtins() []Adapter {
 		},
 		{
 			// --no-daemon runs Codex's hooks in its own pane (F.22, exp.3).
-			Name: "codex", NTMType: "codex", Flags: []string{"cod"}, LaunchArgs: []string{"--no-daemon"}, ModelFlag: "--model",
+			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Flags: []string{"cod"}, LaunchArgs: []string{"--no-daemon"}, ModelFlag: "--model",
 			ResumeArgv: []string{"codex", "--no-daemon", "resume", "{session}"}, NewSession: "/new", ExitCommand: "/quit",
-			InterruptKeys: []string{"Escape"}, QuotaPool: "codex", QuotaSource: "codex session logs",
+			InterruptKeys: []string{"esc"}, QuotaPool: "codex", QuotaSource: "codex session logs",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true, Trust: true},
 			Limit:      regexp.MustCompile(`(?i)you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit reached|429 too many requests`),
 			Transcript: Transcript{Dir: ".codex/sessions", Format: "codex-jsonl"}, CodeReview: false,
@@ -184,7 +221,7 @@ func builtins() []Adapter {
 			Cannot: []string{"what Codex does with a SessionStart hook's output"},
 		},
 		{
-			Name: "agy", NTMType: "antigravity", QuotaPool: "agy",
+			Name: "agy", NTMType: "antigravity", Program: "antigravity", QuotaPool: "agy",
 			Limit:      regexp.MustCompile(`(?i)resource_exhausted|quota (exceeded|exhausted)|(reached|exhausted) (your|the) [a-z0-9. -]{0,30}quota|usage limit reached|429 too many requests`),
 			CodeReview: true, GuardSettings: ".gemini/config/hooks.json", GuardSupported: true,
 			Cannot: []string{"its usage (no quota source)", "its interrupt key", "a SessionStart hook, so a name is not restored after a compaction",
@@ -195,7 +232,7 @@ func builtins() []Adapter {
 			Cannot: []string{"any guard: pi runs no hooks (F.9)", "its usage", "its interrupt key", "its session resume"},
 		},
 		{
-			Name: "omp", NTMType: "omp", InterruptKeys: []string{"Escape"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
+			Name: "omp", NTMType: "omp", InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"its guard settings file", "its usage", "its session resume"},
 		},
 		{
@@ -221,6 +258,9 @@ func NewRegistry() *Registry {
 	r := &Registry{by: map[string]Adapter{}}
 	for _, a := range builtins() {
 		a.Builtin = true
+		if a.Program == "" {
+			a.Program = a.Name
+		}
 		r.order = append(r.order, a.Name)
 		r.by[a.Name] = a
 	}
@@ -257,6 +297,9 @@ func (r *Registry) Register(a Adapter) error {
 	}
 	if a.NTMType == "" {
 		a.NTMType = a.Name
+	}
+	if a.Program == "" {
+		a.Program = a.Name
 	}
 	if a.QuotaPool == "" {
 		a.QuotaPool = a.Name

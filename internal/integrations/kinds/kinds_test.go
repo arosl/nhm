@@ -14,7 +14,7 @@ func TestBuiltins(t *testing.T) {
 		t.Fatalf("names = %s", got)
 	}
 	c, _ := r.Get("claude")
-	if !c.Builtin || c.ModelFlag != "--model" || !slices.Equal(c.InterruptKeys, []string{"Escape"}) || !c.CodeReview || c.Continue == nil {
+	if !c.Builtin || c.ModelFlag != "--model" || !slices.Equal(c.InterruptKeys, []string{"esc"}) || !c.CodeReview || c.Continue == nil {
 		t.Fatalf("claude = %+v", c)
 	}
 	if got := c.Resume("s-1"); !slices.Equal(got, []string{"claude", "--resume", "s-1"}) {
@@ -47,6 +47,32 @@ func TestBuiltins(t *testing.T) {
 	}
 	if Lookup("weird").Name != "weird" || Lookup("").NTMType != "unknown" {
 		t.Fatal("lookup of an unregistered kind")
+	}
+}
+
+func TestTrustKeysAndPrograms(t *testing.T) {
+	c, _ := Get("claude")
+	x, _ := Get("codex")
+	claudeNo := "Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n"
+	claudeYes := "Is this a project you created or one you trust?\n ❯ Yes, I trust this folder\n   No, exit\n"
+	if got := c.TrustKeys(claudeNo); !slices.Equal(got, []string{"down", "enter"}) {
+		t.Fatalf("claude, cursor on no = %v", got)
+	}
+	if got := c.TrustKeys(claudeYes); !slices.Equal(got, []string{"enter"}) {
+		t.Fatalf("claude, cursor on yes = %v", got)
+	}
+	if c.TrustKeys("Something else entirely") != nil || x.TrustKeys(claudeYes) != nil {
+		t.Fatal("a screen that is not the dialog was answered")
+	}
+	if got := x.TrustKeys("Trust this folder?\n› 1. Trust and continue\n  2. Quit\n"); !slices.Equal(got, []string{"enter"}) {
+		t.Fatalf("codex = %v", got)
+	}
+	if c.Program != "claude-code" || x.Program != "codex-cli" {
+		t.Fatalf("programs = %s %s", c.Program, x.Program)
+	}
+	// A kind without its own program records its kind name.
+	if p, _ := Get("pi"); p.Program != "pi" {
+		t.Fatalf("pi program = %q", p.Program)
 	}
 }
 

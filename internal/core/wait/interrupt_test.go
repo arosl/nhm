@@ -74,7 +74,7 @@ func TestInterruptSendsTheKindsKeyOncePerOperation(t *testing.T) {
 			t.Errorf("%s = %s (%s), want %s", tg.MailName, tg.Status, tg.Reason, want[i])
 		}
 	}
-	if res.Status != "partial" || len(h.keys) != 1 || h.keys[0][0] != "Escape" || res.Targets[0].StateBefore != herdr.StatusWorking {
+	if res.Status != "partial" || len(h.keys) != 1 || h.keys[0][0] != "esc" || res.Targets[0].StateBefore != herdr.StatusWorking {
 		t.Fatalf("status %s, keys %v", res.Status, h.keys)
 	}
 	// The same operation id sends nothing again.
