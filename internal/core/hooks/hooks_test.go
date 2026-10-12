@@ -3,6 +3,8 @@ package hooks
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -527,6 +529,93 @@ func TestReconcileRepairsAStoppedRegistration(t *testing.T) {
 	got, _ := CandidateResults(ctx, h.env.DB, "w1:p1")
 	if len(got) != 1 || got[0].ID != id || !got[0].Processed || !strings.HasPrefix(got[0].Result, "already bound") {
 		t.Fatalf("candidates = %+v", got)
+	}
+	if _, err := store.ReadSecret(h.env.InstanceDir, "cand-1"); err == nil {
+		t.Fatal("the candidate's token file stayed")
+	}
+}
+
+// stoppedRegistration is a binding that a stopped hook created, and its
+// pending candidate with token tok.
+func stoppedRegistration(t *testing.T, h *harness, tok string) bindings.Binding {
+	t.Helper()
+	ctx := context.Background()
+	project := t.TempDir()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	if _, err := recordCandidate(ctx, h.env.DB.SQL(), Candidate{PaneID: "w1:p1", Session: "sess-a", HookEvent: "PostToolUse",
+		HookEventID: "e1", ReceivedAt: h.clock, Facts: CandidateFacts{HookEventName: "PostToolUse", SessionID: "sess-a",
+			ToolName: "mcp__mcp-agent-mail__register_agent", MailName: "IcyKnoll", MailProject: project, TokenRef: "cand-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteSecret(h.env.InstanceDir, "cand-1", tok); err != nil {
+		t.Fatal(err)
+	}
+	b, err := h.env.Bindings.Create(ctx, bindings.New{MailName: "IcyKnoll", MailProjectKey: canonical(project),
+		ProjectID: core.ProjectID(canonical(project)), Provenance: bindings.Adopted,
+		Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p1", HerdrAlias: "icyknoll", Kind: "claude",
+			NativeSession: &bindings.NativeSession{Value: "sess-a"}, ForegroundPID: 500, ForegroundStart: 5000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// When the token cannot be stored under the binding, the candidate's file
+// is its only copy: it stays, the candidate stays pending, and a later
+// reconcile stores it.
+func TestTokenSurvivesAFailedWrite(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	b := stoppedRegistration(t, h, "tok-only-copy")
+	// A directory where the binding's token file goes makes the write fail.
+	blocker := filepath.Join(h.env.InstanceDir, store.SecretsDir, b.ID, "x")
+	if err := os.MkdirAll(blocker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcilePane(ctx, h.env, "w1:p1"); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := store.ReadSecret(h.env.InstanceDir, "cand-1"); err != nil || tok != "tok-only-copy" {
+		t.Fatalf("the candidate's token = %q %v", tok, err)
+	}
+	if got, _ := CandidateResults(ctx, h.env.DB, "w1:p1"); len(got) != 1 || got[0].Processed {
+		t.Fatalf("candidates = %+v", got)
+	}
+	if err := os.RemoveAll(filepath.Join(h.env.InstanceDir, store.SecretsDir, b.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcilePane(ctx, h.env, "w1:p1"); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := store.ReadSecret(h.env.InstanceDir, b.ID); err != nil || tok != "tok-only-copy" {
+		t.Fatalf("binding token = %q %v", tok, err)
+	}
+	if _, err := store.ReadSecret(h.env.InstanceDir, "cand-1"); err == nil {
+		t.Fatal("the candidate's token file stayed after the binding got it")
+	}
+	if got, _ := CandidateResults(ctx, h.env.DB, "w1:p1"); !got[0].Processed || !strings.HasPrefix(got[0].Result, "already bound") {
+		t.Fatalf("candidates = %+v", got)
+	}
+}
+
+// Agent Mail refuses a token once the name registers again, so a newer
+// token on the already-bound path replaces the stored one.
+func TestNewerTokenReplacesTheStoredOne(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	b := stoppedRegistration(t, h, "tok-new")
+	if err := store.WriteSecret(h.env.InstanceDir, b.ID, "tok-old"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := ReconcilePane(ctx, h.env, "w1:p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := store.ReadSecret(h.env.InstanceDir, b.ID); err != nil || tok != "tok-new" {
+		t.Fatalf("binding token = %q %v", tok, err)
+	}
+	if !strings.Contains(strings.Join(r.Actions, "\n"), "replaced "+b.ID+"'s registration token") {
+		t.Fatalf("actions = %v", r.Actions)
 	}
 	if _, err := store.ReadSecret(h.env.InstanceDir, "cand-1"); err == nil {
 		t.Fatal("the candidate's token file stayed")

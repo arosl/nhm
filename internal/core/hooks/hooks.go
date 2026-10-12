@@ -389,8 +389,12 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	if b := *bp; b != nil {
 		if strings.EqualFold(b.MailName, name) && sameProject(b.MailProjectKey, projectKey) {
 			// A hook stopped between the create and its writes leaves the
-			// candidate pending; finish those writes now.
-			repairBinding(env, c, *b, r)
+			// candidate pending; finish those writes now. A token not yet
+			// stored keeps the candidate pending, so a later reconcile
+			// tries again and the token's only copy stays.
+			if !repairBinding(env, c, *b, r) {
+				return "", errPending
+			}
 			return "already bound as " + b.ID, nil
 		}
 		return fmt.Sprintf("refused: the pane is bound to %s (%s); use nhm adopt", b.MailName, b.ID), nil
@@ -407,34 +411,67 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	if err != nil {
 		return "", err
 	}
-	repairBinding(env, c, b, r)
+	kept := repairBinding(env, c, b, r)
 	*bp = &b
 	r.act("bound %s to %s as %s", b.PaneID, b.MailName, b.ID)
 	labelPane(ctx, env, b, r)
+	if !kept {
+		// The binding stands; the candidate stays pending until its token
+		// is stored (the already-bound path above).
+		return "", errPending
+	}
 	return "bound " + b.ID, nil
 }
 
 // repairBinding makes the writes that follow a registration's bind, when
 // they are missing: the token under the binding id, and Agent Mail's
 // identity file for the pane. It is idempotent, so a reconcile can run
-// it for a binding that a stopped hook created.
-func repairBinding(env Env, c Candidate, b bindings.Binding, r *Reconcile) {
-	if c.Facts.TokenRef != "" {
-		if _, err := store.ReadSecret(env.InstanceDir, b.ID); errors.Is(err, store.ErrNoSecret) {
-			if tok, err := store.ReadSecret(env.InstanceDir, c.Facts.TokenRef); err == nil {
-				if err := store.WriteSecret(env.InstanceDir, b.ID, tok); err != nil {
-					r.warn("registration token for %s not kept: %v", b.ID, err)
-				}
-			}
-		}
-	}
+// it for a binding that a stopped hook created. It reports whether the
+// candidate's token file may go (see keepToken).
+func repairBinding(env Env, c Candidate, b bindings.Binding, r *Reconcile) bool {
+	kept := keepToken(env, c, b, r)
 	rec, ok, err := agentmail.ReadIdentity(env.ConfigHome, b.MailProjectKey, b.PaneID)
 	if err == nil && ok && strings.EqualFold(rec.Name, b.MailName) {
-		return
+		return kept
 	}
 	if _, err := agentmail.WriteIdentity(env.ConfigHome, b.MailProjectKey, b.PaneID, b.MailName, env.now()); err != nil {
 		r.warn("Agent Mail identity file: %v", err)
 	}
+	return kept
+}
+
+// keepToken stores the candidate's registration token under the binding
+// id. Agent Mail issues a new token at every register_agent and refuses
+// the one before it (checked 2026-10-12: SENDER_TOKEN_MISMATCH), so a
+// candidate's token replaces a different stored one; candidates are
+// applied oldest first, so the newest token stays. It reports whether
+// the candidate's own token file may be deleted: true when it held no
+// token, or the binding's file holds the same token now. On false the
+// candidate's file is the only copy and must stay.
+func keepToken(env Env, c Candidate, b bindings.Binding, r *Reconcile) bool {
+	if c.Facts.TokenRef == "" {
+		return true
+	}
+	tok, err := store.ReadSecret(env.InstanceDir, c.Facts.TokenRef)
+	if errors.Is(err, store.ErrNoSecret) {
+		return true
+	}
+	if err != nil {
+		r.warn("registration token of candidate %d unreadable: %v", c.ID, err)
+		return false
+	}
+	cur, err := store.ReadSecret(env.InstanceDir, b.ID)
+	if err == nil && cur == tok {
+		return true
+	}
+	if werr := store.WriteSecret(env.InstanceDir, b.ID, tok); werr != nil {
+		r.warn("registration token for %s not stored yet (the candidate keeps it): %v", b.ID, werr)
+		return false
+	}
+	if err == nil {
+		r.act("replaced %s's registration token with the newer one", b.ID)
+	}
+	return true
 }
 
 func applyContinuation(ctx context.Context, env Env, c Candidate, st paneState, bp **bindings.Binding, r *Reconcile) (string, error) {

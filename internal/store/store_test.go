@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -100,6 +101,28 @@ func TestEnrollTightensAWideStateRoot(t *testing.T) {
 	}
 	if info, err := os.Stat(root); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("state root = %v %v", info, err)
+	}
+}
+
+// chmod follows a symlink, so a symlinked state root is refused and the
+// link's target keeps its mode.
+func TestEnrollRefusesASymlinkedStateRoot(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "nhm")
+	if err := os.Symlink(target, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Enroll(root, "/run/herdr/herdr.sock", "default", t0); err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("Enroll = %v", err)
+	}
+	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("the link's target changed: %v %v", info, err)
+	}
+	if entries, _ := os.ReadDir(target); len(entries) != 0 {
+		t.Fatalf("Enroll wrote through the link: %v", entries)
 	}
 }
 

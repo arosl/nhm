@@ -45,7 +45,14 @@ func Enroll(root, socketPath, session string, now time.Time) (inst Instance, cre
 		return Instance{}, false, fmt.Errorf("store: %w", err)
 	}
 	// MkdirAll keeps an existing directory's mode; the state root holds
-	// every instance, so it is 0700 whatever made it.
+	// every instance, so it is 0700 whatever made it. chmod follows a
+	// symlink and Linux has no lchmod, so a symlinked root is refused:
+	// nhm would change the mode of whatever the link points at.
+	if info, err := os.Lstat(root); err != nil {
+		return Instance{}, false, fmt.Errorf("store: %w", err)
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return Instance{}, false, fmt.Errorf("store: the state root %s is a symlink; make it a directory (nhm keeps it 0700)", root)
+	}
 	if err := os.Chmod(root, 0o700); err != nil {
 		return Instance{}, false, fmt.Errorf("store: %w", err)
 	}
