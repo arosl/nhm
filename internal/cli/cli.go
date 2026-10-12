@@ -25,9 +25,16 @@ const usage = `nhm: the herdr wrapper of the ACFS flywheel (what ntm is to tmux)
 
 Usage:
   nhm version [--json]   print the version
+  nhm resolve <name|herdr-name|pane-id|--current> [--json]
+                         print a binding and how nhm verified it
+  nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
+                         bind an identity to the agent in a pane, by hand
+  nhm admin recover reconcile --import-only [--dry-run] [--json]
+                         read Bash-spawned agents into bindings
   nhm help               print this text
 
-The other verbs come with the next releases.
+Each verb prints its own help with --help. The other verbs come with the
+next releases.
 `
 
 // Run executes nhm with args (without the program name) and returns the
@@ -43,6 +50,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "version", "--version":
 		return runVersion(args[1:], stdout, stderr)
+	case "resolve":
+		return runResolve(args[1:], stdout, stderr)
+	case "adopt":
+		return runAdopt(args[1:], stdout, stderr)
+	case "admin":
+		return runAdmin(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "nhm: unknown command %q\n\n%s", args[0], usage)
 		return 2

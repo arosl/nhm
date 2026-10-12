@@ -165,6 +165,17 @@ CREATE TABLE quota (
 	PRIMARY KEY (pool_id, window)
 );
 `,
+	// 2 (nhm.bindings): the tab a binding and a slot belong to, why a
+	// binding is displaced or retired, and the evidence nhm verified it on.
+	// A slot's N is its tab's ordinal in the workspace, so the slot rows
+	// remember their tab.
+	`
+ALTER TABLE bindings ADD COLUMN tab_id TEXT;
+ALTER TABLE bindings ADD COLUMN status_reason TEXT;
+ALTER TABLE bindings ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE slots ADD COLUMN tab_id TEXT;
+CREATE INDEX slots_binding ON slots (binding_id);
+`,
 }
 
 // SchemaVersion is the user_version this build writes.
