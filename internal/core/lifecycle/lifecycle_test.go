@@ -198,17 +198,50 @@ func (f *fakeFacts) Known(_ context.Context, _, agent string) (bool, error) {
 type fakeMail struct {
 	retired []string
 	down    bool
+	// current is Agent Mail's token of an identity; one it lacks takes
+	// any token.
+	current map[string]string
+	// gone are the identities Agent Mail has retired already.
+	gone  map[string]bool
+	calls []string
+	// afterCheck runs after an unretire_agent that accepted the token.
+	afterCheck func()
 }
 
-func (m *fakeMail) Call(_ context.Context, tool string, args, _ any) error {
+func (m *fakeMail) Call(_ context.Context, tool string, args, out any) error {
 	if m.down {
 		return errors.New("connection refused")
 	}
-	if tool == "retire_agent" {
-		a := args.(map[string]any)
-		m.retired = append(m.retired, fmt.Sprint(a["agent_name"], ":", a["registration_token"]))
+	m.calls = append(m.calls, tool)
+	a, _ := args.(map[string]any)
+	name, _ := a["agent_name"].(string)
+	switch tool {
+	case "whois":
+		if m.gone[name] {
+			return json.Unmarshal([]byte(`{"name":"`+name+`","retired_at":"2026-10-12T05:00:00Z"}`), out)
+		}
+	case "unretire_agent", "retire_agent":
+		if cur, ok := m.current[name]; ok && a["registration_token"] != cur {
+			return &agentmail.ToolError{Tool: tool, Message: `{"error":{"type":"AUTHENTICATION_REQUIRED","data":{"reason":"token_mismatch"}}}`}
+		}
+		if tool == "unretire_agent" && m.afterCheck != nil {
+			m.afterCheck()
+		}
+		if tool == "retire_agent" {
+			m.retired = append(m.retired, fmt.Sprint(a["agent_name"], ":", a["registration_token"]))
+		}
 	}
 	return nil
+}
+
+func (m *fakeMail) called(tool string) int {
+	n := 0
+	for _, c := range m.calls {
+		if c == tool {
+			n++
+		}
+	}
+	return n
 }
 
 type world struct {
@@ -279,6 +312,103 @@ func writeFile(t *testing.T, path, s string) {
 	}
 	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// acfs-9hkh.92: an agent that registered again after nhm kept its token
+// has a newer one, and Agent Mail refuses the kept token. Retire checks
+// the token first: the pane still closes, the identity stays active, and
+// the warning says how to finish.
+func TestRetireChecksTheKeptToken(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	b := w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
+	w.mail.current = map[string]string{"IcyKnoll": "tok-newer"}
+	res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", DryRun: true})
+	if err != nil || len(res.Actions) != 2 || !strings.Contains(strings.Join(res.Warnings, "\n"), "IcyKnoll is stale") {
+		t.Fatalf("dry run = %+v %v", res, err)
+	}
+	res, err = Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll"})
+	if err != nil || !res.Done || res.IdentityRetired || len(w.h.closed) != 1 || w.mail.called("retire_agent") != 0 {
+		t.Fatalf("retire = %+v %v (retire_agent calls %d)", res, err, w.mail.called("retire_agent"))
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "call retire_agent itself before you retire it") {
+		t.Fatalf("warnings = %q", res.Warnings)
+	}
+	if got, _ := w.env.Bindings.Get(ctx, b.ID); got.Status != bindings.Retired {
+		t.Fatalf("binding = %s", got.Status)
+	}
+
+	// The agent retired its identity itself first: retire sends no
+	// unretire_agent (it would bring the identity back) and no
+	// retire_agent, and drops the token.
+	w = newWorld(t)
+	b = w.bind(t, "FoxRun", "w1:p2", herdr.StatusIdle)
+	w.mail.gone = map[string]bool{"FoxRun": true}
+	res, err = Retire(ctx, w.env, RetireRequest{Target: "FoxRun"})
+	if err != nil || !res.Done || !res.IdentityRetired || w.mail.called("unretire_agent") != 0 || w.mail.called("retire_agent") != 0 {
+		t.Fatalf("retire = %+v %v, calls %v", res, err, w.mail.calls)
+	}
+	if _, err := store.ReadSecret(w.env.InstanceDir, b.ID); !errors.Is(err, store.ErrNoSecret) {
+		t.Fatalf("the token stays: %v", err)
+	}
+
+	// The agent registers again between the check and retire_agent.
+	w = newWorld(t)
+	w.bind(t, "OwlPeak", "w1:p3", herdr.StatusIdle)
+	w.mail.current = map[string]string{"OwlPeak": "tok-OwlPeak"}
+	w.mail.afterCheck = func() { w.mail.current["OwlPeak"] = "tok-later" }
+	res, err = Retire(ctx, w.env, RetireRequest{Target: "OwlPeak"})
+	if err != nil || !res.Done || res.IdentityRetired || !strings.Contains(strings.Join(res.Warnings, "\n"), "OwlPeak is stale") {
+		t.Fatalf("retire = %+v %v", res, err)
+	}
+
+	// Agent Mail cannot check the token: retire refuses before it closes
+	// anything.
+	w = newWorld(t)
+	w.bind(t, "ElmBay", "w1:p4", herdr.StatusIdle)
+	w.env.Mail = failingCheck{w.mail}
+	res, err = Retire(ctx, w.env, RetireRequest{Target: "ElmBay"})
+	if !errors.Is(err, ErrRefused) || len(w.h.closed) != 0 || !strings.Contains(strings.Join(res.Refusals, "\n"), "cannot check ElmBay's registration token") {
+		t.Fatalf("retire = %+v %v", res, err)
+	}
+}
+
+// failingCheck is Agent Mail up, with whois failing.
+type failingCheck struct{ *fakeMail }
+
+func (f failingCheck) Call(ctx context.Context, tool string, args, out any) error {
+	if tool == "whois" {
+		return errors.New("database is locked")
+	}
+	return f.fakeMail.Call(ctx, tool, args, out)
+}
+
+// A cass run that holds the lock (ACFS's watcher) leaves the session to
+// that run: the warning says so instead of an exit status (acfs-9hkh.92).
+func TestRetireIndexWarnings(t *testing.T) {
+	ctx := context.Background()
+	for outcome, want := range map[string]string{
+		"queued":        "another cass index run holds cass's lock",
+		"not_found_yet": "cass does not list",
+		"indexed":       "",
+	} {
+		w := newWorld(t)
+		w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
+		w.env.Index = func(context.Context, string, string, string) (string, error) { return outcome, nil }
+		res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll"})
+		if err != nil || !res.Done {
+			t.Fatalf("%s: retire = %+v %v", outcome, res, err)
+		}
+		var got []string
+		for _, wn := range res.Warnings {
+			if strings.HasPrefix(wn, "cass index:") {
+				got = append(got, wn)
+			}
+		}
+		if want == "" && len(got) != 0 || want != "" && (len(got) != 1 || !strings.Contains(got[0], want)) {
+			t.Fatalf("%s: warnings = %q", outcome, got)
+		}
 	}
 }
 

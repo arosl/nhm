@@ -32,7 +32,11 @@ plan-v8 section 5 step 6). Under the exclusive owner lock, so ACFS's Bash
 commands wait and then refuse, it imports what the Bash keeps:
 'acfs agents export' gives the registration tokens, each agent's wake
 state and agents.toml's keep list; 'admin recover reconcile' reads the
-agents the Bash spawned into bindings. Mail the Bash already woke an
+agents the Bash spawned into bindings. Each token is checked with Agent
+Mail first (unretire_agent on the active identity, which changes
+nothing): a token Agent Mail refuses, because the agent registered again
+after its spawn, is reported stale and not kept, and 'nhm retire' then
+leaves that identity active. Mail the Bash already woke an
 agent for is marked announced, so nhm does not nudge for it again. nhm's
 keep list must cover the Bash's. Any entry that cannot be imported
 refuses, the Bash stays the owner, and nothing is written: an agent the

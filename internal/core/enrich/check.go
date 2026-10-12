@@ -63,7 +63,8 @@ func DuplicateWarning(found []Similar, days int) string {
 
 // IndexTranscript indexes a kept transcript in place (experiment 5) and
 // records indexed_at when CASS lists the session. It returns
-// cass.Indexed, or cass.NotFoundYet: a miss is never reported as a lost
+// cass.Indexed, cass.NotFoundYet, or cass.Queued (another cass run holds
+// the lock and indexes it): a miss is never reported as a lost
 // transcript. path is the provider's original file, never nhm's copy.
 func IndexTranscript(ctx context.Context, db *store.DB, cs CASS, transcriptID int64, path, workspace, key string, now time.Time) (string, error) {
 	if cs == nil {

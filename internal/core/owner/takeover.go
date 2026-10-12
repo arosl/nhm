@@ -14,6 +14,7 @@ import (
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -66,10 +67,14 @@ func (e Env) now() time.Time {
 
 // Token and wake actions.
 const (
-	ActionKept      = "kept"
-	ActionSame      = "already_kept"
-	ActionReplaced  = "replaced"
-	ActionACFSOnly  = "acfs_only"
+	ActionKept     = "kept"
+	ActionSame     = "already_kept"
+	ActionReplaced = "replaced"
+	ActionACFSOnly = "acfs_only"
+	// ActionStale: Agent Mail refuses the Bash's token (the agent
+	// registered again after its spawn), and nhm has no current one: no
+	// token is kept, and retire leaves the identity active.
+	ActionStale     = "stale"
 	ActionImported  = "imported"
 	ActionNoBinding = "no_binding"
 	ActionWould     = "would_import"
@@ -252,12 +257,17 @@ func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.Session
 	p := &takeoverPlan{secrets: map[string]string{}, wake: map[string][]int64{}}
 	var errs []error
 	for _, t := range st.Tokens {
-		it, err := planToken(env, idx, t, p, rep.DryRun)
+		it, err := planToken(ctx, env, idx, t, p, rep.DryRun)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
 		rep.Tokens = append(rep.Tokens, it)
+		if it.Action == ActionStale {
+			rep.Notes = append(rep.Notes, fmt.Sprintf("%s (%s) has no current registration token: `nhm retire` will leave its "+
+				"Agent Mail identity active. To retire the identity, call retire_agent with its newest token, or have the agent "+
+				"call retire_agent itself before you retire it", t.Name, it.ProjectKey))
+		}
 	}
 	for _, w := range st.Wake {
 		it, err := planWake(ctx, env, idx, w, p, rep.DryRun)
@@ -550,7 +560,7 @@ func readToken(file string) (string, error) {
 	return first, nil
 }
 
-func planToken(env Env, idx *index, t TokenRef, p *takeoverPlan, dry bool) (Item, error) {
+func planToken(ctx context.Context, env Env, idx *index, t TokenRef, p *takeoverPlan, dry bool) (Item, error) {
 	it := Item{Name: t.Name}
 	token, err := readToken(t.File)
 	if err != nil {
@@ -571,29 +581,78 @@ func planToken(env Env, idx *index, t TokenRef, p *takeoverPlan, dry bool) (Item
 		return it, nil
 	}
 	it.BindingID = b.ID
+	// The Bash keeps the token of the spawn's create_agent_identity. An
+	// agent that registered itself again since then (register_agent,
+	// macro_start_session) has a newer one, and Agent Mail refuses the
+	// kept one (acfs-9hkh.92). The check changes nothing, so a dry run
+	// makes it too.
+	state, err := agentmail.CheckToken(ctx, env.Mail, project, t.Name, token)
+	if err != nil {
+		return it, fmt.Errorf("the token of %s cannot be checked with Agent Mail: %w", t.Name, err)
+	}
+	var note string
+	switch state {
+	case agentmail.TokenStale, agentmail.TokenNoAgent:
+		return staleToken(ctx, env, it, b, state)
+	case agentmail.TokenRetired:
+		note = "not checked: Agent Mail has the identity retired"
+	}
 	if dry && b.ID == "" {
-		it.Action = ActionWould
+		it.Action, it.Reason = ActionWould, note
 		return it, nil
 	}
 	old, err := store.ReadSecret(env.InstanceDir, b.ID)
 	switch {
 	case err == nil && old == token:
-		it.Action = ActionSame
+		it.Action, it.Reason = ActionSame, note
 		return it, nil
 	case err == nil:
-		// The Bash owned the identity until now: its token is the one the
-		// latest registration gave.
+		// Agent Mail accepts the Bash's token (or has the identity
+		// retired), so nhm's is the older one.
 		it.Action, it.Reason = ActionReplaced, "nhm kept another token for this binding; the Bash's replaces it"
 	case errors.Is(err, store.ErrNoSecret):
 		it.Action = ActionKept
 	default:
 		return it, fmt.Errorf("nhm's token for %s cannot be read: %w", t.Name, err)
 	}
+	if note != "" {
+		it.Reason = strings.TrimPrefix(it.Reason+"; "+note, "; ")
+	}
 	if dry {
 		it.Reason = strings.TrimSpace("would: " + it.Reason)
 		return it, nil
 	}
 	p.secrets[b.ID] = token
+	return it, nil
+}
+
+// staleToken is the item of a Bash token Agent Mail refuses (state is
+// TokenStale or TokenNoAgent). nhm's own token for the binding, kept by
+// its registration hook, may be the current one; then nothing changes.
+// Otherwise the item is stale and no token is written: a refused token
+// only makes retire fail later.
+func staleToken(ctx context.Context, env Env, it Item, b bindings.Binding, state string) (Item, error) {
+	why := "Agent Mail refuses it: the agent registered again after its spawn, which gives a new token"
+	if state == agentmail.TokenNoAgent {
+		why = "Agent Mail has no identity " + it.Name + " in this project"
+	}
+	if b.ID != "" {
+		own, err := store.ReadSecret(env.InstanceDir, b.ID)
+		switch {
+		case err == nil && state == agentmail.TokenStale:
+			ownState, err := agentmail.CheckToken(ctx, env.Mail, b.MailProjectKey, b.MailName, own)
+			if err != nil {
+				return it, fmt.Errorf("nhm's token for %s cannot be checked with Agent Mail: %w", it.Name, err)
+			}
+			if ownState == agentmail.TokenCurrent {
+				it.Action, it.Reason = ActionSame, "the Bash's token is stale; nhm's own is current"
+				return it, nil
+			}
+		case err != nil && !errors.Is(err, store.ErrNoSecret):
+			return it, fmt.Errorf("nhm's token for %s cannot be read: %w", it.Name, err)
+		}
+	}
+	it.Action, it.Reason = ActionStale, why+"; nhm keeps no token"
 	return it, nil
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -67,21 +68,45 @@ func (f fakeEvents) Tail(context.Context, string, string) (int64, error) { retur
 type fakeMail struct {
 	unread map[string][]int64
 	down   map[string]bool
+	// tokens is each identity's current registration token in Agent
+	// Mail; an identity it lacks is not found.
+	tokens  map[string]string
+	retired map[string]bool
 }
 
 func (m fakeMail) Call(_ context.Context, tool string, args, out any) error {
-	if tool != "fetch_inbox" {
-		return errors.New("unexpected tool " + tool)
-	}
 	a := args.(map[string]any)
-	if m.down[a["agent_name"].(string)] {
+	name := a["agent_name"].(string)
+	if m.down[name] {
 		return errors.New("connection refused")
+	}
+	switch tool {
+	case "whois":
+		if _, ok := m.tokens[name]; !ok {
+			return &agentmail.ToolError{Tool: tool, Message: `{"error":{"type":"AGENT_NOT_FOUND"}}`}
+		}
+		retired := "null"
+		if m.retired[name] {
+			retired = `"2026-10-12T06:00:00Z"`
+		}
+		return json.Unmarshal([]byte(`{"name":"`+name+`","retired_at":`+retired+`}`), out)
+	case "unretire_agent":
+		if m.retired[name] {
+			return errors.New("unretire_agent on a retired identity would bring it back")
+		}
+		if a["registration_token"] != m.tokens[name] {
+			return &agentmail.ToolError{Tool: tool, Message: `{"error":{"type":"AUTHENTICATION_REQUIRED","data":{"reason":"token_mismatch"}}}`}
+		}
+		return nil
+	case "fetch_inbox":
+	default:
+		return errors.New("unexpected tool " + tool)
 	}
 	if a["mark_read"] != false {
 		return errors.New("the inbox read would consume it")
 	}
 	var list []map[string]any
-	for _, id := range m.unread[a["agent_name"].(string)] {
+	for _, id := range m.unread[name] {
 		list = append(list, map[string]any{"id": id})
 	}
 	data, _ := json.Marshal(list)
@@ -110,7 +135,8 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(func() { _ = db.Close() })
 	w := &world{bash: &fakeBash{}, events: fakeEvents{events: map[string][]Event{}, tail: 99}, keep: []string{"GreenCastle"}, dir: t.TempDir()}
 	w.env = Env{DB: db, Bindings: bindings.NewStore(db), InstanceDir: inst.Dir, Bash: w.bash,
-		Mail: fakeMail{unread: map[string][]int64{"IcyKnoll": {5, 12}}, down: map[string]bool{}},
+		Mail: fakeMail{unread: map[string][]int64{"IcyKnoll": {5, 12}}, down: map[string]bool{},
+			tokens: map[string]string{"IcyKnoll": "tok-icy"}, retired: map[string]bool{}},
 		ImportBindings: func(context.Context, bool, *herdr.SessionSnapshot) (bindings.ImportReport, error) {
 			return bindings.ImportReport{Imported: 1}, nil
 		},
@@ -236,6 +262,75 @@ func TestTakeoverAndHandback(t *testing.T) {
 	// The token files went with the import.
 	if left, _ := filepath.Glob(filepath.Join(w.env.InstanceDir, ".handback.*")); len(left) != 0 {
 		t.Fatalf("left behind: %v", left)
+	}
+}
+
+// acfs-9hkh.92: the Bash keeps the token of the spawn, and an agent that
+// registered itself again since then has a newer one. Takeover checks each
+// token with Agent Mail: a stale one is reported, never kept.
+func TestTakeoverChecksEachTokenWithAgentMail(t *testing.T) {
+	ctx := context.Background()
+	tokenItem := func(rep Report) Item {
+		for _, it := range rep.Tokens {
+			if it.Name == "IcyKnoll" {
+				return it
+			}
+		}
+		t.Fatalf("no IcyKnoll token in %+v", rep.Tokens)
+		return Item{}
+	}
+
+	// IcyKnoll registered again: Agent Mail holds a newer token.
+	w := newWorld(t)
+	w.export(t)
+	w.env.Mail.(fakeMail).tokens["IcyKnoll"] = "tok-newer"
+	rep, err := Takeover(ctx, w.env, true)
+	if it := tokenItem(rep); err != nil || it.Action != ActionStale || !strings.Contains(it.Reason, "registered again") {
+		t.Fatalf("dry run = %+v %v", it, err)
+	}
+	if len(rep.Notes) == 0 || !strings.Contains(strings.Join(rep.Notes, "\n"), "IcyKnoll (/p) has no current registration token") {
+		t.Fatalf("notes = %q", rep.Notes)
+	}
+	rep, err = Takeover(ctx, w.env, false)
+	if it := tokenItem(rep); err != nil || rep.Owner.Owner != core.OwnerNhm || it.Action != ActionStale {
+		t.Fatalf("takeover = %+v %v", rep, err)
+	}
+	if _, err := store.ReadSecret(w.env.InstanceDir, w.b.ID); !errors.Is(err, store.ErrNoSecret) {
+		t.Fatalf("a stale token was kept: %v", err)
+	}
+
+	// nhm's registration hook kept the newer token already: it stays.
+	w = newWorld(t)
+	w.export(t)
+	w.env.Mail.(fakeMail).tokens["IcyKnoll"] = "tok-newer"
+	if err := store.WriteSecret(w.env.InstanceDir, w.b.ID, "tok-newer"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = Takeover(ctx, w.env, false)
+	if it := tokenItem(rep); err != nil || it.Action != ActionSame || !strings.Contains(it.Reason, "nhm's own is current") {
+		t.Fatalf("takeover = %+v %v", it, err)
+	}
+	if tok, _ := store.ReadSecret(w.env.InstanceDir, w.b.ID); tok != "tok-newer" {
+		t.Fatalf("token = %q", tok)
+	}
+
+	// A retired identity is not checked (unretire_agent would bring it
+	// back), and its token is kept as before.
+	w = newWorld(t)
+	w.export(t)
+	w.env.Mail.(fakeMail).retired["IcyKnoll"] = true
+	rep, err = Takeover(ctx, w.env, false)
+	if it := tokenItem(rep); err != nil || it.Action != ActionKept || !strings.Contains(it.Reason, "not checked") {
+		t.Fatalf("takeover = %+v %v", it, err)
+	}
+
+	// Agent Mail has no such identity: nothing is kept.
+	w = newWorld(t)
+	w.export(t)
+	delete(w.env.Mail.(fakeMail).tokens, "IcyKnoll")
+	rep, err = Takeover(ctx, w.env, false)
+	if it := tokenItem(rep); err != nil || it.Action != ActionStale || !strings.Contains(it.Reason, "no identity IcyKnoll") {
+		t.Fatalf("takeover = %+v %v", it, err)
 	}
 }
 

@@ -2,7 +2,9 @@ package cass
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -69,5 +71,44 @@ func TestIndexSessionConfirmsByExactPath(t *testing.T) {
 	c = Client{Run: s.run}
 	if _, err := c.IndexSession(context.Background(), path, "", ""); err == nil {
 		t.Fatal("no error for success false")
+	}
+}
+
+// failing answers each call with the next output and exit error.
+type failing struct {
+	outs []string
+	errs []error
+}
+
+func (f *failing) run(_ context.Context, _ ...string) ([]byte, error) {
+	out, err := f.outs[0], f.errs[0]
+	f.outs, f.errs = f.outs[1:], f.errs[1:]
+	return []byte(out), err
+}
+
+// cass 0.10 exits 7 with kind index-busy while another run holds its lock,
+// as ACFS's `cass index --watch` always does (acfs-9hkh.92). That run
+// indexes the original itself: the session is queued, not a failure.
+func TestIndexSessionLeavesTheSessionToTheRunningIndexer(t *testing.T) {
+	const path = "/h/.claude/projects/-p/abc.jsonl"
+	busy := `{"success":false,"error":"another 'cass index' run is already active for data dir /h/.local/share/coding-agent-search (pid 9, kind lexical_refresh, phase watch)","code":7,"kind":"index-busy","retryable":true}`
+	exit7 := errors.New("cass index: exit status 7: ")
+	f := &failing{outs: []string{busy, `{"sessions":[{"path":"/other.jsonl"}]}`}, errs: []error{exit7, nil}}
+	state, err := Client{Run: f.run}.IndexSession(context.Background(), path, "/p", "b1-abc")
+	if err != nil || state != Queued {
+		t.Fatalf("state = %q, %v; want %q", state, err, Queued)
+	}
+	// The watcher indexed it already: indexed.
+	f = &failing{outs: []string{busy, `{"sessions":[{"path":"` + path + `"}]}`}, errs: []error{exit7, nil}}
+	state, err = Client{Run: f.run}.IndexSession(context.Background(), path, "/p", "b1-abc")
+	if err != nil || state != Indexed {
+		t.Fatalf("state = %q, %v; want %q", state, err, Indexed)
+	}
+	// Any other refusal is an error that says what cass said.
+	other := `{"success":false,"error":"no such data dir","code":4,"kind":"io"}`
+	f = &failing{outs: []string{other}, errs: []error{errors.New("cass index: exit status 4: ")}}
+	if _, err := (Client{Run: f.run}).IndexSession(context.Background(), path, "/p", ""); err == nil ||
+		!strings.Contains(err.Error(), "no such data dir (io)") {
+		t.Fatalf("err = %v", err)
 	}
 }

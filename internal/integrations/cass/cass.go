@@ -173,6 +173,11 @@ func (c Client) Sessions(ctx context.Context, workspace string, limit int) ([]Se
 const (
 	Indexed     = "indexed"
 	NotFoundYet = "not_found_yet"
+	// Queued: another `cass index` run holds the lock of cass's data
+	// dir, so nhm's run did nothing. On an ACFS host that is always the
+	// watcher (`cass index --watch`, acfs-cass-index.service); it indexes
+	// the original in place itself, once the file stops changing.
+	Queued = "queued"
 )
 
 // confirmLimit bounds the sessions read to confirm an index.
@@ -181,23 +186,33 @@ const confirmLimit = 200
 // IndexSession indexes one transcript in place and confirms it by its
 // exact path. key is the idempotency key, <binding>-<session>. A
 // session that cass does not list is "not found yet", never an error:
-// the transcript is not lost.
+// the transcript is not lost. When another run holds cass's lock (exit 7,
+// kind index-busy), the session is Queued for that run unless cass lists
+// it already.
 func (c Client) IndexSession(ctx context.Context, path, workspace, key string) (string, error) {
 	args := []string{"index", "--watch-once=" + path, "--json"}
 	if key != "" {
 		args = append(args, "--idempotency-key="+key)
 	}
 	data, err := c.Run(ctx, c.args(args...)...)
-	if err != nil {
-		return "", err
-	}
+	// cass answers with JSON on stdout, a refusal too; stderr is empty
+	// then, so the exit status alone would say nothing.
 	var res struct {
-		Success bool `json:"success"`
+		Success bool   `json:"success"`
+		Kind    string `json:"kind"`
+		Error   string `json:"error"`
 	}
-	if err := json.Unmarshal(data, &res); err != nil {
-		return "", fmt.Errorf("cass index: the answer is not JSON: %w", err)
-	}
-	if !res.Success {
+	jerr := json.Unmarshal(data, &res)
+	busy := jerr == nil && res.Kind == "index-busy"
+	switch {
+	case busy:
+	case err != nil && jerr == nil && res.Error != "":
+		return "", fmt.Errorf("%w: %s (%s)", err, res.Error, res.Kind)
+	case err != nil:
+		return "", err
+	case jerr != nil:
+		return "", fmt.Errorf("cass index: the answer is not JSON: %w", jerr)
+	case !res.Success:
 		return "", fmt.Errorf("cass index %s did not succeed", path)
 	}
 	list, err := c.Sessions(ctx, workspace, confirmLimit)
@@ -208,6 +223,9 @@ func (c Client) IndexSession(ctx context.Context, path, workspace, key string) (
 		if s.Path == path {
 			return Indexed, nil
 		}
+	}
+	if busy {
+		return Queued, nil
 	}
 	return NotFoundYet, nil
 }
