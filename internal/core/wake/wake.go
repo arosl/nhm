@@ -83,7 +83,8 @@ type Config struct {
 	RateWindow time.Duration
 	// InFlight is how long an attempt may stay attempt_started; after it
 	// the attempt counts as possibly submitted (the process that made it
-	// died after the claim).
+	// died after the claim, as a hook does at its 1.9 s hard stop). A
+	// prompt without a wait returns well inside it.
 	InFlight time.Duration
 	// InboxLimit bounds one fetch_inbox.
 	InboxLimit int
@@ -94,7 +95,7 @@ type Config struct {
 
 // DefaultConfig is plan-v8 2.8's rules.
 func DefaultConfig() Config {
-	return Config{Cooldown: 120 * time.Second, RateLimit: 3, RateWindow: time.Hour, InFlight: 30 * time.Second,
+	return Config{Cooldown: 120 * time.Second, RateLimit: 3, RateWindow: time.Hour, InFlight: 10 * time.Second,
 		InboxLimit: 200, Keep: 7 * 24 * time.Hour}
 }
 
@@ -211,7 +212,12 @@ type pendingRow struct {
 
 func (r pendingRow) pair() string { return r.sender + "\n" + r.thread }
 
-func pending(ctx context.Context, db *sql.DB, bindingID string) ([]pendingRow, error) {
+// querier is a *sql.DB or a *sql.Tx.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func pending(ctx context.Context, db querier, bindingID string) ([]pendingRow, error) {
 	rows, err := db.QueryContext(ctx, `SELECT message_id, COALESCE(thread_id, ''), COALESCE(sender, ''),
 		COALESCE(last_outcome, '') FROM wake WHERE binding_id = ? AND announced_at IS NULL ORDER BY first_seen_at, message_id`, bindingID)
 	if err != nil {
@@ -256,7 +262,7 @@ type nudgeScope struct {
 }
 
 // recentAttempts reads a binding's newest wake operations.
-func recentAttempts(ctx context.Context, db *sql.DB, bindingID string) ([]attempt, error) {
+func recentAttempts(ctx context.Context, db querier, bindingID string) ([]attempt, error) {
 	rows, err := db.QueryContext(ctx, `SELECT operation_id, status, created_at, request_json FROM operations
 		WHERE verb = ? AND json_extract(request_json, '$.binding_id') = ? ORDER BY rowid DESC LIMIT 200`, Verb, bindingID)
 	if err != nil {
@@ -293,6 +299,13 @@ func Nudge(ctx context.Context, env Env, b bindings.Binding, trigger string) (De
 	cfg := env.config()
 	d := Decision{BindingID: b.ID, MailName: b.MailName, PaneID: b.PaneID, Trigger: trigger, Pending: []string{}}
 	db := env.DB.SQL()
+	// An attempt whose process died between its claim and its outcome (a
+	// hook's hard stop) must not hold the recipient until a maintenance
+	// pass: past InFlight it is possibly submitted, and its ids are never
+	// prompted again.
+	if _, err := resolveStale(ctx, env, b.ID); err != nil {
+		return d, err
+	}
 	rows, err := pending(ctx, db, b.ID)
 	if err != nil {
 		return d, err
@@ -329,27 +342,23 @@ func Nudge(ctx context.Context, env Env, b bindings.Binding, trigger string) (De
 	if err != nil {
 		return d, err
 	}
-	for _, a := range attempts {
-		if a.counts() && now.Before(a.created.Add(cfg.Cooldown)) {
-			after := a.created.Add(cfg.Cooldown)
-			d.skip("cooldown: the last nudge was at " + a.created.UTC().Format(time.RFC3339))
-			d.WakeAfter = &after
-			return d, setWakeAfter(ctx, env, b.ID, after)
+	// A cheap first check; claim checks the same rules again inside its
+	// transaction, where they hold.
+	h := rules(rows, attempts, now, cfg)
+	var opID string
+	var claimed []string
+	if h == nil {
+		if opID, claimed, h, err = claim(ctx, env, b, trigger, now); err != nil {
+			return d, err
 		}
 	}
-	if free, ok := rateLimited(rows, attempts, now, cfg); ok {
-		d.skip(fmt.Sprintf("rate limit: %d nudges per sender and thread per %s", cfg.RateLimit, cfg.RateWindow))
-		d.WakeAfter = &free
-		return d, setWakeAfter(ctx, env, b.ID, free)
-	}
-
-	opID, claimed, err := claim(ctx, env, b, trigger, rows, now)
-	if err != nil {
-		return d, err
-	}
-	if len(claimed) == 0 {
-		d.skip("another path claimed the pending mail")
-		return d, nil
+	if h != nil {
+		d.skip(h.reason)
+		if h.after.IsZero() {
+			return d, nil
+		}
+		d.WakeAfter = &h.after
+		return d, setWakeAfter(ctx, env, b.ID, h.after)
 	}
 	d.OperationID, d.Pending = opID, claimed
 	// Without a wait: the sender spends nothing, and the gate above saw
@@ -374,6 +383,29 @@ func anyInFlight(rows []pendingRow) bool {
 		}
 	}
 	return false
+}
+
+// hold is why a recipient is not nudged now, and when to try again (zero:
+// when the next path comes).
+type hold struct {
+	reason string
+	after  time.Time
+}
+
+// rules applies the cooldown and the rate limit to a recipient's pending
+// rows and its recent attempts.
+func rules(rows []pendingRow, attempts []attempt, now time.Time, cfg Config) *hold {
+	for _, a := range attempts {
+		if a.counts() && now.Before(a.created.Add(cfg.Cooldown)) {
+			return &hold{reason: "cooldown: the last nudge was at " + a.created.UTC().Format(time.RFC3339),
+				after: a.created.Add(cfg.Cooldown)}
+		}
+	}
+	if free, ok := rateLimited(rows, attempts, now, cfg); ok {
+		return &hold{reason: fmt.Sprintf("rate limit: %d nudges per sender and thread per %s", cfg.RateLimit, cfg.RateWindow),
+			after: free}
+	}
+	return nil
 }
 
 // rateLimited says whether every pending row's sender-thread pair has had
@@ -419,39 +451,54 @@ func setWakeAfter(ctx context.Context, env Env, bindingID string, after time.Tim
 }
 
 // claim moves the pending rows to attempt_started in one immediate
-// transaction, unless another attempt holds some of them, and then
-// records the operation. It returns the ids it claimed; none means
-// another path was first.
-func claim(ctx context.Context, env Env, b bindings.Binding, trigger string, rows []pendingRow, now time.Time) (string, []string, error) {
+// transaction and then records the operation. Inside the transaction it
+// reads the pending rows and the recent attempts again and applies the
+// rules: two paths that both passed Nudge's first check cannot both
+// prompt, and the cooldown and the rate limit hold under concurrency. A
+// hold says why nothing was claimed.
+//
+// The operation row is inserted after the commit. Until then the claimed
+// rows are attempt_started, which holds every other path here; after it,
+// the operation counts for the cooldown.
+func claim(ctx context.Context, env Env, b bindings.Binding, trigger string, now time.Time) (string, []string, *hold, error) {
 	opID, err := store.NewOperationID(now)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
+	}
+	ts := store.FormatTime(now)
+	tx, err := env.DB.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("wake: claim: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := pending(ctx, tx, b.ID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	switch {
+	case anyInFlight(rows):
+		return "", nil, &hold{reason: "another nudge for this mail is in flight"}, nil
+	case len(rows) == 0:
+		return "", nil, &hold{reason: "another path announced the pending mail"}, nil
+	}
+	attempts, err := recentAttempts(ctx, tx, b.ID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if h := rules(rows, attempts, now, env.config()); h != nil {
+		return "", nil, h, nil
 	}
 	ids := make([]string, len(rows))
 	for i, r := range rows {
 		ids[i] = r.id
 	}
 	list, _ := json.Marshal(ids)
-	ts := store.FormatTime(now)
-	tx, err := env.DB.SQL().BeginTx(ctx, nil)
-	if err != nil {
-		return "", nil, fmt.Errorf("wake: claim: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	var busy int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM wake WHERE binding_id = ? AND announced_at IS NULL
-		AND last_outcome = ?`, b.ID, send.StatusAttemptStarted).Scan(&busy); err != nil {
-		return "", nil, fmt.Errorf("wake: claim: %w", err)
-	}
-	if busy > 0 {
-		return "", nil, nil
-	}
 	q, err := tx.QueryContext(ctx, `UPDATE wake SET last_outcome = ?, last_attempt_at = ?
 		WHERE binding_id = ? AND announced_at IS NULL AND message_id IN (SELECT value FROM json_each(?))
 		RETURNING message_id, COALESCE(thread_id, ''), COALESCE(sender, '')`,
 		send.StatusAttemptStarted, ts, b.ID, string(list))
 	if err != nil {
-		return "", nil, fmt.Errorf("wake: claim: %w", err)
+		return "", nil, nil, fmt.Errorf("wake: claim: %w", err)
 	}
 	var claimed []string
 	pairSet := map[string]bool{}
@@ -459,19 +506,19 @@ func claim(ctx context.Context, env Env, b bindings.Binding, trigger string, row
 		var r pendingRow
 		if err := q.Scan(&r.id, &r.thread, &r.sender); err != nil {
 			_ = q.Close()
-			return "", nil, fmt.Errorf("wake: claim: %w", err)
+			return "", nil, nil, fmt.Errorf("wake: claim: %w", err)
 		}
 		claimed = append(claimed, r.id)
 		pairSet[r.pair()] = true
 	}
 	if err := q.Close(); err != nil {
-		return "", nil, fmt.Errorf("wake: claim: %w", err)
+		return "", nil, nil, fmt.Errorf("wake: claim: %w", err)
 	}
 	if len(claimed) == 0 {
-		return "", nil, nil
+		return "", nil, &hold{reason: "another path announced the pending mail"}, nil
 	}
 	if err := tx.Commit(); err != nil {
-		return "", nil, fmt.Errorf("wake: claim: %w", err)
+		return "", nil, nil, fmt.Errorf("wake: claim: %w", err)
 	}
 	sort.Strings(claimed)
 	pairs := make([]string, 0, len(pairSet))
@@ -480,21 +527,21 @@ func claim(ctx context.Context, env Env, b bindings.Binding, trigger string, row
 	}
 	sort.Strings(pairs)
 	// A crash between the commit above and this insert leaves rows
-	// attempt_started with no operation; ResolveStale settles them.
+	// attempt_started with no operation; resolveStale settles them.
 	_, err = env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: opID, Verb: Verb,
 		Scope:   nudgeScope{BindingID: b.ID, MailName: b.MailName, PaneID: b.PaneID},
 		Request: nudgeRequest{BindingID: b.ID, Generation: b.Generation, Trigger: trigger, MessageIDs: claimed, Pairs: pairs}}, now)
 	if err != nil {
 		_ = release(ctx, env, b.ID, claimed)
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if err := env.DB.SetOperationStatus(ctx, opID, send.StatusAttemptStarted, false, now); err != nil {
 		// No prompt went out: the operation closes as failed.
 		_ = release(ctx, env, b.ID, claimed)
 		_ = env.DB.SetOperationStatus(ctx, opID, send.StatusFailed, true, now)
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	return opID, claimed, nil
+	return opID, claimed, nil, nil
 }
 
 // release gives claimed rows back when no prompt went out.
@@ -532,12 +579,17 @@ func finish(ctx context.Context, env Env, opID, bindingID string, ids []string, 
 // InFlight: the process died after its claim, so the prompt possibly went
 // out. They are announced and never repeated. It returns how many rows it
 // settled.
-func ResolveStale(ctx context.Context, env Env) (int, error) {
+func ResolveStale(ctx context.Context, env Env) (int, error) { return resolveStale(ctx, env, "") }
+
+// resolveStale is ResolveStale for one binding ("" means every binding).
+// Nudge runs it for its recipient, so no maintenance runner is needed.
+func resolveStale(ctx context.Context, env Env, bindingID string) (int, error) {
 	cfg := env.config()
 	now := env.now()
 	db := env.DB.SQL()
 	rows, err := db.QueryContext(ctx, `SELECT binding_id, message_id, COALESCE(last_attempt_at, first_seen_at) FROM wake
-		WHERE announced_at IS NULL AND last_outcome = ?`, send.StatusAttemptStarted)
+		WHERE announced_at IS NULL AND last_outcome = ? AND (? = '' OR binding_id = ?)`,
+		send.StatusAttemptStarted, bindingID, bindingID)
 	if err != nil {
 		return 0, fmt.Errorf("wake: stale: %w", err)
 	}
@@ -565,8 +617,9 @@ func ResolveStale(ctx context.Context, env Env) (int, error) {
 			return 0, fmt.Errorf("wake: stale: %w", err)
 		}
 	}
-	ops, err := db.QueryContext(ctx, `SELECT operation_id, created_at FROM operations WHERE verb = ? AND status = ?`,
-		Verb, send.StatusAttemptStarted)
+	ops, err := db.QueryContext(ctx, `SELECT operation_id, created_at FROM operations WHERE verb = ? AND status = ?
+		AND (? = '' OR json_extract(request_json, '$.binding_id') = ?)`,
+		Verb, send.StatusAttemptStarted, bindingID, bindingID)
 	if err != nil {
 		return 0, fmt.Errorf("wake: stale: %w", err)
 	}

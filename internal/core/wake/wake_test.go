@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -308,10 +309,9 @@ func TestClaimInFlightBlocksASecondPathAndStaleSettles(t *testing.T) {
 	if _, err := Record(ctx, w.env, b, []Message{{ID: 1, Sender: "SageOak"}}); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := pending(ctx, w.env.DB.SQL(), b.ID)
-	opID, claimed, err := claim(ctx, w.env, b, TriggerSettle, rows, w.now)
-	if err != nil || len(claimed) != 1 || opID == "" {
-		t.Fatalf("claim = %s %v %v", opID, claimed, err)
+	opID, claimed, h, err := claim(ctx, w.env, b, TriggerSettle, w.now)
+	if err != nil || h != nil || len(claimed) != 1 || opID == "" {
+		t.Fatalf("claim = %s %v %+v %v", opID, claimed, h, err)
 	}
 	// New mail arrives while the first attempt is in flight.
 	if _, err := Record(ctx, w.env, b, []Message{{ID: 2, Sender: "SageOak"}}); err != nil {
@@ -338,6 +338,89 @@ func TestClaimInFlightBlocksASecondPathAndStaleSettles(t *testing.T) {
 	d, _ = Nudge(ctx, w.env, b, TriggerMaintain)
 	if d.Action != ActionSkipped || !strings.HasPrefix(d.Reason, "cooldown") {
 		t.Fatalf("after stale = %+v", d)
+	}
+}
+
+// A hook killed between its claim and its outcome, with no maintenance
+// runner: the next path settles the attempt itself, and the recipient is
+// nudged again for new mail only.
+func TestAKilledAttemptDoesNotHoldTheRecipient(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	b := w.bind(t, "IcyKnoll", "w1:p1", "pi", herdr.StatusIdle)
+	if _, err := Record(ctx, w.env, b, []Message{{ID: 1, Sender: "SageOak"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, _, err := claim(ctx, w.env, b, TriggerMailSent, w.now); err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	// The hard stop: no prompt outcome, no finish.
+	w.now = w.now.Add(w.env.Config.InFlight + time.Second)
+	rep, err := MailSent(ctx, w.env, []Sent{sent(2, "SageOak", "", "IcyKnoll")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The killed attempt possibly went out: it starts the cooldown.
+	if d := rep.Decisions[0]; d.Action != ActionSkipped || !strings.HasPrefix(d.Reason, "cooldown") || d.WakeAfter == nil {
+		t.Fatalf("decision = %+v", d)
+	}
+	w.now = *rep.Decisions[0].WakeAfter
+	w.env.Mail = nil
+	rep, err = Pass(ctx, w.env, nil, TriggerMaintain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Message 1 is never prompted again; message 2 is.
+	if d := rep.Decisions[0]; d.Action != ActionNudged || strings.Join(d.Pending, ",") != "2" || len(w.h.prompts) != 1 {
+		t.Fatalf("decision = %+v, prompts %d", d, len(w.h.prompts))
+	}
+}
+
+// claim checks the cooldown again inside its transaction: a path that
+// passed Nudge's first check before another path's nudge finished does
+// not prompt.
+func TestClaimRechecksTheCooldown(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	b := w.bind(t, "IcyKnoll", "w1:p1", "pi", herdr.StatusIdle)
+	if _, err := MailSent(ctx, w.env, []Sent{sent(1, "SageOak", "t1", "IcyKnoll")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Record(ctx, w.env, b, []Message{{ID: 2, Sender: "BlueLake", ThreadID: "t2"}}); err != nil {
+		t.Fatal(err)
+	}
+	opID, claimed, h, err := claim(ctx, w.env, b, TriggerMailSent, w.now.Add(time.Second))
+	if err != nil || opID != "" || len(claimed) != 0 || h == nil || !strings.HasPrefix(h.reason, "cooldown") {
+		t.Fatalf("claim = %q %v %+v %v", opID, claimed, h, err)
+	}
+	if got := pendingIDs(t, w, "IcyKnoll"); len(got) != 1 || got[0] != "2" {
+		t.Fatalf("pending = %v", got)
+	}
+}
+
+// Many mail-sent hooks at once for one idle recipient: one nudge.
+func TestConcurrentMailSentNudgesOnce(t *testing.T) {
+	w := newWorld(t)
+	w.bind(t, "IcyKnoll", "w1:p1", "pi", herdr.StatusIdle)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := int64(1); i <= 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := MailSent(ctx, w.env, []Sent{sent(i, "Sender"+strconv.FormatInt(i, 10), "t", "IcyKnoll")}); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if n := w.h.promptsTo("w1:p1"); n != 1 {
+		t.Fatalf("prompts = %d, want 1", n)
 	}
 }
 
