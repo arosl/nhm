@@ -352,11 +352,19 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 
 	// 6. The kickoff, through send.
 	if !kick.empty() && env.Send != nil {
+		task := kick.text(req, t)
 		text := fmt.Sprintf("Your Agent Mail identity is already registered: name %s, project key %s (use it; don't register a new one). Your herdr name is %s, in herdr workspace %s.\n\n%s",
-			name, req.ProjectRoot, alias, res.WorkspaceID, kick.text(req, t))
+			name, req.ProjectRoot, alias, res.WorkspaceID, task)
+		// CM and CASS are asked about the task, not the identity preamble:
+		// with the preamble's start as the query, cm drops every rule as
+		// irrelevant (acfs-9hkh.87).
+		enr := req.Enrich
+		if enr.Query == "" {
+			enr.Query = task
+		}
 		sr, err := env.Send(ctx, send.Request{Session: req.Session, WorkspaceID: res.WorkspaceID, ProjectRoot: req.ProjectRoot,
 			Selector: send.Selector{Names: []string{name}}, Message: text, WhenAny: true, Source: history.SourceCLI,
-			Scope: req.Scope, Enrich: req.Enrich})
+			Scope: req.Scope, Enrich: enr})
 		switch {
 		case err != nil:
 			res.Warnings = append(res.Warnings, fmt.Sprintf("%s: kickoff not sent: %v", name, err))

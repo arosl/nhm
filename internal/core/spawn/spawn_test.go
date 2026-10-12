@@ -326,6 +326,11 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 		!strings.HasSuffix(w.sent[0].Message, "Read AGENTS.md.") || w.sent[0].Selector.Names[0] != "IcyKnoll" {
 		t.Fatalf("kickoffs = %+v", w.sent)
 	}
+	// Its memory query is the task, not the identity preamble
+	// (acfs-9hkh.87).
+	if q := w.sent[0].Enrich.Query; strings.Contains(q, "Agent Mail identity") || !strings.HasSuffix(q, "Read AGENTS.md.") {
+		t.Fatalf("kickoff memory query = %q", q)
+	}
 	if strings.Join(w.idFiles, ",") != "w1:p1=IcyKnoll,w1:p2=BlueLake" {
 		t.Fatalf("identity files = %v", w.idFiles)
 	}
