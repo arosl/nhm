@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/store/history"
@@ -32,7 +34,7 @@ const exitAdmission = 3
 // maxPayload bounds a prompt read from a file or stdin.
 const maxPayload = 1 << 20
 
-const sendUsage = `Usage: nhm send <session> [prompt] [--all | --cc | --cod | --agy | --pi | --omp | --type K | --pane N.M | --panes N.M,…]
+const sendUsage = `Usage: nhm send <session> [prompt] [--all | --KIND | --type K | --pane N.M | --panes N.M,…]
                 [--name N]… [--state idle|done|working|blocked]… [--limit N] [--include-self]
                 [--msg M | --msg-file F|-] [-t KEY | --template KEY] [--bead ID] [--var k=v]… [--file F|-]
                 [--when ready|any] [--force] [--wait [--until done|idle|complete] [--timeout D]]
@@ -44,6 +46,9 @@ Send one prompt to the selected agents of a session (a workspace id or
 label). Without a selector, every bound agent of the session except the
 caller. Names and panes are a union; kinds, states and the session are
 an intersection. --state done leaves Codex out unless it is named.
+--KIND is a kind's name or flag from the kind registry: --claude or
+--cc, --codex or --cod, --agy, --pi, --omp, --opencode or --oc, --grok,
+and each kind of nhm's config.
 
 The prompt is the text after the session, --msg, --msg-file (- is
 stdin), or --file without a template. -t takes a template key (the
@@ -79,13 +84,37 @@ Exit codes: 0 every target submitted; 1 an error or a partial result;
 4 possibly submitted, or an ambiguous completion.
 `
 
+// kindFlag is a selector flag of one kind: its name or one of its
+// flags (--claude, --cc).
+type kindFlag struct {
+	flag, kind string
+	on         *bool
+}
+
+// registerKindFlags adds a selector flag for each kind's name and flags,
+// from the kind registry, so a kind from nhm's config gets one too. A
+// flag that send already has stays send's.
+func registerKindFlags(fs *flag.FlagSet) []kindFlag {
+	var out []kindFlag
+	for _, a := range kinds.All() {
+		for _, name := range append([]string{a.Name}, a.Flags...) {
+			if fs.Lookup(name) != nil {
+				continue
+			}
+			out = append(out, kindFlag{flag: name, kind: a.Name, on: fs.Bool(name, false, a.Name+" agents")})
+		}
+	}
+	return out
+}
+
 // sendFlags are the native send flags.
 type sendFlags struct {
 	sel                          selectorFlags
 	states                       listFlag
 	vars                         listFlag
 	panes                        listFlag
-	all, cc, cod, agy, pi, omp   bool
+	all                          bool
+	kindSel                      []kindFlag
 	limit                        int
 	includeSelf                  bool
 	msg, msgFile, tmpl, bead     string
@@ -113,11 +142,6 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&f.states, "state", "idle, done, working or blocked (repeatable)")
 	fs.Var(&f.vars, "var", "a template variable k=v (repeatable)")
 	fs.BoolVar(&f.all, "all", false, "every agent of the session except the caller")
-	fs.BoolVar(&f.cc, "cc", false, "Claude agents")
-	fs.BoolVar(&f.cod, "cod", false, "Codex agents")
-	fs.BoolVar(&f.agy, "agy", false, "agy agents")
-	fs.BoolVar(&f.pi, "pi", false, "pi agents")
-	fs.BoolVar(&f.omp, "omp", false, "omp agents")
 	fs.IntVar(&f.limit, "limit", 0, "the first N targets in slot order")
 	fs.BoolVar(&f.includeSelf, "include-self", false, "also the calling pane")
 	fs.StringVar(&f.msg, "msg", "", "the prompt")
@@ -145,6 +169,8 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&f.project, "project", "", "the project (templates, --bead, a name's project)")
 	fs.StringVar(&f.socket, "socket", "", "herdr API socket")
 	fs.BoolVar(&f.asJSON, "json", false, "nhm's JSON envelope")
+	// Last, so that send's own flags win over a kind's.
+	f.kindSel = registerKindFlags(fs)
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
 		return exitRefused
@@ -302,9 +328,9 @@ func (f sendFlags) request(prompt string) (send.Request, error) {
 	}
 	sel := send.Selector{All: f.all, Names: f.sel.names, Panes: append(append([]string{}, f.sel.slots...), f.panes...),
 		Kinds: f.sel.kinds, Limit: f.limit, IncludeSelf: f.includeSelf}
-	for kind, on := range map[string]bool{"claude": f.cc, "codex": f.cod, "agy": f.agy, "pi": f.pi, "omp": f.omp} {
-		if on {
-			sel.Kinds = append(sel.Kinds, kind)
+	for _, k := range f.kindSel {
+		if *k.on && !slices.Contains(sel.Kinds, k.kind) {
+			sel.Kinds = append(sel.Kinds, k.kind)
 		}
 	}
 	for _, s := range f.states {

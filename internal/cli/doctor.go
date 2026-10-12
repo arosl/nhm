@@ -16,6 +16,7 @@ import (
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -23,7 +24,8 @@ const doctorUsage = `Usage: nhm doctor [--socket PATH] [--no-mail] [--json]
 
 Check what nhm needs: the herdr server and its protocol, the enrollment of
 this server, the state database, the owner switch, Agent Mail, and the
-directory of Agent Mail's identity files, and, when nhm owns the server,
+directory of Agent Mail's identity files, the kinds (built-in and from
+nhm's config), and, when nhm owns the server,
 the maintenance runner (nhm maintain). Each check says ok, warn or
 fail, and what to do. Exits 1 when a check fails.
 `
@@ -139,6 +141,7 @@ func doctorChecks(ctx context.Context, socket string, withMail bool) []doctorChe
 		}
 	}
 
+	checks = append(checks, kindsCheck(kinds.ConfigError(), kinds.Names()))
 	checks = append(checks, guardChecks(ctx)...)
 
 	if withMail {
@@ -154,6 +157,17 @@ func doctorChecks(ctx context.Context, socket string, withMail bool) []doctorChe
 		}
 	}
 	return checks
+}
+
+// kindsCheck reports the kind registry: a [kinds.*] table of nhm's config
+// that does not load adds none of its kinds, and only doctor says so.
+func kindsCheck(err error, names []string) doctorCheck {
+	if err != nil {
+		return doctorCheck{Name: "kinds", Result: checkWarn,
+			Detail: "the config's kinds did not load; only the built-in kinds work: " + err.Error(),
+			Fix:    "repair the [kinds.*] tables of ~/.config/nhm/config.toml"}
+	}
+	return doctorCheck{Name: "kinds", Result: checkOK, Detail: strings.Join(names, ", ")}
 }
 
 // guardChecks reports each guard per kind (plan-v8 2.14), in the project
