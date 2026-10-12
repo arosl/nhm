@@ -59,6 +59,13 @@ if [[ "$(readlink "$home/.local/bin/nhm-hook")" == "$home/.local/share/nhm/curre
 else
   fail "nhm-hook is linked and runs: $(readlink "$home/.local/bin/nhm-hook")"
 fi
+cur="$home/.local/share/nhm/current"
+if [[ -x "$cur/nhm-palette" ]] && grep -q "^version = \"$version\"" "$cur/plugin/herdr-plugin.toml" &&
+  "$cur/nhm-palette" --help > /dev/null 2>&1; then
+  pass "the release ships nhm-palette and the herdr plugin, with its version"
+else
+  fail "the release ships nhm-palette and the herdr plugin: $(ls -R "$cur" 2>&1)"
+fi
 if [[ "$(readlink "$home/.local/share/nhm/current")" == "releases/$version" ]]; then
   pass "current points at the release"
 else

@@ -71,6 +71,10 @@ Usage:
   nhm quota [--json]     each plan's windows and the live agents per kind
   nhm limits [session] [--once|--loop] [--dry-run] [--json]
                          the agents a usage limit stopped
+  nhm palette | board | menu
+                         the prompt palette, the agent board, the nhm menu
+  nhm bind [--unbind] [--print-client] [--dry-run]
+                         herdr keys: prefix+a palette, prefix+d board, prefix+m menu
   nhm resolve <name|herdr-name|pane-id|--current> [--json]
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
@@ -136,6 +140,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runQuota(args[1:], stdout, stderr)
 	case "limits":
 		return runLimits(args[1:], stdout, stderr)
+	case "palette":
+		return runPalette(args[1:], stdout, stderr)
+	case "board":
+		return runBoard(args[1:], stdout, stderr)
+	case "menu":
+		return runMenu(args[1:], stdout, stderr)
+	case "bind":
+		return runBind(args[1:], stdout, stderr)
+	case "ui":
+		return runUI(args[1:], stdout, stderr)
 	case "wait":
 		return runWait(args[1:], stdout, stderr)
 	case "interrupt":

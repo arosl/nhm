@@ -38,7 +38,8 @@ Rules:
 | `send <session> [prompt] (--all \| --cc \| --cod \| --agy \| --pane=N \| -t KEY [--bead ID] [--var k=v] [--file F]) [--dry-run] [--no-cass] [--with-memory=false]` | lessons, brenner | one line per target and the operation id; `--json` gives nhm's envelope with the receipts. `--with-memory`, `--with-cass` and `--cass-check` (true) are refused until nhm.memory (acfs-9hkh.21), `--thread` until nhm.wake | `internal/cli/send.go`, `internal/core/send` | `TestSendVerb` | implemented |
 | `wait <session> --until …`, `interrupt <session>` | lessons, ru | one line per agent; `--json` gives nhm's envelope. ntm's `--pane` takes the slot `N.M` | `internal/cli/wait.go`, `internal/cli/interrupt.go`, `internal/core/wait` | `TestWaitVerbStateAndSelection`, `TestInterruptVerb` | implemented |
 | `attach`, `new`, `kill`, `zoom`, `resume` | lessons | herdr calls | — | — | deferred: nhm.spawn and nhm.lifecycle (acfs-9hkh.19, .20) |
-| `palette`, `bind`, `template list|show` | lessons | the palette | — | — | deferred: nhm.plugin (acfs-9hkh.14) |
+| `palette`, `bind` | lessons | the palette (an fzf popup on prefix+a); `nhm bind` writes herdr's `[[keys.command]]` for prefix+a palette, prefix+d board, prefix+m menu, not tmux's F6 | `scripts/nhm-palette`, `internal/cli/ui.go`, `internal/cli/bind.go`, `internal/ui`, `plugin/herdr-plugin.toml` | `tests/palette_test.sh`, `TestBind*`, `TestBoard*` | implemented |
+| `template list|show` | lessons | the palette's prompts, from the palette files; ntm's builtin templates are not listed | `nhm palette --list [--json]`, `nhm palette --show KEY` | `tests/palette_test.sh` | implemented |
 | `mail inbox` | the palette | inbox | — | — | deferred: nhm.wake (acfs-9hkh.15) |
 | `ensemble …`, `modes …` | lessons | ensembles | — | — | deferred: nhm.ensembles (acfs-9hkh.22) |
 | `deps [-v]`, `tutorial` | lessons | tools and a pointer to the lessons | — | — | deferred: nhm.kinds (acfs-9hkh.18) |

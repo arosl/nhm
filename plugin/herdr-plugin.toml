@@ -1,0 +1,73 @@
+# nhm's herdr plugin (plan-v8 2.1). ACFS links it once per user:
+#   herdr plugin link ~/.local/share/nhm/current/plugin
+#
+# herdr runs every command below in this directory (ACFS bead
+# acfs-9hkh.14, checked on herdr 0.9.3), so "../nhm" is the nhm binary of
+# the same release, whatever PATH the herdr server has.
+#
+# Keys (the operator, 2026-10-12): prefix+a palette, prefix+d board,
+# prefix+m menu; `nhm bind` writes them into herdr's config.toml.
+#
+# Event hooks must exit fast: herdr runs at most 32 plugin commands at
+# once and refuses the rest (ACFS evidence exp1), so a hook is a hint and
+# nhm's reconcile catches what a refused one missed.
+#
+# Later releases add the spawn and memory popups (nhm.spawn, nhm.memory)
+# and the startup hook `nhm admin restore` (nhm.lifecycle).
+
+id = "nhm"
+name = "nhm"
+version = "0.0.0"            # scripts/package.sh sets the release's version
+min_herdr_version = "0.9.3"
+description = "The herdr wrapper for the ACFS method"
+platforms = ["linux"]
+
+[[actions]]
+id = "palette"
+title = "Command palette"
+contexts = ["workspace", "pane"]
+command = ["../nhm", "ui", "palette"]
+
+[[actions]]
+id = "board"
+title = "Agent board"
+contexts = ["workspace", "pane"]
+command = ["../nhm", "ui", "board"]
+
+[[actions]]
+id = "menu"
+title = "nhm menu"
+contexts = ["workspace", "pane"]
+command = ["../nhm", "ui", "menu"]
+
+[[panes]]
+id = "palette"
+title = "Palette"
+placement = "popup"
+width = "80%"
+height = "70%"
+command = ["../nhm", "ui", "palette-popup"]
+
+[[panes]]
+id = "board"
+title = "Agents"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["../nhm", "ui", "board-popup"]
+
+[[panes]]
+id = "menu"
+title = "nhm"
+placement = "popup"
+width = "60%"
+height = "60%"
+command = ["../nhm", "ui", "menu-popup"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["../nhm-hook", "reconcile-pane"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["../nhm-hook", "agent-status"]
