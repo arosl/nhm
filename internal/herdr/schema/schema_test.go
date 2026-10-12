@@ -57,6 +57,38 @@ func TestPinnedSchemaHasWhatNhmUses(t *testing.T) {
 	}
 }
 
+// The object views that the client's schema check reads.
+func TestPinnedSchemaObjects(t *testing.T) {
+	s := MustLoad()
+	start := s.Methods["agent.start"]
+	for _, p := range []string{"name", "kind", "pane_id", "args", "timeout_ms"} {
+		if !contains(start.Params, p) {
+			t.Errorf("agent.start params %v lack %q", start.Params, p)
+		}
+	}
+	if s.Methods["ping"].Params != nil {
+		t.Errorf("ping params = %v, want none", s.Methods["ping"].Params)
+	}
+	if !s.Results["agent_info"].Has("agent") || s.Results["agent_info"].Has("agents") {
+		t.Errorf("result agent_info = %+v", s.Results["agent_info"])
+	}
+	if !s.ResponseDefs["AgentInfo"].Has("completion_seq") || !contains(s.ResponseDefs["AgentInfo"].Required, "pane_id") {
+		t.Errorf("AgentInfo = %+v", s.ResponseDefs["AgentInfo"])
+	}
+	if _, ok := s.ResponseDefs["AgentStatus"]; ok {
+		t.Error("an enum def is listed as an object")
+	}
+	if !s.RequestDefs["AgentPromptWaitOptions"].Has("until") {
+		t.Errorf("AgentPromptWaitOptions = %+v", s.RequestDefs["AgentPromptWaitOptions"])
+	}
+	if !s.EventData["pane_agent_detected"].Has("released") {
+		t.Errorf("pane_agent_detected = %+v", s.EventData["pane_agent_detected"])
+	}
+	if !s.SubscriptionDefs["PaneAgentStatusChangedEvent"].Has("agent_status") {
+		t.Errorf("PaneAgentStatusChangedEvent = %+v", s.SubscriptionDefs["PaneAgentStatusChangedEvent"])
+	}
+}
+
 func TestParseRejectsBrokenDocuments(t *testing.T) {
 	for name, doc := range map[string]string{
 		"not json":     `{`,

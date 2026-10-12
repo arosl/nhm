@@ -29,6 +29,25 @@ type Method struct {
 	// Required lists the parameter keys the variant requires. It is nil
 	// when the parameter type is a union that this package does not walk.
 	Required []string
+	// Params lists every parameter key of the variant, under the same
+	// condition as Required.
+	Params []string
+}
+
+// Object is the property list of one object type in the schema.
+type Object struct {
+	Properties []string
+	Required   []string
+}
+
+// Has reports whether the object has the property.
+func (o Object) Has(name string) bool {
+	for _, p := range o.Properties {
+		if p == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Schema is the parsed subset of the pinned schema.
@@ -38,6 +57,20 @@ type Schema struct {
 	Methods       map[string]Method
 	ResultTypes   map[string]bool
 	EventKinds    map[string]bool
+
+	// Results maps a result type ("agent_info") to its object.
+	Results map[string]Object
+	// ResponseDefs maps a success_response $defs name ("AgentInfo") to
+	// its object; defs that are not objects are left out.
+	ResponseDefs map[string]Object
+	// RequestDefs is the same for the request part ("AgentPromptWaitOptions").
+	RequestDefs map[string]Object
+	// EventData maps an event data type of the event part
+	// ("pane_agent_detected") to its object.
+	EventData map[string]Object
+	// SubscriptionDefs is ResponseDefs for the subscription_event part
+	// ("PaneAgentStatusChangedEvent").
+	SubscriptionDefs map[string]Object
 }
 
 // MethodNames returns the request methods in sorted order.
@@ -117,11 +150,19 @@ func Parse(data []byte) (*Schema, error) {
 		return nil, fmt.Errorf("schema: protocol, request or success_response missing")
 	}
 	s := &Schema{
-		Protocol:      doc.Protocol,
-		SchemaVersion: doc.SchemaVersion,
-		Methods:       map[string]Method{},
-		ResultTypes:   map[string]bool{},
-		EventKinds:    map[string]bool{},
+		Protocol:         doc.Protocol,
+		SchemaVersion:    doc.SchemaVersion,
+		Methods:          map[string]Method{},
+		ResultTypes:      map[string]bool{},
+		EventKinds:       map[string]bool{},
+		Results:          map[string]Object{},
+		ResponseDefs:     objects(res.Defs),
+		RequestDefs:      objects(req.Defs),
+		EventData:        map[string]Object{},
+		SubscriptionDefs: map[string]Object{},
+	}
+	if doc.Schemas.SubscriptionEvent != nil {
+		s.SubscriptionDefs = objects(doc.Schemas.SubscriptionEvent.Defs)
 	}
 	for i, variant := range req.OneOf {
 		m := variant.Properties["method"]
@@ -136,6 +177,7 @@ func Parse(data []byte) (*Schema, error) {
 			}
 			if def != nil && def.OneOf == nil && def.AnyOf == nil {
 				method.Required = append([]string{}, def.Required...)
+				method.Params = object(def).Properties
 			}
 		}
 		s.Methods[method.Name] = method
@@ -151,6 +193,7 @@ func Parse(data []byte) (*Schema, error) {
 	for _, variant := range result.OneOf {
 		if t := variant.Properties["type"]; t != nil && t.Const != "" {
 			s.ResultTypes[t.Const] = true
+			s.Results[t.Const] = object(variant)
 		}
 	}
 	for _, ev := range []*node{doc.Schemas.Event, doc.Schemas.SubscriptionEvent} {
@@ -165,7 +208,38 @@ func Parse(data []byte) (*Schema, error) {
 			s.EventKinds[k] = true
 		}
 	}
+	if ev := doc.Schemas.Event; ev != nil && ev.Properties["data"] != nil {
+		if data, err := resolve(ev, ev.Properties["data"].Ref); err == nil && data != nil {
+			for _, variant := range data.OneOf {
+				if t := variant.Properties["type"]; t != nil && t.Const != "" {
+					s.EventData[t.Const] = object(variant)
+				}
+			}
+		}
+	}
 	return s, nil
+}
+
+// object lists the properties and required keys of a schema node, the
+// properties in sorted order.
+func object(n *node) Object {
+	o := Object{Required: append([]string{}, n.Required...)}
+	for name := range n.Properties {
+		o.Properties = append(o.Properties, name)
+	}
+	sort.Strings(o.Properties)
+	return o
+}
+
+// objects maps each $defs entry that has properties to its Object.
+func objects(defs map[string]*node) map[string]Object {
+	out := map[string]Object{}
+	for name, def := range defs {
+		if def != nil && len(def.Properties) > 0 {
+			out[name] = object(def)
+		}
+	}
+	return out
 }
 
 // resolve follows a "#/schemas/<part>/$defs/<Name>" reference inside the
