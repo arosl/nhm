@@ -6,7 +6,11 @@
 //	                         macro_start_session (payload on stdin)
 //	nhm-hook sessionstart    SessionStart, PreCompact or PostCompact (stdin)
 //	nhm-hook reconcile-pane  herdr's pane.agent_detected plugin event
-//	nhm-hook agent-status    herdr's pane.agent_status_changed plugin event
+//	nhm-hook agent-status    herdr's pane.agent_status_changed plugin event;
+//	                         it also runs settle wake (plan-v8 2.8)
+//	nhm-hook mail-sent       Claude Code or Codex PostToolUse on Agent Mail's
+//	                         send_message or reply_message (stdin): wake on
+//	                         send (plan-v8 2.8)
 //
 // A hook fails open: it always exits 0 within its budget, and says what
 // went wrong on stderr. It does nothing outside an enrolled herdr
@@ -27,9 +31,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/hooks"
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -45,10 +52,10 @@ const (
 // maxPayload bounds what a hook reads from stdin.
 const maxPayload = 1 << 20
 
-const usage = `Usage: nhm-hook posttooluse|sessionstart|reconcile-pane|agent-status
+const usage = `Usage: nhm-hook posttooluse|sessionstart|mail-sent|reconcile-pane|agent-status
 
-Agent CLI hooks (posttooluse, sessionstart) read the hook payload on
-stdin. herdr plugin event hooks (reconcile-pane, agent-status) read
+Agent CLI hooks (posttooluse, sessionstart, mail-sent) read the hook
+payload on stdin. herdr plugin event hooks (reconcile-pane, agent-status) read
 HERDR_PLUGIN_EVENT_JSON. Every hook exits 0.
 `
 
@@ -107,7 +114,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
-	case "posttooluse", "sessionstart", "reconcile-pane", "agent-status":
+	case "posttooluse", "sessionstart", "mail-sent", "reconcile-pane", "agent-status":
 	default:
 		fmt.Fprintf(stderr, "nhm-hook: unknown hook %q\n%s", verb, usage)
 		return 0
@@ -115,7 +122,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	var payload []byte
-	if verb == "posttooluse" || verb == "sessionstart" {
+	if verb == "posttooluse" || verb == "sessionstart" || verb == "mail-sent" {
 		rctx, rcancel := context.WithTimeout(ctx, budget/4)
 		data, err := readPayload(rctx, stdin)
 		rcancel()
@@ -150,6 +157,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		if res.Reminder != "" {
 			fmt.Fprintln(stdout, res.Reminder)
 		}
+	case "mail-sent":
+		rep, err := mailSent(ctx, env, getenv, payload)
+		if err != nil {
+			fmt.Fprintf(stderr, "nhm-hook %s: %v\n", verb, err)
+		}
+		debug(stderr, getenv, verb, rep)
 	default:
 		ev, err := hooks.ParsePluginEvent(getenv("HERDR_PLUGIN_EVENT_JSON"))
 		if err != nil {
@@ -161,8 +174,116 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 			fmt.Fprintf(stderr, "nhm-hook %s: %v\n", verb, err)
 		}
 		debug(stderr, getenv, verb, rep)
+		if verb == "agent-status" && (ev.AgentStatus == herdr.StatusIdle || ev.AgentStatus == herdr.StatusDone) {
+			pane := ev.PaneID
+			if pane == "" {
+				pane = getenv("HERDR_PANE_ID")
+			}
+			d, err := settle(ctx, env, getenv, pane, ev.AgentStatus)
+			if err != nil {
+				fmt.Fprintf(stderr, "nhm-hook %s: wake: %v\n", verb, err)
+			}
+			debug(stderr, getenv, verb, d)
+		}
 	}
 	return 0
+}
+
+// wakeEnv is the wake side of an opened instance. Settle reads an inbox,
+// so it gets an Agent Mail client; mail-sent reads none.
+func wakeEnv(env hooks.Env, getenv func(string) string, withMail bool) (wake.Env, error) {
+	w := wake.Env{DB: env.DB, Bindings: env.Bindings, Herdr: herdr.New(getenv("HERDR_SOCKET_PATH")),
+		Config: wake.DefaultConfig(), Now: env.Now}
+	if withMail {
+		mail, err := agentmail.NewClient(env.ConfigHome)
+		if err != nil {
+			return w, err
+		}
+		w.Mail = mail
+	}
+	return w, nil
+}
+
+// asOwner runs fn under the shared owner lock when nhm owns the
+// instance. Under the Bash, its own wake runs; the hook does nothing.
+func asOwner(ctx context.Context, env hooks.Env, fn func() error) (string, error) {
+	wait := env.LockWait
+	if wait <= 0 {
+		wait = time.Second
+	}
+	lctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	skipped := ""
+	err := core.WithOwnerShared(lctx, env.InstanceDir, func(o core.Owner) error {
+		if o.Owner != core.OwnerNhm {
+			skipped = "the instance is owned by " + o.Owner
+			return nil
+		}
+		return fn()
+	})
+	if errors.Is(err, core.ErrOwnerLockTimeout) {
+		return "owner lock busy; maintenance delivers the wake", nil
+	}
+	return skipped, err
+}
+
+// mailSentReport is what mail-sent did.
+type mailSentReport struct {
+	Skipped string       `json:"skipped,omitempty"`
+	Wake    *wake.Report `json:"wake,omitempty"`
+}
+
+// mailSent handles the PostToolUse hook of send_message and
+// reply_message: it records the recipients' pending ids and nudges each
+// idle or done one, inside the hook's budget.
+func mailSent(ctx context.Context, env hooks.Env, getenv func(string) string, payload []byte) (mailSentReport, error) {
+	p, err := hooks.ParseAgentPayload(payload)
+	if err != nil {
+		return mailSentReport{}, err
+	}
+	if p.HookEventName != "PostToolUse" || wake.SentTool(p.ToolName) == "" {
+		return mailSentReport{Skipped: "not an Agent Mail send"}, nil
+	}
+	sent, err := wake.ParseSent(p.ToolInput, p.ToolResponse)
+	if err != nil {
+		// A refused send delivered nothing.
+		return mailSentReport{Skipped: err.Error()}, nil
+	}
+	w, err := wakeEnv(env, getenv, false)
+	if err != nil {
+		return mailSentReport{}, err
+	}
+	var rep wake.Report
+	skipped, err := asOwner(ctx, env, func() error {
+		var err error
+		rep, err = wake.MailSent(ctx, w, sent)
+		return err
+	})
+	if skipped != "" {
+		return mailSentReport{Skipped: skipped}, err
+	}
+	return mailSentReport{Wake: &rep}, err
+}
+
+// settle runs settle wake for a pane that became idle or done.
+func settle(ctx context.Context, env hooks.Env, getenv func(string) string, pane string, status herdr.AgentStatus) (any, error) {
+	if pane == "" {
+		return map[string]string{"skipped": "the event names no pane"}, nil
+	}
+	w, err := wakeEnv(env, getenv, true)
+	if err != nil {
+		return nil, err
+	}
+	var d wake.Decision
+	skipped, err := asOwner(ctx, env, func() error {
+		var err error
+		d, err = wake.Settle(ctx, w, pane, status)
+		return err
+	})
+	if skipped != "" {
+		return map[string]string{"skipped": skipped}, err
+	}
+	return d, err
 }
 
 var errNoSocket = errors.New("no HERDR_SOCKET_PATH: not in a herdr pane")

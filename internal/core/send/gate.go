@@ -99,3 +99,7 @@ func classify(err error) (status, code string) {
 	}
 	return StatusPossiblySubmitted, "lost_reply"
 }
+
+// Classify maps agent.prompt's answer to a submission status for the
+// other paths that prompt (wake), by the same rules as a send.
+func Classify(err error) (status, code string) { return classify(err) }

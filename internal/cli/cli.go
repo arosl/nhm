@@ -47,6 +47,12 @@ Usage:
                          each agent's activity in ntm's terms
   nhm health [session] [--json]
                          runtime health of sources and sessions
+  nhm wake [--once] [--recipients NAME,…] [--json]
+                         nudge agents with new Agent Mail, once per message
+  nhm maintain [--once | --loop [--interval D]] [--json]
+                         the maintenance pass: due wakes, inboxes, names
+  nhm mail inbox [--agent NAME] [--keep-unread] [--json]
+                         list the agent's unread mail by thread; mark it read
   nhm doctor [--json]    check what nhm needs
   nhm capabilities [--json]
                          what this nhm answers, and why not
@@ -109,6 +115,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runHealth(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
+	case "wake":
+		return runWake(args[1:], stdout, stderr)
+	case "maintain":
+		return runMaintain(args[1:], stdout, stderr)
+	case "mail":
+		return runMail(args[1:], stdout, stderr)
 	case "capabilities":
 		return runCapabilities(args[1:], stdout, stderr)
 	case "compatibility":

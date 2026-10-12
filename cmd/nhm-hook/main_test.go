@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core"
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -109,6 +110,80 @@ func TestHookExitsWithinBudgetUnderAWriter(t *testing.T) {
 		if took := time.Since(start); code != 0 || took >= hardStop {
 			t.Fatalf("%s under a writer: exit %d after %s (%s)", c.verb, code, took, errb.String())
 		}
+	}
+}
+
+// The mail-sent hook nudges an idle recipient once, without a wait, and
+// does nothing while the Bash owns the instance.
+func TestMailSentNudgesTheRecipient(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	s := herdrtest.New(t)
+	agent := map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t2", "workspace_id": "w1", "terminal_id": "t2",
+		"agent": "claude", "agent_status": "idle", "focused": false, "revision": 1}
+	s.Handle("agent.get", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "agent_info", "agent": agent}, nil
+	})
+	s.Handle("agent.prompt", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "agent_prompted", "agent": agent}, nil
+	})
+	root, err := store.StateRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, _, err := store.Enroll(root, s.SocketPath, "default", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := bindings.NewStore(db).Create(ctx, bindings.New{MailName: "IcyKnoll", MailProjectKey: "/p", ProjectID: "proj",
+		Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t2", PaneID: "w1:p2",
+			HerdrAlias: "icyknoll", Kind: "claude"}}); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"hook_event_name":"PostToolUse","session_id":"s1","tool_name":"mcp__mcp-agent-mail__send_message",
+		"tool_input":{"project_key":"/p","sender_name":"SageOak","to":["IcyKnoll"]},
+		"tool_response":[{"type":"text","text":"{\"deliveries\":[{\"project\":\"/p\",\"payload\":{\"id\":42,\"thread_id\":\"t1\",\"from\":\"SageOak\",\"to\":[\"IcyKnoll\"]}}],\"count\":1}"}]}`
+	vars := map[string]string{"HERDR_SOCKET_PATH": s.SocketPath, "HERDR_PANE_ID": "w1:p1", "NHM_HOOK_DEBUG": "1"}
+	prompts := func() []herdrtest.Request {
+		var out []herdrtest.Request
+		for _, r := range s.Requests() {
+			if r.Method == "agent.prompt" {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	var out, errb bytes.Buffer
+	// The Bash owns a new instance: its own wake runs, nhm's does not.
+	if code := run([]string{"mail-sent"}, strings.NewReader(payload), &out, &errb, env(vars)); code != 0 ||
+		len(prompts()) != 0 || !strings.Contains(errb.String(), "owned by acfs-bash") {
+		t.Fatalf("under the Bash: exit %d, prompts %d, stderr %q", code, len(prompts()), errb.String())
+	}
+	if _, err := core.SwitchOwner(ctx, inst.Dir, core.OwnerNhm, time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		errb.Reset()
+		if code := run([]string{"mail-sent"}, strings.NewReader(payload), &out, &errb, env(vars)); code != 0 || out.Len() != 0 {
+			t.Fatalf("exit %d, stdout %q", code, out.String())
+		}
+	}
+	// Twice the same message: one nudge.
+	got := prompts()
+	if len(got) != 1 || !strings.Contains(string(got[0].Params), `"text":"Check your Agent Mail inbox."`) ||
+		strings.Contains(string(got[0].Params), `"wait"`) {
+		t.Fatalf("prompts = %+v; stderr %q", got, errb.String())
+	}
+	// Another tool's PostToolUse is not a send.
+	errb.Reset()
+	other := strings.Replace(payload, "send_message", "fetch_inbox", 1)
+	if run([]string{"mail-sent"}, strings.NewReader(other), &out, &errb, env(vars)); !strings.Contains(errb.String(), "not an Agent Mail send") {
+		t.Fatalf("stderr = %q", errb.String())
 	}
 }
 

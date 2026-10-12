@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core"
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
@@ -22,7 +23,8 @@ const doctorUsage = `Usage: nhm doctor [--socket PATH] [--no-mail] [--json]
 
 Check what nhm needs: the herdr server and its protocol, the enrollment of
 this server, the state database, the owner switch, Agent Mail, and the
-directory of Agent Mail's identity files. Each check says ok, warn or
+directory of Agent Mail's identity files, and, when nhm owns the server,
+the maintenance runner (nhm maintain). Each check says ok, warn or
 fail, and what to do. Exits 1 when a check fails.
 `
 
@@ -185,18 +187,22 @@ func guardChecks(ctx context.Context) []doctorCheck {
 
 func instanceChecks(ctx context.Context, inst store.Instance) []doctorCheck {
 	var checks []doctorCheck
+	var runner *doctorCheck
 	db, err := store.Open(inst.Dir)
 	if err != nil {
 		checks = append(checks, doctorCheck{Name: "database", Result: checkFail, Detail: err.Error(),
 			Fix: "a newer nhm wrote it: install that release, or restore the database from its backup"})
 	} else {
 		v, verr := db.UserVersion(ctx)
+		name, last, ran, lerr := wake.LastPass(ctx, db)
 		_ = db.Close()
 		if verr != nil {
 			checks = append(checks, doctorCheck{Name: "database", Result: checkFail, Detail: verr.Error()})
 		} else {
 			checks = append(checks, doctorCheck{Name: "database", Result: checkOK, Detail: fmt.Sprintf("schema %d", v)})
 		}
+		c := maintainCheck(name, last, ran, lerr, time.Now())
+		runner = &c
 	}
 	o, err := core.ReadOwner(inst.Dir)
 	switch {
@@ -210,5 +216,31 @@ func instanceChecks(ctx context.Context, inst store.Instance) []doctorCheck {
 			Detail: fmt.Sprintf("ACFS's Bash owns this server (generation %d); nhm reads only", o.Generation),
 			Fix:    "nhm admin takeover, when the rehearsal has passed"})
 	}
+	// The maintenance runner matters only when nhm owns the server.
+	if err == nil && o.Owner == core.OwnerNhm && runner != nil {
+		checks = append(checks, *runner)
+	}
 	return checks
+}
+
+// maintainRunnerStale is how old the last maintenance pass may be: the
+// timer runs every 15 s.
+const maintainRunnerStale = 2 * time.Minute
+
+// maintainCheck reports the maintenance runner (plan-v8 2.8): which one
+// ran the last pass, and whether one runs at all.
+func maintainCheck(runner string, last time.Time, ran bool, err error, now time.Time) doctorCheck {
+	c := doctorCheck{Name: "maintenance"}
+	fix := "install ACFS's nhm-maintain timer, or run nhm maintain --loop; until then, mail to a busy agent waits"
+	switch {
+	case err != nil:
+		c.Result, c.Detail = checkWarn, err.Error()
+	case !ran:
+		c.Result, c.Detail, c.Fix = checkWarn, "no runner: nhm maintain never ran", fix
+	case now.Sub(last) > maintainRunnerStale:
+		c.Result, c.Detail, c.Fix = checkWarn, fmt.Sprintf("no runner: the last pass (%s) was at %s", runner, last.UTC().Format(time.RFC3339)), fix
+	default:
+		c.Result, c.Detail = checkOK, fmt.Sprintf("runner %s, last pass at %s", runner, last.UTC().Format(time.RFC3339))
+	}
+	return c
 }
