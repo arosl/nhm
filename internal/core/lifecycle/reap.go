@@ -16,6 +16,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -145,7 +146,10 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 			items = append(items, item)
 			continue
 		}
-		rr, err := Retire(ctx, env, RetireRequest{Target: b.ID, KeepIdentity: false, DryRun: req.DryRun, Reason: "reap"})
+		// A reviewer works no beads: only an agent spawned with --role
+		// reviewer may have none in the databases searched.
+		rr, err := Retire(ctx, env, RetireRequest{Target: b.ID, KeepIdentity: false, DryRun: req.DryRun, Reason: "reap",
+			NoBeads: b.Role == spawn.RoleReviewer})
 		r := rr
 		item.Retire = &r
 		switch {
@@ -276,7 +280,9 @@ type KillResult struct {
 // Kill closes a workspace. It runs retire's checks for every bound agent
 // first and never bypasses them: one refusal refuses the kill, and
 // nothing is closed. Without yes it only reports.
-func Kill(ctx context.Context, env Env, workspaceID string, yes bool) (KillResult, error) {
+// noBeads passes retire's --no-beads to every agent: the workspace holds
+// agents that worked no beads (reviewers).
+func Kill(ctx context.Context, env Env, workspaceID string, yes, noBeads bool) (KillResult, error) {
 	res := KillResult{WorkspaceID: workspaceID, Agents: []RetireResult{}}
 	list, err := env.Bindings.List(ctx, bindings.Filter{WorkspaceID: workspaceID, Statuses: []bindings.Status{bindings.Active}})
 	if err != nil {
@@ -300,7 +306,7 @@ func Kill(ctx context.Context, env Env, workspaceID string, yes bool) (KillResul
 	}
 	refusals = append(refusals, unchecked...)
 	for _, b := range list {
-		r, err := Retire(ctx, env, RetireRequest{Target: b.ID, DryRun: true, Reason: "kill"})
+		r, err := Retire(ctx, env, RetireRequest{Target: b.ID, DryRun: true, Reason: "kill", NoBeads: noBeads || b.Role == spawn.RoleReviewer})
 		res.Agents = append(res.Agents, r)
 		switch {
 		case errors.Is(err, ErrRefused):
@@ -317,7 +323,7 @@ func Kill(ctx context.Context, env Env, workspaceID string, yes bool) (KillResul
 	}
 	res.Agents = res.Agents[:0]
 	for _, b := range list {
-		r, err := Retire(ctx, env, RetireRequest{Target: b.ID, Reason: "kill"})
+		r, err := Retire(ctx, env, RetireRequest{Target: b.ID, Reason: "kill", NoBeads: noBeads || b.Role == spawn.RoleReviewer})
 		res.Agents = append(res.Agents, r)
 		if err != nil {
 			return res, fmt.Errorf("%s: %w; the workspace stays open", b.MailName, err)

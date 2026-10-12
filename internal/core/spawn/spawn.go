@@ -318,7 +318,7 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 	}
 	t.HerdrName = alias
 	b, err := env.Bindings.Create(ctx, bindings.New{MailName: name, MailProjectKey: req.ProjectRoot, ProjectID: req.ProjectID,
-		Provenance: bindings.Created, CreatedByOp: res.OperationID, Occupant: bindings.Occupant{WorkspaceID: res.WorkspaceID,
+		Provenance: bindings.Created, CreatedByOp: res.OperationID, Role: req.Role, Occupant: bindings.Occupant{WorkspaceID: res.WorkspaceID,
 			TabID: t.TabID, PaneID: t.PaneID, HerdrAlias: alias, Kind: t.Kind, Model: t.Model, Effort: t.Effort, LaunchID: t.LaunchID,
 			Evidence: []bindings.Evidence{{Kind: "spawn", Detail: "created by " + res.OperationID}}}})
 	if err != nil {

@@ -78,14 +78,19 @@ type CLI struct {
 }
 
 func run(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+	return runEnv(ctx, dir, nil, name, args...)
+}
+
+// runEnv runs a command with extra environment. It never waits for a
+// person: git asks for no credentials (stdin is /dev/null too), and
+// WaitDelay ends the wait for output when a child (an ssh that git
+// started) outlives the command.
+func runEnv(ctx context.Context, dir string, extra []string, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, factTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	// Never wait for a person: git asks for no credentials and ssh runs in
-	// batch mode. WaitDelay ends the wait for output when a child (an ssh
-	// that git started) outlives the command.
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), extra...)
 	cmd.WaitDelay = 5 * time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -195,8 +200,34 @@ var buildCaches = map[string]bool{"node_modules": true, "target": true, "dist": 
 
 // Fetch runs `git fetch --quiet origin main`.
 func (CLI) Fetch(ctx context.Context, root string) error {
-	_, err := run(ctx, root, "git", "fetch", "--quiet", "origin", "main")
+	var extra []string
+	if ssh := batchSSH(os.Getenv, func() string {
+		out, _ := run(ctx, root, "git", "config", "--get", "core.sshCommand")
+		return strings.TrimSpace(string(out))
+	}); ssh != "" {
+		extra = append(extra, "GIT_SSH_COMMAND="+ssh)
+	}
+	_, err := runEnv(ctx, root, extra, "git", "fetch", "--quiet", "origin", "main")
 	return err
+}
+
+// batchSSH is the ssh command for a fetch that must not prompt: the
+// user's own (GIT_SSH_COMMAND, else core.sshCommand, else ssh) with
+// BatchMode on, so a custom key or jump host still works. With only
+// GIT_SSH set (a program, not a command line) it returns "": that program
+// is left as it is, and GIT_TERMINAL_PROMPT and the closed stdin remain.
+func batchSSH(getenv func(string) string, coreSSH func() string) string {
+	base := getenv("GIT_SSH_COMMAND")
+	if base == "" {
+		base = coreSSH()
+	}
+	if base == "" {
+		if getenv("GIT_SSH") != "" {
+			return ""
+		}
+		base = "ssh"
+	}
+	return base + " -o BatchMode=yes"
 }
 
 // WorktreeState reads the worktree's status with its ignored files and

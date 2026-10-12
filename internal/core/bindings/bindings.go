@@ -95,7 +95,9 @@ type Binding struct {
 	Model          string `json:"model,omitempty"`
 	// Effort is the effort the agent was launched with ("" is the kind's
 	// default).
-	Effort        string         `json:"effort,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	// Role is what the identity was spawned for ("reviewer"), or "".
+	Role          string         `json:"role,omitempty"`
 	LaunchID      string         `json:"launch_id,omitempty"`
 	NativeSession *NativeSession `json:"native_session,omitempty"`
 	// ForegroundPID and ForegroundStart identify the agent process: its
@@ -137,6 +139,9 @@ type New struct {
 	ProjectID      string
 	Provenance     Provenance
 	CreatedByOp    string
+	// Role is what the identity was spawned for ("reviewer"); it stays
+	// with the identity across occupants.
+	Role string
 	Occupant
 }
 
@@ -190,11 +195,12 @@ func (s *Store) Create(ctx context.Context, n New) (Binding, error) {
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO bindings (binding_id, generation, status, mail_name, mail_project_key,
 		project_id, workspace_id, tab_id, pane_id, herdr_alias, kind, model, effort, launch_id, native_session_json,
-		foreground_pid, foreground_start, identity_provenance, created_by_op, evidence_json, created_at, updated_at)
-		VALUES (?, 1, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		foreground_pid, foreground_start, identity_provenance, created_by_op, evidence_json, role, created_at, updated_at)
+		VALUES (?, 1, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, n.MailName, n.MailProjectKey, n.ProjectID, null(n.WorkspaceID), null(n.TabID), null(n.PaneID),
 		null(n.HerdrAlias), n.Kind, null(n.Model), null(n.Effort), null(n.LaunchID), native,
-		nullInt(n.ForegroundPID), nullInt(n.ForegroundStart), string(n.Provenance), null(n.CreatedByOp), evidence, now, now)
+		nullInt(n.ForegroundPID), nullInt(n.ForegroundStart), string(n.Provenance), null(n.CreatedByOp), evidence,
+		null(n.Role), now, now)
 	if err != nil {
 		return Binding{}, fmt.Errorf("bindings: create %s: %w", n.MailName, err)
 	}
@@ -418,7 +424,7 @@ func (s *Store) one(ctx context.Context, what, where string, args ...any) (Bindi
 func (s *Store) query(ctx context.Context, where string, args ...any) ([]Binding, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT b.binding_id, b.generation, b.status, b.status_reason, b.mail_name,
 		b.mail_project_key, b.project_id, b.workspace_id, b.tab_id, b.pane_id, b.herdr_alias, b.kind, b.model,
-		b.effort, b.launch_id, b.native_session_json, b.foreground_pid, b.foreground_start, b.identity_provenance,
+		b.effort, b.role, b.launch_id, b.native_session_json, b.foreground_pid, b.foreground_start, b.identity_provenance,
 		b.created_by_op, b.evidence_json, b.compacted_at, b.resumed_at, b.created_at, b.updated_at,
 		(SELECT s.slot FROM slots s WHERE s.binding_id = b.binding_id AND s.workspace_id = b.workspace_id
 			ORDER BY s.assigned_at DESC LIMIT 1)
@@ -430,18 +436,18 @@ func (s *Store) query(ctx context.Context, where string, args ...any) ([]Binding
 	var out []Binding
 	for rows.Next() {
 		var b Binding
-		var reason, ws, tab, pane, alias, model, effort, launch, native, op, compacted, resumed, slot sql.NullString
+		var reason, ws, tab, pane, alias, model, effort, role, launch, native, op, compacted, resumed, slot sql.NullString
 		var pid, start sql.NullInt64
 		var status, prov, evidence, created, updated string
 		if err := rows.Scan(&b.ID, &b.Generation, &status, &reason, &b.MailName, &b.MailProjectKey, &b.ProjectID,
-			&ws, &tab, &pane, &alias, &b.Kind, &model, &effort, &launch, &native, &pid, &start, &prov, &op, &evidence,
+			&ws, &tab, &pane, &alias, &b.Kind, &model, &effort, &role, &launch, &native, &pid, &start, &prov, &op, &evidence,
 			&compacted, &resumed, &created, &updated, &slot); err != nil {
 			return nil, fmt.Errorf("bindings: %w", err)
 		}
 		b.Status, b.Provenance = Status(status), Provenance(prov)
 		b.StatusReason, b.WorkspaceID, b.TabID, b.PaneID = reason.String, ws.String, tab.String, pane.String
 		b.HerdrAlias, b.Model, b.LaunchID, b.CreatedByOp, b.Slot = alias.String, model.String, launch.String, op.String, slot.String
-		b.Effort = effort.String
+		b.Effort, b.Role = effort.String, role.String
 		b.ForegroundPID, b.ForegroundStart = pid.Int64, start.Int64
 		if native.Valid && native.String != "" {
 			b.NativeSession = &NativeSession{}

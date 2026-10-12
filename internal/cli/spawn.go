@@ -82,6 +82,7 @@ type spawnFlags struct {
 	noCASSContext            bool
 	project, opID, socket    string
 	effort                   string
+	role                     string
 	dryRun, asJSON, interact bool
 }
 
@@ -89,6 +90,7 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	f := &spawnFlags{counts: map[string]*string{}}
 	fs.Var(&f.agents, "agent", "KIND=N[:MODEL] (repeatable)")
 	fs.StringVar(&f.effort, "effort", "", "reasoning effort (default: each kind's, ntm's xhigh for claude and codex)")
+	fs.StringVar(&f.role, "role", "", "reviewer: the agents work no beads (reap may retire them)")
 	fs.StringVar(&f.label, "label", "", "the tabs' label")
 	fs.StringVar(&f.group, "group", "", "a group token on the panes")
 	fs.IntVar(&f.perTab, "per-tab", 1, "agents per tab")
@@ -127,7 +129,7 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 }
 
 func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
-	req := spawn.Request{Session: session, Add: add, Label: f.label, Group: f.group, PerTab: f.perTab, Effort: f.effort,
+	req := spawn.Request{Session: session, Add: add, Label: f.label, Group: f.group, PerTab: f.perTab, Effort: f.effort, Role: f.role,
 		NoKickoff: f.noKickoff, Assign: f.assign, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
 		ReadyTimeout: f.readyWait, TrustFolder: f.trustFolder, Force: f.force, AllowUnguarded: f.allowUnguarded,
 		RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID}

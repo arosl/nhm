@@ -207,6 +207,11 @@ ALTER TABLE feedback ADD COLUMN stage TEXT;
 	`
 ALTER TABLE bindings ADD COLUMN effort TEXT;
 `,
+	// 6 (nhm.lifecycle): the role the agent was spawned for ("reviewer"):
+	// reap retires a reviewer that worked no beads.
+	`
+ALTER TABLE bindings ADD COLUMN role TEXT;
+`,
 }
 
 // SchemaVersion is the user_version this build writes.

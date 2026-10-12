@@ -545,26 +545,36 @@ func TestReapAndKill(t *testing.T) {
 
 	// Kill: one refusal refuses all, and nothing closes.
 	w.facts.assigned["RedStone"] = []Bead{{ID: "acfs-2"}}
-	if _, err := Kill(ctx, w.env, "w1", true); !errors.Is(err, ErrRefused) || len(w.h.wsClosed) != 0 {
+	if _, err := Kill(ctx, w.env, "w1", true, false); !errors.Is(err, ErrRefused) || len(w.h.wsClosed) != 0 {
 		t.Fatalf("kill with a refusal = %v", err)
 	}
 	w.facts.assigned["RedStone"] = nil
+	// Agents with no bead in any db searched: kill refuses unless
+	// --no-beads names them all bead-less.
+	w.facts.unknown = map[string]bool{"IcyKnoll": true, "RedStone": true, "GreenPike": true}
+	if _, err := Kill(ctx, w.env, "w1", false, false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "cannot verify the handoff") {
+		t.Fatalf("kill of bead-less agents = %v", err)
+	}
+	if res, err := Kill(ctx, w.env, "w1", false, true); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "--yes") || !res.Agents[0].NoBeads {
+		t.Fatalf("kill --no-beads (dry) = %+v %v", res, err)
+	}
+	w.facts.unknown = nil
 	// What retire cannot check refuses too: an agent nhm has no binding
 	// for, and a job in a shell's foreground.
 	w.h.add("w1:p9", "codex", "", "s9", herdr.StatusIdle)
-	if _, err := Kill(ctx, w.env, "w1", true); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "no binding for") {
+	if _, err := Kill(ctx, w.env, "w1", true, false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "no binding for") {
 		t.Fatalf("kill over an unbound agent = %v", err)
 	}
 	delete(w.h.agents, "w1:p9")
 	w.h.jobs = map[string]bool{"w1:p9": true}
-	if _, err := Kill(ctx, w.env, "w1", true); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "job in the foreground") {
+	if _, err := Kill(ctx, w.env, "w1", true, false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "job in the foreground") {
 		t.Fatalf("kill over a job = %v", err)
 	}
 	w.h.jobs = nil
-	if _, err := Kill(ctx, w.env, "w1", false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "--yes") {
+	if _, err := Kill(ctx, w.env, "w1", false, false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("kill without --yes = %v", err)
 	}
-	res, err := Kill(ctx, w.env, "w1", true)
+	res, err := Kill(ctx, w.env, "w1", true, false)
 	if err != nil || !res.Closed || len(w.h.wsClosed) != 1 || len(res.Agents) != 3 {
 		t.Fatalf("kill = %+v %v", res, err)
 	}
@@ -763,6 +773,60 @@ func TestImportValidation(t *testing.T) {
 	}
 	if list, _ := w.env.Bindings.List(ctx, bindings.Filter{}); len(list) != 1 || list[0].NativeSession.ResumeArgv != nil {
 		t.Fatalf("imported argv = %+v", list)
+	}
+}
+
+// Reap retires a bead-less agent only when it was spawned as a reviewer;
+// retire records a waived bead check in its operation.
+func TestReapReviewerAndNoBeadsAudit(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	rev := w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
+	if _, err := w.db.SQL().Exec(`UPDATE bindings SET role = 'reviewer' WHERE binding_id = ?`, rev.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.bind(t, "BlueLake", "w1:p2", herdr.StatusIdle)
+	w.facts.unknown = map[string]bool{"IcyKnoll": true, "BlueLake": true}
+	none := func(context.Context, string, string) (int, int, error) { return 0, 0, nil }
+	req := ReapRequest{Idle: time.Minute, WorkspaceID: "w1"}
+	if _, err := Reap(ctx, w.env, none, req); err != nil {
+		t.Fatal(err)
+	}
+	w.clock = w.clock.Add(2 * time.Minute)
+	items, err := Reap(ctx, w.env, none, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, it := range items {
+		got[it.MailName] = it.Action + ": " + it.Reason
+	}
+	if !strings.HasPrefix(got["IcyKnoll"], "retired") || !strings.Contains(got["BlueLake"], "cannot verify the handoff") {
+		t.Fatalf("reap = %v", got)
+	}
+	var request string
+	if err := w.db.SQL().QueryRow(`SELECT request_json FROM operations WHERE verb = 'reap'`).Scan(&request); err != nil ||
+		!strings.Contains(request, `"no_beads":true`) {
+		t.Fatalf("reap's operation = %s %v", request, err)
+	}
+}
+
+func TestBatchSSH(t *testing.T) {
+	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	core := func(s string) func() string { return func() string { return s } }
+	for _, c := range []struct {
+		env  map[string]string
+		core string
+		want string
+	}{
+		{nil, "", "ssh -o BatchMode=yes"},
+		{map[string]string{"GIT_SSH_COMMAND": "ssh -i ~/.ssh/deploy"}, "ssh -i other", "ssh -i ~/.ssh/deploy -o BatchMode=yes"},
+		{nil, "ssh -J jump", "ssh -J jump -o BatchMode=yes"},
+		{map[string]string{"GIT_SSH": "/usr/bin/plink"}, "", ""},
+	} {
+		if got := batchSSH(env(c.env), core(c.core)); got != c.want {
+			t.Errorf("%v %q: %q, want %q", c.env, c.core, got, c.want)
+		}
 	}
 }
 

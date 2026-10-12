@@ -107,14 +107,16 @@ type RetireRequest struct {
 
 // RetireResult is what retire did, or why it refused.
 type RetireResult struct {
-	OperationID     string     `json:"operation_id,omitempty"`
-	MailName        string     `json:"mail_name"`
-	BindingID       string     `json:"binding_id"`
-	PaneID          string     `json:"pane_id,omitempty"`
-	Refusals        []string   `json:"refusals"`
-	Actions         []string   `json:"actions"`
-	Done            bool       `json:"done"`
-	DryRun          bool       `json:"dry_run,omitempty"`
+	OperationID string   `json:"operation_id,omitempty"`
+	MailName    string   `json:"mail_name"`
+	BindingID   string   `json:"binding_id"`
+	PaneID      string   `json:"pane_id,omitempty"`
+	Refusals    []string `json:"refusals"`
+	Actions     []string `json:"actions"`
+	Done        bool     `json:"done"`
+	DryRun      bool     `json:"dry_run,omitempty"`
+	// NoBeads says the bead check was waived (--no-beads, or a reviewer).
+	NoBeads         bool       `json:"no_beads,omitempty"`
 	Transcript      *Preserved `json:"transcript,omitempty"`
 	ClosedBeads     []string   `json:"closed_beads,omitempty"`
 	IdentityRetired bool       `json:"identity_retired"`
@@ -142,7 +144,7 @@ type retirePlan struct {
 // Agent Mail identity, after every check of plan-v8 2.10 passed. A
 // refusal changes nothing and returns ErrRefused with the reasons.
 func Retire(ctx context.Context, env Env, req RetireRequest) (RetireResult, error) {
-	res := RetireResult{Refusals: []string{}, Actions: []string{}, Warnings: []string{}, DryRun: req.DryRun}
+	res := RetireResult{Refusals: []string{}, Actions: []string{}, Warnings: []string{}, DryRun: req.DryRun, NoBeads: req.NoBeads}
 	// A retry of an operation reports its outcome, before any check
 	// (which would refuse a binding the first run retired).
 	if !req.DryRun {
@@ -187,7 +189,7 @@ func Retire(ctx context.Context, env Env, req RetireRequest) (RetireResult, erro
 	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: req.Reason,
 		Scope: map[string]string{"binding_id": b.ID, "mail_project_key": b.MailProjectKey},
 		Request: map[string]any{"binding_id": b.ID, "generation": b.Generation, "keep_identity": req.KeepIdentity,
-			"cleanup_worktrees": req.CleanupWorktrees}}, env.now())
+			"cleanup_worktrees": req.CleanupWorktrees, "no_beads": req.NoBeads}}, env.now())
 	if err != nil {
 		return res, err
 	}

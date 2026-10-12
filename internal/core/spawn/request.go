@@ -65,6 +65,9 @@ type Request struct {
 	Effort string
 	// Label names the agents' tabs; Group is a token on the panes.
 	Label, Group string
+	// Role is what the agents are spawned for: "" (they work beads) or
+	// "reviewer" (reap may retire one that worked none).
+	Role string
 	// PerTab agents share one tab (pane.split); 1 by default.
 	PerTab int
 	// Prompt is the kickoff; empty means ACFS's default_new_agent
@@ -99,6 +102,9 @@ func (r *Request) Validate() error {
 	}
 	if r.Effort != "" && !kinds.EffortPattern.MatchString(r.Effort) {
 		return fmt.Errorf("--effort %q is not a plain word (low, medium, high, xhigh, max)", r.Effort)
+	}
+	if r.Role != "" && r.Role != RoleReviewer {
+		return fmt.Errorf("--role takes %q (or nothing), not %q", RoleReviewer, r.Role)
 	}
 	total := 0
 	for i, w := range r.Agents {
@@ -141,6 +147,9 @@ func (r *Request) Validate() error {
 }
 
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+// RoleReviewer marks agents spawned to review: they work no beads.
+const RoleReviewer = "reviewer"
 
 // ValidModel reports a model name nhm puts into an argv: it starts with a
 // letter or digit, so it never reads as a flag.

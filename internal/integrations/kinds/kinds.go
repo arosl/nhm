@@ -479,7 +479,7 @@ func init() {
 		no-cass no-cass-check no-kickoff op-id pane panes per-tab poll project prompt prompt-file ready-timeout
 		require-observations socket stagger-delay stagger-mode state t template thread timeout trust-folder
 		type until var version wait when with-cass with-memory yes
-		no-cass-context effort memory-query
+		no-cass-context effort memory-query role
 		dir no-user safety assign-work robot-format robot-spawn robot-send`) {
 		reserved[f] = true
 	}

@@ -378,12 +378,14 @@ func keepPaths() []string {
 	return paths
 }
 
-const killUsage = `Usage: nhm kill <session> [--yes] [--socket PATH] [--json]
+const killUsage = `Usage: nhm kill <session> [--yes] [--no-beads] [--socket PATH] [--json]
 
 Close a workspace. It runs the retire checks for every bound agent first
 and never bypasses them: one refusal refuses the kill and nothing closes.
 Then it retires each agent (its transcript preserved, its identity
 retired) and closes the workspace. Without --yes it only reports.
+--no-beads is retire's, for every agent: the workspace's agents worked no
+beads (agents spawned with --role reviewer never need it).
 `
 
 func runKill(args []string, stdout, stderr io.Writer) int {
@@ -391,6 +393,7 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, killUsage) }
 	yes := fs.Bool("yes", false, "close it")
+	noBeads := fs.Bool("no-beads", false, "the agents worked no beads; do not require any")
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args)
@@ -418,7 +421,7 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	var res lifecycle.KillResult
 	code, err := underOwner(ctx, ie, func() error {
 		var kerr error
-		res, kerr = lifecycle.Kill(ctx, lenv, ws, *yes)
+		res, kerr = lifecycle.Kill(ctx, lenv, ws, *yes, *noBeads)
 		return kerr
 	})
 	// Only a rule's refusal exits 2; herdr or Agent Mail failing is 1.
