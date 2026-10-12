@@ -12,12 +12,14 @@ import (
 // cliFacts is a quiet host: no reservations, nothing dirty, no beads.
 type cliFacts struct{ assigned []lifecycle.Bead }
 
-func (cliFacts) Reservations(context.Context, string) ([]lifecycle.Reservation, error) { return nil, nil }
-func (cliFacts) ReservedEver(context.Context, string, string) ([]string, error)       { return nil, nil }
-func (cliFacts) DirtyFiles(context.Context, string) ([]string, error)                 { return nil, nil }
-func (cliFacts) Worktrees(context.Context, string) ([]string, error)                  { return nil, nil }
-func (cliFacts) WorktreeState(context.Context, string) (bool, bool, error)            { return false, true, nil }
-func (cliFacts) RemoveWorktree(context.Context, string, string) error                 { return nil }
+func (cliFacts) Reservations(context.Context, string) ([]lifecycle.Reservation, error) {
+	return nil, nil
+}
+func (cliFacts) ReservedEver(context.Context, string, string) ([]string, error) { return nil, nil }
+func (cliFacts) DirtyFiles(context.Context, string) ([]string, error)           { return nil, nil }
+func (cliFacts) Worktrees(context.Context, string) ([]string, error)            { return nil, nil }
+func (cliFacts) WorktreeState(context.Context, string) (bool, bool, error)      { return false, true, nil }
+func (cliFacts) RemoveWorktree(context.Context, string, string) error           { return nil }
 func (f cliFacts) Assigned(context.Context, string, string) ([]lifecycle.Bead, error) {
 	return f.assigned, nil
 }
