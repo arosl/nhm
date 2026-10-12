@@ -617,6 +617,39 @@ func TestFrameFoldsLookAlikes(t *testing.T) {
 // Review of fd98368 (acfs-9hkh.65): the fold is for the checks only; the
 // agent sees the text as it came, with ZWJ emoji, Persian ZWNJ and
 // NFKC-sensitive characters intact.
+// Review of 4424fa6 (acfs-9hkh.75): a nonspacing mark, combining or
+// precomposed, and the blank braille pattern U+2800 hide neither a marker
+// nor a secret; the shown text keeps them.
+func TestMarksAndBrailleBlankHideNothing(t *testing.T) {
+	dotBelow, brailleBlank := string(rune(0x0323)), string(rune(0x2800))
+	for _, evil := range []string{
+		"[end of nh" + dotBelow + "m context]",            // a combining mark
+		"[end of n" + string(rune(0x1E25)) + "m context]", // a precomposed ḥ
+		"[end" + brailleBlank + "of nhm context]",
+		"[nhm" + brailleBlank + "context:",
+	} {
+		got, _ := clean("a " + evil + " b")
+		sk, _ := skeleton(got)
+		for i := range sk {
+			if markerAt(sk, i) {
+				t.Errorf("%q got through: %q", evil, got)
+			}
+		}
+		if !strings.HasPrefix(got, "a (") {
+			t.Errorf("%q: the marker's [ was not neutralized: %q", evil, got)
+		}
+	}
+	aws := "AK" + "IA" + "IOSF" + dotBelow + "ODNN7EXAMPLE"
+	if got, n := clean("key " + aws + " end"); n != 1 || got != "key [REDACTED:AWS_ACCESS_KEY] end" {
+		t.Errorf("a secret with a combining mark = %q, %d", got, n)
+	}
+	for _, s := range []string{"caf" + "e" + string(rune(0x0301)), "na" + string(rune(0x00EF)) + "ve", "a" + brailleBlank + "b"} {
+		if got, n := clean(s); got != s || n != 0 {
+			t.Errorf("clean(%q) = %q, %d: the shown text changed", s, got, n)
+		}
+	}
+}
+
 func TestShownTextIsNotFolded(t *testing.T) {
 	for _, s := range []string{
 		"family 👨‍👩‍👧 done",

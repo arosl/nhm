@@ -25,9 +25,9 @@ func ignorable(r rune) bool {
 		unicode.Is(unicode.Variation_Selector, r) || r == 0x034F
 }
 
-// folded is s without its ignorable code points and with each rune in
-// NFKC (a full-width "［" is "["), and for each byte of text the byte
-// range of s it came from.
+// folded is s without its ignorable code points, each rune in NFKD (a
+// full-width "［" is "[") without its nonspacing marks, and for each byte
+// of text the byte range of s it came from.
 type folded struct {
 	text       string
 	start, end []int
@@ -44,7 +44,7 @@ func fold(s string) folded {
 		if ignorable(r) {
 			continue
 		}
-		piece := norm.NFKC.String(s[i : i+size])
+		piece := bare(norm.NFKD.String(s[i : i+size]))
 		for range len(piece) {
 			f.start, f.end = append(f.start, i), append(f.end, i+size)
 		}
@@ -52,6 +52,25 @@ func fold(s string) folded {
 	}
 	f.text = b.String()
 	return f
+}
+
+// bare removes what a rune's NFKD form carries that can hide a marker or
+// a secret without changing how it reads (review of 4424fa6): it drops
+// nonspacing marks (a combining dot under "h" or "F", or the mark of a
+// precomposed "ḥ"), and turns the blank braille pattern U+2800, which
+// renders as a space, into one. The fold works rune by rune, so NFKC
+// would never compose a mark into its letter; decomposing and dropping
+// the marks leaves the base letter.
+func bare(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+			return -1
+		case r == 0x2800:
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // original maps a byte range of the folded text to the range of s it
