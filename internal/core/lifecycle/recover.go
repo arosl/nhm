@@ -423,6 +423,13 @@ func ImportFrom(ctx context.Context, env Env, dir string) ([]string, []string, e
 	var notes []string
 	ids := map[string]string{}
 	for _, eb := range x.Bindings {
+		// An argv from another host is never kept: nhm builds the resume
+		// argv from the kind and the validated session id.
+		if eb.NativeSession != nil {
+			ns := *eb.NativeSession
+			ns.ResumeArgv = nil
+			eb.NativeSession = &ns
+		}
 		b, err := env.Bindings.Create(ctx, bindings.New{MailName: eb.MailName, MailProjectKey: x.Project, ProjectID: eb.ProjectID,
 			Provenance: bindings.Imported, Occupant: bindings.Occupant{Kind: eb.Kind, Model: eb.Model, Effort: eb.Effort,
 				NativeSession: eb.NativeSession,
@@ -442,20 +449,98 @@ func ImportFrom(ctx context.Context, env Env, dir string) ([]string, []string, e
 		ids[eb.BindingID] = b.ID
 		notes = append(notes, eb.MailName+": imported as "+b.ID+" (displaced; nhm adopt binds it)")
 	}
-	for _, t := range x.Transcripts {
-		id, ok := ids[t.BindingID]
-		if !ok || filepath.Base(t.File) != t.File {
-			continue
-		}
-		b, err := env.Bindings.Get(ctx, id)
+	if len(x.Transcripts) > 0 {
+		root, err := openTranscripts(dir)
 		if err != nil {
-			continue
+			notes = append(notes, "transcripts: "+err.Error())
+			return x.Keep, notes, nil
 		}
-		if _, err := Preserve(ctx, env.DB, env.InstanceDir, b, filepath.Join(dir, "transcripts", t.File), "import", env.now()); err != nil {
-			notes = append(notes, "transcript "+t.File+": "+err.Error())
+		defer root.Close()
+		for _, t := range x.Transcripts {
+			id, ok := ids[t.BindingID]
+			if !ok || filepath.Base(t.File) != t.File {
+				continue
+			}
+			b, err := env.Bindings.Get(ctx, id)
+			if err != nil {
+				continue
+			}
+			if err := importTranscript(ctx, env, root, b, t.File); err != nil {
+				notes = append(notes, "transcript "+t.File+": "+err.Error())
+			}
 		}
 	}
 	return x.Keep, notes, nil
+}
+
+// maxImportTranscript bounds one imported transcript.
+const maxImportTranscript = 256 << 20
+
+// openTranscripts opens the export's transcripts directory as a root, and
+// checks that what it opened is the directory Lstat saw (not a link, not
+// swapped between the two).
+func openTranscripts(dir string) (*os.Root, error) {
+	path := filepath.Join(dir, "transcripts")
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.IsDir() {
+		return nil, errors.New("not a directory (a link is not followed)")
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	after, err := root.Stat(".")
+	if err != nil || !os.SameFile(before, after) {
+		_ = root.Close()
+		return nil, errors.New("the directory changed while it was opened")
+	}
+	return root, nil
+}
+
+// importTranscript copies one transcript out of the export's root (never
+// through a link out of it, a regular file only, at most
+// maxImportTranscript bytes) into a staging dir in the instance, and
+// keeps it from there.
+func importTranscript(ctx context.Context, env Env, root *os.Root, b bindings.Binding, name string) error {
+	in, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	fi, err := in.Stat()
+	switch {
+	case err != nil:
+		return err
+	case !fi.Mode().IsRegular():
+		return errors.New("not a regular file")
+	case fi.Size() > maxImportTranscript:
+		return fmt.Errorf("%d bytes, over the %d-byte limit", fi.Size(), maxImportTranscript)
+	}
+	stage, err := os.MkdirTemp(env.InstanceDir, ".import-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(stage) }()
+	staged := filepath.Join(stage, name)
+	out, err := os.OpenFile(staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	n, err := io.Copy(out, io.LimitReader(in, maxImportTranscript+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if n > maxImportTranscript {
+		return errors.New("it grew past the size limit while it was copied")
+	}
+	_, err = Preserve(ctx, env.DB, env.InstanceDir, b, staged, "import", env.now())
+	return err
 }
 
 // exportDir makes an export's directory, or accepts an existing one only
@@ -497,6 +582,7 @@ var (
 	mailNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,63}$`)
 	idPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	reasonPattern   = regexp.MustCompile(`^[a-z][a-z-]{0,31}$`)
+	wordPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
 
 // validateExport checks every field of an export that reaches a path, an
@@ -526,8 +612,16 @@ func validateExport(x Export) error {
 		if !idPattern.MatchString(eb.ProjectID) {
 			bad = append(bad, "project_id")
 		}
-		if eb.NativeSession != nil && !kinds.SessionPattern.MatchString(eb.NativeSession.Value) {
-			bad = append(bad, "native_session")
+		if ns := eb.NativeSession; ns != nil {
+			if !kinds.SessionPattern.MatchString(ns.Value) {
+				bad = append(bad, "native_session")
+			}
+			for _, w := range []string{ns.Source, ns.Agent, ns.Kind} {
+				if w != "" && !wordPattern.MatchString(w) {
+					bad = append(bad, "native_session's source, agent or kind")
+					break
+				}
+			}
 		}
 		if strings.ContainsAny(eb.Token, " \t\r\n") {
 			bad = append(bad, "token")

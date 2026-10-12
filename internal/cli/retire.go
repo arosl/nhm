@@ -95,7 +95,7 @@ func underOwner(ctx context.Context, ie *instanceEnv, fn func() error) (int, err
 	return code, err
 }
 
-const retireUsage = `Usage: nhm retire <Name> [--keep-identity] [--cleanup-worktrees] [--dry-run]
+const retireUsage = `Usage: nhm retire <Name> [--keep-identity] [--cleanup-worktrees] [--no-beads] [--dry-run]
                   [--project DIR] [--op-id ID] [--socket PATH] [--json]
 
 Close an agent's pane, preserve its transcript (and index it in CASS),
@@ -103,9 +103,12 @@ record the closed beads it worked, and retire its Agent Mail identity
 with the kept token. It refuses, before anything changes, when the agent
 is working, blocked or unknown, is displaced or being recycled, holds a
 reservation, has uncommitted changes in files it reserved, has a dirty
-or unmerged worktree, has a bead in progress with no handoff comment, or
-when Agent Mail, br or git cannot be read. Worktrees are listed, and
-removed only with --cleanup-worktrees (merged, clean, never forced).
+or unmerged worktree, has a bead in progress with no handoff comment, has
+no bead at all in the bead databases searched (the project's own and
+[lifecycle] bead_dbs in nhm's config), or when Agent Mail, br or git
+cannot be read. --no-beads retires an agent that worked no beads, such
+as a reviewer. Worktrees are listed, and removed only with
+--cleanup-worktrees (merged, clean, never forced).
 
 Exit codes: 0 retired (or the dry run passed); 1 an error; 2 refused.
 `
@@ -116,6 +119,7 @@ func runRetire(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, retireUsage) }
 	keep := fs.Bool("keep-identity", false, "leave the Agent Mail identity active")
 	cleanup := fs.Bool("cleanup-worktrees", false, "remove the agent's merged, clean worktrees")
+	noBeads := fs.Bool("no-beads", false, "the agent worked no beads; do not require one")
 	dryRun := fs.Bool("dry-run", false, "check and list the actions; change nothing")
 	project := fs.String("project", "", "the name's project")
 	opID := fs.String("op-id", "", "operation id, for an idempotent retry")
@@ -139,7 +143,8 @@ func runRetire(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
-	req := lifecycle.RetireRequest{Target: pos[0], KeepIdentity: *keep, CleanupWorktrees: *cleanup, DryRun: *dryRun, OperationID: *opID}
+	req := lifecycle.RetireRequest{Target: pos[0], KeepIdentity: *keep, CleanupWorktrees: *cleanup, NoBeads: *noBeads,
+		DryRun: *dryRun, OperationID: *opID}
 	if *project != "" {
 		s, err := projectScope(ctx, ie.inst.ID, *project)
 		if err != nil {

@@ -96,8 +96,11 @@ type RetireRequest struct {
 	// CleanupWorktrees removes the agent's clean, merged worktrees; they
 	// are only listed otherwise.
 	CleanupWorktrees bool
-	DryRun           bool
-	OperationID      string
+	// NoBeads says the agent worked no beads (a reviewer): retire then
+	// does not require a bead of it in the bead databases.
+	NoBeads     bool
+	DryRun      bool
+	OperationID string
 	// Reason is recorded: retire, reap or kill.
 	Reason string
 }
@@ -423,6 +426,17 @@ func check(ctx context.Context, env Env, req RetireRequest, b bindings.Binding, 
 	for _, bead := range beads {
 		if !bead.HasHandoff {
 			refuse("bead %s is in progress for %s with no handoff comment", bead.ID, b.MailName)
+		}
+	}
+	// No bead in progress proves nothing when the databases searched hold
+	// no bead of the agent at all: its work may be in another one.
+	if err == nil && len(beads) == 0 && !req.NoBeads {
+		switch known, kerr := env.Facts.Known(ctx, project, b.MailName); {
+		case kerr != nil:
+			refuse("br cannot be read: %v", kerr)
+		case !known:
+			refuse("cannot verify the handoff: no bead in the searched bead databases is assigned to %s "+
+				"(name its database in [lifecycle] bead_dbs, or pass --no-beads for an agent that worked none)", b.MailName)
 		}
 	}
 

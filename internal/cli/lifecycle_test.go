@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,6 +28,7 @@ func (f cliFacts) Assigned(context.Context, string, string) ([]lifecycle.Bead, e
 	return f.assigned, nil
 }
 func (cliFacts) Closed(context.Context, string, string) ([]string, error) { return nil, nil }
+func (cliFacts) Known(context.Context, string, string) (bool, error)      { return true, nil }
 
 func TestLifecycleVerbs(t *testing.T) {
 	s, inst, _ := waitInstance(t, func(pane string) map[string]any {
@@ -66,6 +68,14 @@ func TestLifecycleVerbs(t *testing.T) {
 		t.Fatalf("restore = %d %s", code, out)
 	}
 	ownNhm(t, inst)
+	// kill: a refusal (BlueLake works; no --yes) exits 2, and a herdr it
+	// cannot reach exits 1.
+	if code, _, errOut = run("kill", "swarm", "--socket", sock); code != 2 {
+		t.Fatalf("kill refused = %d %s", code, errOut)
+	}
+	if code, _, errOut = run("kill", "swarm", "--socket", filepath.Join(t.TempDir(), "gone.sock")); code != 1 {
+		t.Fatalf("kill without herdr = %d %s", code, errOut)
+	}
 	code, out, errOut = run("retire", "IcyKnoll", "--keep-identity", "--socket", sock, "--json")
 	res := decodeEnvelope(t, out)["result"].(map[string]any)
 	if code != 0 || res["done"] != true || len(closed) != 1 {

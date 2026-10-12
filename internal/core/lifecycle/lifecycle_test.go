@@ -153,10 +153,12 @@ type fakeFacts struct {
 	wtState      map[string][2]bool
 	ignored      map[string][]string
 	fetchErr     error
-	assigned     map[string][]Bead
-	closed       []string
-	fail         error
-	removed      []string
+	// unknown agents have no bead in the databases searched.
+	unknown  map[string]bool
+	assigned map[string][]Bead
+	closed   []string
+	fail     error
+	removed  []string
 }
 
 func (f *fakeFacts) Reservations(context.Context, string) ([]Reservation, error) {
@@ -180,6 +182,9 @@ func (f *fakeFacts) Assigned(_ context.Context, _, agent string) ([]Bead, error)
 	return f.assigned[agent], nil
 }
 func (f *fakeFacts) Closed(context.Context, string, string) ([]string, error) { return f.closed, nil }
+func (f *fakeFacts) Known(_ context.Context, _, agent string) (bool, error) {
+	return !f.unknown[agent], nil
+}
 
 type fakeMail struct {
 	retired []string
@@ -378,6 +383,9 @@ func TestRetireRefusals(t *testing.T) {
 			w.facts.fail = errors.New("connection refused")
 		}, "cannot be read"},
 		{"caller", func(w *world) { w.env.Caller = "w1:p1" }, "runs in this pane"},
+		{"no bead in any db searched", func(w *world) {
+			w.facts.unknown = map[string]bool{"IcyKnoll": true}
+		}, "cannot verify the handoff"},
 		{"agent mail server down", func(w *world) { w.mail.down = true }, "server cannot be reached"},
 		{"herdr lost a working agent", func(w *world) {
 			delete(w.h.agents, "w1:p1")
@@ -395,8 +403,15 @@ func TestRetireRefusals(t *testing.T) {
 			}
 		})
 	}
-	// A dirty file another agent holds now is not the retiring agent's.
+	// --no-beads: an agent that worked no beads (a reviewer) retires.
 	w := newWorld(t)
+	w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
+	w.facts.unknown = map[string]bool{"IcyKnoll": true}
+	if _, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", NoBeads: true, DryRun: true}); err != nil {
+		t.Fatalf("--no-beads = %v", err)
+	}
+	// A dirty file another agent holds now is not the retiring agent's.
+	w = newWorld(t)
 	w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
 	w.facts.ever["IcyKnoll"] = []string{"internal/**"}
 	w.facts.dirty = []string{"internal/x.go"}
@@ -719,6 +734,42 @@ func TestImportValidation(t *testing.T) {
 	var n int
 	if err := w.db.SQL().QueryRow(`SELECT COUNT(*) FROM transcripts`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("transcripts = %d %v", n, err)
+	}
+	// A transcript over the size limit is not copied (a sparse file).
+	x = good()
+	x.Transcripts = []ExportTranscript{{BindingID: "bnd-1", File: "big.jsonl", Reason: "retire"}}
+	dir = write(t, x)
+	if err := os.MkdirAll(filepath.Join(dir, "transcripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	big, err := os.Create(filepath.Join(dir, "transcripts", "big.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := big.Truncate(maxImportTranscript + 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = big.Close()
+	w = newWorld(t)
+	if _, notes, err := ImportFrom(ctx, w.env, dir); err != nil || !strings.Contains(strings.Join(notes, "|"), "over the") {
+		t.Fatalf("oversized transcript = %v %v", notes, err)
+	}
+	// A resume argv from the other host is not kept.
+	x = good()
+	x.Bindings[0].NativeSession.ResumeArgv = []string{"bash", "-c", "x"}
+	w = newWorld(t)
+	if _, _, err := ImportFrom(ctx, w.env, write(t, x)); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := w.env.Bindings.List(ctx, bindings.Filter{}); len(list) != 1 || list[0].NativeSession.ResumeArgv != nil {
+		t.Fatalf("imported argv = %+v", list)
+	}
+}
+
+func TestBrReadArgs(t *testing.T) {
+	got := strings.Join(brRead([]string{"--db", "/x/beads.db"}), " ")
+	if got != "--db /x/beads.db --no-auto-import --no-auto-flush --allow-stale" {
+		t.Fatalf("brRead = %q", got)
 	}
 }
 

@@ -61,6 +61,10 @@ type Facts interface {
 	Assigned(ctx context.Context, root, agent string) ([]Bead, error)
 	// Closed are the beads assigned to the agent that are closed.
 	Closed(ctx context.Context, root, agent string) ([]string, error)
+	// Known reports any bead, of any status, assigned to the agent in the
+	// databases searched: without one, the search could not have found
+	// the agent's work, and a handoff check would pass on nothing.
+	Known(ctx context.Context, root, agent string) (bool, error)
 }
 
 // CLI reads the facts with the am, git and br commands, argv only.
@@ -78,6 +82,11 @@ func run(ctx context.Context, dir string, name string, args ...string) ([]byte, 
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	// Never wait for a person: git asks for no credentials and ssh runs in
+	// batch mode. WaitDelay ends the wait for output when a child (an ssh
+	// that git started) outlives the command.
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+	cmd.WaitDelay = 5 * time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -242,12 +251,19 @@ type brIssue struct {
 // output is {"issues": [...], "has_more": ...}. A page that is not the
 // whole list is an error: a bead left out could be work in progress.
 func brList(ctx context.Context, root string, db []string, status, agent string) ([]brIssue, error) {
-	args := append(append([]string{}, db...), "list", "--status", status, "--assignee", agent, "--limit", "0", "--json")
+	args := append(brRead(db), "list", "--status", status, "--assignee", agent, "--limit", "0", "--json")
 	out, err := run(ctx, root, "br", args...)
 	if err != nil {
 		return nil, err
 	}
 	return parseBrList(out)
+}
+
+// brRead are br's leading arguments for a read of db: the database, and
+// no import of its JSONL, no flush and no freshness wait, so reading
+// another repository's database takes no write lock there.
+func brRead(db []string) []string {
+	return append(append([]string{}, db...), "--no-auto-import", "--no-auto-flush", "--allow-stale")
 }
 
 // ErrNoBeadDB means no bead database can be searched for a project, so a
@@ -348,7 +364,7 @@ func assignedIn(ctx context.Context, root string, db []string, agent string) ([]
 			continue
 		}
 		b := Bead{ID: is.ID, Title: is.Title, Status: is.Status}
-		args := append(append([]string{}, db...), "comments", "list", is.ID, "--json")
+		args := append(brRead(db), "comments", "list", is.ID, "--json")
 		out, err := run(ctx, root, "br", args...)
 		if err != nil {
 			return nil, err
@@ -396,6 +412,27 @@ func (c CLI) Closed(ctx context.Context, root, agent string) ([]string, error) {
 		}
 	}
 	return ids, nil
+}
+
+// Known lists beads of every status assigned to the agent, in each
+// database, and reports whether any exists.
+func (c CLI) Known(ctx context.Context, root, agent string) (bool, error) {
+	dbs, err := c.beadDBs(root)
+	if err != nil {
+		return false, err
+	}
+	for _, db := range dbs {
+		issues, err := brList(ctx, root, db, "all", agent)
+		if err != nil {
+			return false, err
+		}
+		for _, is := range issues {
+			if is.Assignee == "" || is.Assignee == agent {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // globMatch is a reservation glob match, as the Bash's [[ == ]]: "*"
