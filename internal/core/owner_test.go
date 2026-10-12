@@ -112,6 +112,14 @@ func TestIntentMarkerHoldsSharedTakers(t *testing.T) {
 	if err := WithOwnerShared(context.Background(), dir, func(Owner) error { return nil }); err != nil {
 		t.Fatalf("a stale marker held a shared taker: %v", err)
 	}
+	// A marker from the future is stale too.
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(intent, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := WithOwnerShared(context.Background(), dir, func(Owner) error { return nil }); err != nil {
+		t.Fatalf("a marker from the future held a shared taker: %v", err)
+	}
 }
 
 // acfs-9hkh.77 F5: overlapping shared holders, which alone would keep the

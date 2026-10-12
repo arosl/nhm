@@ -159,10 +159,16 @@ const (
 	intentRefresh = 10 * time.Second
 )
 
-// intentFresh says whether a switch is waiting for the lock now.
+// intentFresh says whether a switch is waiting for the lock now. A
+// marker from the future (a clock step, or a forged mtime) is stale: it
+// would hold every shared taker until the clock caught up.
 func intentFresh(path string, now time.Time) bool {
 	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular() && now.Sub(info.ModTime()) < IntentMaxAge
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	age := now.Sub(info.ModTime())
+	return age >= 0 && age < IntentMaxAge
 }
 
 // lockOwner takes owner.lock with how (LOCK_SH or LOCK_EX), polling until
