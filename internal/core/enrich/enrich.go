@@ -19,7 +19,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/arosl/nhm/internal/integrations/cass"
 	"github.com/arosl/nhm/internal/integrations/cm"
@@ -296,13 +299,29 @@ func (r *Retriever) item(source, id, label, text string) Item {
 // delimiter is what could read as the frame's own open or close line.
 var delimiter = regexp.MustCompile(`(?i)\[(\s*(?:end\s+of\s+)?nhm\s+context)`)
 
-// clean makes text from CM or CASS safe to frame: secrets redacted (as
-// ACFS's Bash --with-cass does), one line, and no "[nhm context" or
-// "[end of nhm context" that could open or close the frame early. It
-// returns the text and the number of secrets replaced.
+// clean makes text from CM or CASS safe to frame: folded (format
+// characters such as a zero-width space removed, then NFKC, so a
+// full-width "［" is "["), secrets redacted (as ACFS's Bash --with-cass
+// does), one line, and no "[nhm context" or "[end of nhm context" that
+// could open or close the frame early. It returns the text and the number
+// of secrets replaced. Folding comes first, so neither a secret nor a
+// marker hides behind a look-alike.
 func clean(s string) (string, int) {
-	s, n := redaction.Redact(s)
+	s, n := redaction.Redact(fold(s))
 	return neutralize(oneLine(s)), n
+}
+
+// safe is clean without the redaction, for nhm's own text (the query).
+func safe(s string) string { return neutralize(oneLine(fold(s))) }
+
+func fold(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	return norm.NFKC.String(s)
 }
 
 func neutralize(s string) string { return delimiter.ReplaceAllString(s, "($1") }

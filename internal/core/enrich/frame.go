@@ -77,9 +77,9 @@ func mark(items []Item, given map[string]bool) []Item {
 	return out
 }
 
-func cmHeader(q string) string { return fmt.Sprintf("CM rules for %q:", neutralize(oneLine(q))) }
+func cmHeader(q string) string { return fmt.Sprintf("CM rules for %q:", safe(q)) }
 func cassHeader(q string) string {
-	return fmt.Sprintf("CASS: earlier sessions that match %q:", neutralize(oneLine(q)))
+	return fmt.Sprintf("CASS: earlier sessions that match %q:", safe(q))
 }
 
 func itemLine(it Item) string {

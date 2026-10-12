@@ -4,7 +4,8 @@
 // table, its categories and the literal prefilter are kept; Redact
 // replaces each match with [REDACTED:<CATEGORY>], as ACFS's Bash
 // (herdr_agents_redact) does, without ntm's hash suffix, allowlist,
-// extra patterns and line info.
+// extra patterns and line info; a private key's whole PEM block is
+// redacted, not only its header line (a deliberate strengthening).
 
 // Package redaction replaces secrets in text that nhm puts into a prompt
 // from elsewhere: CM rules and CASS hits from other sessions.
@@ -79,7 +80,13 @@ var patterns = compile([]struct {
 		[]literals{{anyOf: []string{"aws_secret", "secret_access_key", "secret_key"}, ignoreCase: true}}},
 	{CategoryJWT, `eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]+`, 85, []literals{{anyOf: []string{"eyJ"}}}},
 	{CategoryBearerToken, `(?i)bearer\s+[a-zA-Z0-9._-]{20,}`, 80, []literals{{anyOf: []string{"bearer"}, ignoreCase: true}}},
-	{CategoryPrivateKey, `-----BEGIN\s+(RSA\s+|DSA\s+|EC\s+|OPENSSH\s+)?PRIVATE KEY-----`, 95,
+	// nhm's strengthening: ntm redacts only the PEM header line, so the
+	// key's body reached the prompt. The whole block goes, and a block cut
+	// off before its END line (a hit truncated to its budget) goes to the
+	// end of its base64 body.
+	{CategoryPrivateKey, `-----BEGIN\s+([A-Z]+\s+)?PRIVATE KEY-----[\s\S]*?-----END\s+([A-Z]+\s+)?PRIVATE KEY-----`, 97,
+		[]literals{{anyOf: []string{"private key"}, ignoreCase: true}}},
+	{CategoryPrivateKey, `-----BEGIN\s+([A-Z]+\s+)?PRIVATE KEY-----[A-Za-z0-9+/=:,\s\\-]*`, 96,
 		[]literals{{anyOf: []string{"private key"}, ignoreCase: true}}},
 	{CategoryDatabaseURL, `(?i)(postgres|mysql|mongodb|redis)://[^:]+:[^@]+@[^\s]+`, 85,
 		[]literals{{anyOf: []string{"postgres://", "mysql://", "mongodb://", "redis://"}, ignoreCase: true}}},

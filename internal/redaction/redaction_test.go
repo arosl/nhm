@@ -30,6 +30,25 @@ func TestRedactReplacesEachKind(t *testing.T) {
 	}
 }
 
+// nhm's strengthening: the key's body goes too, also when the block was
+// cut off before its END line.
+func TestRedactWholePrivateKeyBlock(t *testing.T) {
+	begin, end := "-----BEGIN RSA PRIVATE "+"KEY-----", "-----END RSA PRIVATE "+"KEY-----"
+	body := "MIIEowIBAAKCAQEA7bq3\nQmFzZTY0Ym9keQ==\n"
+	got, n := Redact("before\n" + begin + "\n" + body + end + "\nafter")
+	if got != "before\n[REDACTED:PRIVATE_KEY]\nafter" || n != 1 {
+		t.Fatalf("whole block = %q, %d", got, n)
+	}
+	got, _ = Redact("key: " + begin + "\n" + body)
+	if strings.Contains(got, "MIIEow") || strings.Contains(got, "Ym9keQ") || !strings.Contains(got, "[REDACTED:PRIVATE_KEY]") {
+		t.Fatalf("cut-off block = %q", got)
+	}
+	got, _ = Redact(begin + " QmFzZTY0 " + end + ". The rest stays.")
+	if got != "[REDACTED:PRIVATE_KEY]. The rest stays." {
+		t.Fatalf("one-line block = %q", got)
+	}
+}
+
 func TestRedactLeavesPlainTextAlone(t *testing.T) {
 	for _, s := range []string{"", "Run the login tests after an auth change.", "the token bucket refills", "sk-short"} {
 		if got, n := Redact(s); got != s || n != 0 {

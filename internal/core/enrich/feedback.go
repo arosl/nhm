@@ -2,7 +2,9 @@ package enrich
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,18 +204,21 @@ func Mark(ctx context.Context, env FeedbackEnv, opID, ruleID, mailName string, h
 		return res, nil
 	}
 	// Only the run that claims the key calls CM.
-	won, err := claim(ctx, env.DB, key, env.now())
+	l, err := claim(ctx, env.DB, key, env.now())
 	if err != nil {
 		return res, err
 	}
-	if !won {
+	if l == nil {
 		return res, ErrInProgress
 	}
-	if err := env.CM.Mark(ctx, ruleID, helpful, res.Session); err != nil {
-		unclaim(ctx, env.DB, key)
+	cctx, cancel := context.WithTimeout(ctx, cmCallTimeout)
+	err = env.CM.Mark(cctx, ruleID, helpful, res.Session)
+	cancel()
+	if err != nil {
+		l.release(ctx)
 		return res, err
 	}
-	return res, setApplied(ctx, env.DB, key, env.now())
+	return res, l.applied(ctx, env.now())
 }
 
 // Bead is the part of a bead that the implicit outcome reads.
@@ -330,11 +335,11 @@ func outcome(ctx context.Context, env FeedbackEnv, beads BeadReader, key string,
 		return fail(err)
 	}
 	// Only the run that claims the key calls CM.
-	won, err := claim(ctx, env.DB, key, env.now())
+	l, err := claim(ctx, env.DB, key, env.now())
 	if err != nil {
 		return fail(err)
 	}
-	if !won {
+	if l == nil {
 		if st, err = feedbackRow(ctx, env.DB, key); err == nil && st.applied {
 			res.State = "repeat"
 			return res
@@ -343,25 +348,30 @@ func outcome(ctx context.Context, env FeedbackEnv, beads BeadReader, key string,
 		return res
 	}
 	if st, err = feedbackRow(ctx, env.DB, key); err != nil {
-		unclaim(ctx, env.DB, key)
+		l.release(ctx)
 		return fail(err)
 	}
 	// A retry after outcome-apply failed does not repeat cm outcome.
 	if st.stage != stageOutcome {
-		if err := env.CM.Outcome(ctx, "success", res.Rules, res.Session, text); err != nil {
-			unclaim(ctx, env.DB, key)
-			return fail(err)
+		cctx, cancel := context.WithTimeout(ctx, cmCallTimeout)
+		err = env.CM.Outcome(cctx, "success", res.Rules, res.Session, text)
+		cancel()
+		if err == nil {
+			err = l.stage(ctx, stageOutcome)
 		}
-		if err := setStage(ctx, env.DB, key, stageOutcome); err != nil {
-			unclaim(ctx, env.DB, key)
+		if err != nil {
+			l.release(ctx)
 			return fail(err)
 		}
 	}
-	if err := env.CM.OutcomeApply(ctx, res.Session); err != nil {
-		unclaim(ctx, env.DB, key)
+	cctx, cancel := context.WithTimeout(ctx, cmCallTimeout)
+	err = env.CM.OutcomeApply(cctx, res.Session)
+	cancel()
+	if err != nil {
+		l.release(ctx)
 		return fail(err)
 	}
-	if err := setApplied(ctx, env.DB, key, env.now()); err != nil {
+	if err := l.applied(ctx, env.now()); err != nil {
 		return fail(err)
 	}
 	res.State = "applied"
@@ -371,8 +381,21 @@ func outcome(ctx context.Context, env FeedbackEnv, beads BeadReader, key string,
 // stageOutcome: `cm outcome` ran for the key; only outcome-apply is left.
 const stageOutcome = "outcome"
 
+// cmCallTimeout bounds each cm call. A run makes at most two under one
+// claim, so it ends well inside claimLease: no second run claims a key
+// while the first can still call CM. A variable for the tests.
+var cmCallTimeout = 60 * time.Second
+
 // claimLease frees the claim of a run that died holding it.
 const claimLease = 5 * time.Minute
+
+// releaseTimeout bounds a release, which runs on a fresh context: a
+// cancelled run still frees its key.
+const releaseTimeout = 5 * time.Second
+
+// ErrLostClaim: the lease passed and another run claimed the key; this
+// run's write is refused.
+var ErrLostClaim = errors.New("the feedback claim was lost to another run")
 
 type feedbackState struct {
 	outcome string
@@ -396,27 +419,62 @@ func feedbackRow(ctx context.Context, db *store.DB, key string) (feedbackState, 
 	return st, nil
 }
 
+// lease is a run's claim of a key. Its token fences every write: a run
+// whose lease passed and was taken over writes nothing.
+type lease struct {
+	db    *store.DB
+	key   string
+	token string
+}
+
 // claim takes a key for this run: an unapplied key whose claim is free,
-// or older than the lease. It reports whether this run won it.
-func claim(ctx context.Context, db *store.DB, key string, now time.Time) (bool, error) {
-	res, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET claimed_at = ? WHERE feedback_key = ? AND applied_at IS NULL
-		AND (claimed_at IS NULL OR CAST(claimed_at AS INTEGER) < ?)`,
-		now.UnixMilli(), key, now.Add(-claimLease).UnixMilli())
-	if err != nil {
-		return false, fmt.Errorf("enrich: feedback claim: %w", err)
+// or older than the lease. nil: another run holds it, or it is applied.
+func claim(ctx context.Context, db *store.DB, key string, now time.Time) (*lease, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return nil, err
 	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	l := &lease{db: db, key: key, token: hex.EncodeToString(b[:])}
+	res, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET claimed_at = ?, claim_token = ? WHERE feedback_key = ?
+		AND applied_at IS NULL AND (claimed_at IS NULL OR CAST(claimed_at AS INTEGER) < ?)`,
+		now.UnixMilli(), l.token, key, now.Add(-claimLease).UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("enrich: feedback claim: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return nil, err
+	}
+	return l, nil
 }
 
-// unclaim frees a key after a failure, for the next run.
-func unclaim(ctx context.Context, db *store.DB, key string) {
-	_, _ = db.SQL().ExecContext(ctx, `UPDATE feedback SET claimed_at = NULL WHERE feedback_key = ?`, key)
+// write runs one fenced update; no row means the claim was lost.
+func (l *lease) write(ctx context.Context, set string, args ...any) error {
+	res, err := l.db.SQL().ExecContext(ctx, `UPDATE feedback SET `+set+` WHERE feedback_key = ? AND claim_token = ?`,
+		append(args, l.key, l.token)...)
+	if err != nil {
+		return fmt.Errorf("enrich: feedback: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return ErrLostClaim
+	}
+	return nil
 }
 
-func setStage(ctx context.Context, db *store.DB, key, stage string) error {
-	_, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET stage = ? WHERE feedback_key = ?`, stage, key)
-	return err
+func (l *lease) stage(ctx context.Context, stage string) error {
+	return l.write(ctx, `stage = ?`, stage)
+}
+
+// applied records that CM has the feedback and frees the key.
+func (l *lease) applied(ctx context.Context, now time.Time) error {
+	return l.write(ctx, `applied_at = ?, claimed_at = NULL, claim_token = NULL`, store.FormatTime(now))
+}
+
+// release frees the key after a failure, for the next run, on a fresh
+// context: a cancelled or timed-out run still frees it.
+func (l *lease) release(ctx context.Context) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	_ = l.write(rctx, `claimed_at = NULL, claim_token = NULL`)
 }
 
 // insertFeedback creates a key's row once; a second run finds it there.
@@ -431,10 +489,4 @@ func insertFeedback(ctx context.Context, db *store.DB, key, opID, bindingID, out
 		return fmt.Errorf("enrich: feedback: %w", err)
 	}
 	return nil
-}
-
-func setApplied(ctx context.Context, db *store.DB, key string, now time.Time) error {
-	_, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET applied_at = ?, claimed_at = NULL WHERE feedback_key = ?`,
-		store.FormatTime(now), key)
-	return err
 }

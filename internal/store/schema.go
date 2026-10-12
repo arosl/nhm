@@ -194,10 +194,12 @@ ALTER TABLE feedback ADD COLUMN rule_ids TEXT;
 CREATE UNIQUE INDEX feedback_key ON feedback (feedback_key) WHERE feedback_key IS NOT NULL;
 `,
 	// 4 (nhm.memory): a feedback key is claimed before CM is called, so two
-	// runs never both call it; stage records the steps done, so a retry
+	// runs never both call it; claim_token fences each later write to the
+	// run that holds the claim; stage records the steps done, so a retry
 	// never repeats `cm outcome` when only `cm outcome-apply` failed.
 	`
 ALTER TABLE feedback ADD COLUMN claimed_at TEXT;
+ALTER TABLE feedback ADD COLUMN claim_token TEXT;
 ALTER TABLE feedback ADD COLUMN stage TEXT;
 `,
 }
