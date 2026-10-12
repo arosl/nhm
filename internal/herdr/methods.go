@@ -171,6 +171,11 @@ type workspaceCloseParams struct {
 	WorkspaceID string `json:"workspace_id"`
 }
 
+// workspaceParams is herdr's WorkspaceTarget.
+type workspaceParams struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
 type sendKeysParams struct {
 	Target string   `json:"target"`
 	Keys   []string `json:"keys"`

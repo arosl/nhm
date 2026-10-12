@@ -212,6 +212,12 @@ func (c *Client) PaneClose(ctx context.Context, paneID string) error {
 	return c.call(ctx, "pane.close", paneParams{PaneID: paneID}, nil, 0)
 }
 
+// WorkspaceFocus makes a workspace the focused one, as herdr's clients
+// show it.
+func (c *Client) WorkspaceFocus(ctx context.Context, workspaceID string) error {
+	return c.call(ctx, "workspace.focus", workspaceParams{WorkspaceID: workspaceID}, nil, 0)
+}
+
 // WorkspaceClose closes a workspace with its tabs and panes, and ends
 // their processes.
 func (c *Client) WorkspaceClose(ctx context.Context, workspaceID string) error {

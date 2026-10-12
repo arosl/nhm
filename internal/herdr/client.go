@@ -68,11 +68,14 @@ var methodResults = map[string][]string{
 	"pane.report_metadata":      {"ok"},
 	"pane.close":                {"ok"},
 	"workspace.close":           {"ok"},
-	"popup.close":               {"ok"},
-	"events.subscribe":          {"subscription_started"},
-	"events.wait":               {"wait_matched"},
-	"pane.wait_for_output":      {"output_matched"},
-	"plugin.action.invoke":      {"plugin_action_invoked"},
+	// From the pinned schema's response results, not yet observed
+	// (acfs-9hkh.70; the rehearsal, acfs-9hkh.31, runs it against herdr).
+	"workspace.focus":      {"workspace_info", "ok"},
+	"popup.close":          {"ok"},
+	"events.subscribe":     {"subscription_started"},
+	"events.wait":          {"wait_matched"},
+	"pane.wait_for_output": {"output_matched"},
+	"plugin.action.invoke": {"plugin_action_invoked"},
 	// A popup or overlay answers "ok"; a split, tab or zoomed pane
 	// answers with the pane.
 	"plugin.pane.open": {"ok", "plugin_pane_opened"},

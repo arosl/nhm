@@ -43,6 +43,7 @@ var paramTypes = map[string]any{
 	"pane.report_metadata":      ReportMetadataParams{},
 	"pane.close":                paneParams{},
 	"workspace.close":           workspaceCloseParams{},
+	"workspace.focus":           workspaceParams{},
 	"events.subscribe":          subscribeParams{},
 	"events.wait":               eventsWaitParams{},
 	"pane.wait_for_output":      WaitForOutputParams{},
@@ -80,6 +81,7 @@ var resultTypes = map[string]any{
 	"output_matched":        OutputMatched{},
 	"plugin_action_invoked": PluginActionInvoked{},
 	"plugin_pane_opened":    pluginPaneResult{},
+	"workspace_info":        nil, // workspace.focus: nhm reads nothing from it
 	"ok":                    nil,
 }
 

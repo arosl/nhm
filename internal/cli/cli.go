@@ -37,6 +37,10 @@ Usage:
                          retire agents idle past the limit whose work is done
   nhm kill <session> [--yes]
                          retire every agent of a workspace, then close it
+  nhm attach [session] [--json]
+                         focus a session's workspace (without one: nhm list)
+  nhm zoom <session> <slot|pane-id|name|kind> [--json]
+                         focus a session's workspace and zoom one pane
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm new <session>      create the workspace only
@@ -137,6 +141,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runReap(args[1:], stdout, stderr)
 	case "kill":
 		return runKill(args[1:], stdout, stderr)
+	case "attach":
+		return runAttach(args[1:], stdout, stderr)
+	case "zoom":
+		return runZoom(args[1:], stdout, stderr)
 	case "spawn":
 		return runSpawn(args[1:], stdout, stderr)
 	case "add":
