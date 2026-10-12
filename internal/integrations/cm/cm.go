@@ -12,11 +12,16 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Runner runs the cm binary with args and returns its stdout. Tests
 // replace it.
 type Runner func(ctx context.Context, args ...string) ([]byte, error)
+
+// WaitDelay is how long a cm call may outlive its context: the time to
+// close the pipes a killed cm's children still hold.
+var WaitDelay = 2 * time.Second
 
 // Exec runs the binary at path (default "cm") from PATH.
 func Exec(path string) Runner {
@@ -25,6 +30,10 @@ func Exec(path string) Runner {
 	}
 	return func(ctx context.Context, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(ctx, path, args...)
+		// When ctx ends, cm is killed; a child of cm that holds its stdout
+		// open must not stretch the call past the caller's limit (and the
+		// feedback lease): after WaitDelay the pipes are closed.
+		cmd.WaitDelay = WaitDelay
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()

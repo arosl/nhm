@@ -49,6 +49,39 @@ func TestRedactWholePrivateKeyBlock(t *testing.T) {
 	}
 }
 
+// Review of fd98368 (acfs-9hkh.65): the PEM patterns run first, so a key
+// body that holds what reads as another secret goes as one block, also
+// when the block was cut off.
+func TestPrivateKeyBeforeOtherPatterns(t *testing.T) {
+	begin, end := "-----BEGIN RSA PRIVATE "+"KEY-----", "-----END RSA PRIVATE "+"KEY-----"
+	body := "MIIEow" + "AK" + "IA" + "ABCDEFGHIJKLMNOP" + "Qm9keQ==\nZmlu\n"
+	for _, in := range []string{begin + "\n" + body + end + "\nafter", begin + "\n" + body} {
+		got, n := Redact(in)
+		if strings.Contains(got, "AWS_ACCESS_KEY") || strings.Contains(got, "Zmlu") || strings.Contains(got, "Qm9k") || n != 1 {
+			t.Errorf("Redact(%q) = %q, %d", in, got, n)
+		}
+	}
+}
+
+func TestFindSpans(t *testing.T) {
+	aws := "AK" + "IA" + "ABCDEFGHIJKLMNOP"
+	s := "a " + aws + " b password = hunter2hunter2"
+	spans, n := Find(s)
+	if n != 2 || len(spans) != 2 || s[spans[0].Start:spans[0].End] != aws || spans[0].Category != CategoryAWSAccessKey ||
+		spans[1].Category != CategoryPassword || spans[1].End != len(s) {
+		t.Fatalf("spans = %+v, %d", spans, n)
+	}
+	// A later, wider match takes in an earlier one: one span, both counted.
+	s = "password=" + aws
+	spans, n = Find(s)
+	if n != 2 || len(spans) != 1 || spans[0].Start != 0 || spans[0].End != len(s) || spans[0].Category != CategoryPassword {
+		t.Fatalf("merged spans = %+v, %d", spans, n)
+	}
+	if got, _ := Redact(s); got != Placeholder(CategoryPassword) {
+		t.Fatalf("merged redaction = %q", got)
+	}
+}
+
 func TestRedactLeavesPlainTextAlone(t *testing.T) {
 	for _, s := range []string{"", "Run the login tests after an auth change.", "the token bucket refills", "sk-short"} {
 		if got, n := Redact(s); got != s || n != 0 {

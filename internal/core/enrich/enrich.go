@@ -15,18 +15,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
-
-	"golang.org/x/text/unicode/norm"
 
 	"github.com/arosl/nhm/internal/integrations/cass"
 	"github.com/arosl/nhm/internal/integrations/cm"
-	"github.com/arosl/nhm/internal/redaction"
 )
 
 // Mode is how a source takes part in a send.
@@ -296,35 +291,20 @@ func (r *Retriever) item(source, id, label, text string) Item {
 	return it
 }
 
-// delimiter is what could read as the frame's own open or close line.
-var delimiter = regexp.MustCompile(`(?i)\[(\s*(?:end\s+of\s+)?nhm\s+context)`)
-
-// clean makes text from CM or CASS safe to frame: folded (format
-// characters such as a zero-width space removed, then NFKC, so a
-// full-width "［" is "["), secrets redacted (as ACFS's Bash --with-cass
-// does), one line, and no "[nhm context" or "[end of nhm context" that
-// could open or close the frame early. It returns the text and the number
-// of secrets replaced. Folding comes first, so neither a secret nor a
-// marker hides behind a look-alike.
+// clean makes text from CM or CASS safe to frame: secrets redacted (as
+// ACFS's Bash --with-cass does), one line, and no "[nhm context" or "[end
+// of nhm context" that could open or close the frame early. Both checks
+// run on the folded text (fold.go), so neither a secret nor a marker
+// hides behind an invisible code point or a look-alike, but the text the
+// agent sees is the original, changed only where a check found something.
+// It returns the text and the number of secrets replaced.
 func clean(s string) (string, int) {
-	s, n := redaction.Redact(fold(s))
+	s, n := redact(s)
 	return neutralize(oneLine(s)), n
 }
 
 // safe is clean without the redaction, for nhm's own text (the query).
-func safe(s string) string { return neutralize(oneLine(fold(s))) }
-
-func fold(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Cf, r) {
-			return -1
-		}
-		return r
-	}, s)
-	return norm.NFKC.String(s)
-}
-
-func neutralize(s string) string { return delimiter.ReplaceAllString(s, "($1") }
+func safe(s string) string { return neutralize(oneLine(s)) }
 
 func digest(s string) string {
 	sum := sha256.Sum256([]byte(s))

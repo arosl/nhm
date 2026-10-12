@@ -5,7 +5,9 @@
 // replaces each match with [REDACTED:<CATEGORY>], as ACFS's Bash
 // (herdr_agents_redact) does, without ntm's hash suffix, allowlist,
 // extra patterns and line info; a private key's whole PEM block is
-// redacted, not only its header line (a deliberate strengthening).
+// redacted, not only its header line, and the PEM patterns run first (a
+// deliberate strengthening); Find returns the secrets as spans, and
+// Redact is built on it.
 
 // Package redaction replaces secrets in text that nhm puts into a prompt
 // from elsewhere: CM rules and CASS hits from other sessions.
@@ -83,10 +85,13 @@ var patterns = compile([]struct {
 	// nhm's strengthening: ntm redacts only the PEM header line, so the
 	// key's body reached the prompt. The whole block goes, and a block cut
 	// off before its END line (a hit truncated to its budget) goes to the
-	// end of its base64 body.
-	{CategoryPrivateKey, `-----BEGIN\s+([A-Z]+\s+)?PRIVATE KEY-----[\s\S]*?-----END\s+([A-Z]+\s+)?PRIVATE KEY-----`, 97,
+	// end of its base64 body. Both run before every other pattern: a key
+	// body can hold what reads as another secret (AKIA…, ghp_…), and a
+	// match there would cut the block in two and leave the rest of the
+	// body in the prompt.
+	{CategoryPrivateKey, `-----BEGIN\s+([A-Z]+\s+)?PRIVATE KEY-----[\s\S]*?-----END\s+([A-Z]+\s+)?PRIVATE KEY-----`, 120,
 		[]literals{{anyOf: []string{"private key"}, ignoreCase: true}}},
-	{CategoryPrivateKey, `-----BEGIN\s+([A-Z]+\s+)?PRIVATE KEY-----[A-Za-z0-9+/=:,\s\\-]*`, 96,
+	{CategoryPrivateKey, `-----BEGIN\s+([A-Z]+\s+)?PRIVATE KEY-----[A-Za-z0-9+/=:,\s\\-]*`, 119,
 		[]literals{{anyOf: []string{"private key"}, ignoreCase: true}}},
 	{CategoryDatabaseURL, `(?i)(postgres|mysql|mongodb|redis)://[^:]+:[^@]+@[^\s]+`, 85,
 		[]literals{{anyOf: []string{"postgres://", "mysql://", "mongodb://", "redis://"}, ignoreCase: true}}},
@@ -143,20 +148,67 @@ func (p pattern) mayMatch(s, lower string) bool {
 	return true
 }
 
-// Redact replaces every secret in s with [REDACTED:<CATEGORY>] and
-// returns the text and the number of replacements. The most specific
-// pattern runs first, so a later, generic one never sees its match.
-func Redact(s string) (string, int) {
+// Span is one secret that Find found: s[Start:End], of Category.
+type Span struct {
+	Start, End int
+	Category   Category
+}
+
+// Placeholder is what Redact puts in place of a secret.
+func Placeholder(c Category) string { return "[REDACTED:" + string(c) + "]" }
+
+// masked is the byte a found secret becomes for the later patterns, as a
+// placeholder would be: no pattern's own literal, and not a space.
+const masked = 0
+
+// Find returns the secrets in s and the number of matches. The most
+// specific pattern runs first, and a later, generic one sees only masked
+// bytes where an earlier one matched; a later match that takes in an
+// earlier one replaces it. The spans are sorted and do not overlap.
+// Callers that check text in another form (enrich folds it first) map the
+// spans back to their own text.
+func Find(s string) ([]Span, int) {
+	buf := []byte(s)
+	var spans []Span
 	n := 0
 	for _, p := range patterns {
-		if !p.mayMatch(s, strings.ToLower(s)) {
+		str := string(buf)
+		if !p.mayMatch(str, strings.ToLower(str)) {
 			continue
 		}
-		placeholder := "[REDACTED:" + string(p.category) + "]"
-		s = p.re.ReplaceAllStringFunc(s, func(string) string {
+		for _, m := range p.re.FindAllStringIndex(str, -1) {
 			n++
-			return placeholder
-		})
+			sp := Span{Start: m[0], End: m[1], Category: p.category}
+			kept := spans[:0]
+			for _, old := range spans {
+				if old.End <= sp.Start || old.Start >= sp.End {
+					kept = append(kept, old)
+					continue
+				}
+				sp.Start, sp.End = min(sp.Start, old.Start), max(sp.End, old.End)
+			}
+			spans = append(kept, sp)
+			for i := sp.Start; i < sp.End; i++ {
+				buf[i] = masked
+			}
+		}
 	}
-	return s, n
+	sort.Slice(spans, func(i, j int) bool { return spans[i].Start < spans[j].Start })
+	return spans, n
+}
+
+// Redact replaces every secret in s with [REDACTED:<CATEGORY>] and
+// returns the text and the number of replacements (Find's spans and
+// count).
+func Redact(s string) (string, int) {
+	spans, n := Find(s)
+	var b strings.Builder
+	last := 0
+	for _, sp := range spans {
+		b.WriteString(s[last:sp.Start])
+		b.WriteString(Placeholder(sp.Category))
+		last = sp.End
+	}
+	b.WriteString(s[last:])
+	return b.String(), n
 }

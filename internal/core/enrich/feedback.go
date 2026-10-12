@@ -460,13 +460,21 @@ func (l *lease) write(ctx context.Context, set string, args ...any) error {
 	return nil
 }
 
+// stage and applied record what CM already did, so they write on a fresh
+// context (review of fd98368, acfs-9hkh.65): a cancel right after a
+// successful cm call must not lose the record and make the next run call
+// cm a second time.
 func (l *lease) stage(ctx context.Context, stage string) error {
-	return l.write(ctx, `stage = ?`, stage)
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	return l.write(wctx, `stage = ?`, stage)
 }
 
 // applied records that CM has the feedback and frees the key.
 func (l *lease) applied(ctx context.Context, now time.Time) error {
-	return l.write(ctx, `applied_at = ?, claimed_at = NULL, claim_token = NULL`, store.FormatTime(now))
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	return l.write(wctx, `applied_at = ?, claimed_at = NULL, claim_token = NULL`, store.FormatTime(now))
 }
 
 // release frees the key after a failure, for the next run, on a fresh

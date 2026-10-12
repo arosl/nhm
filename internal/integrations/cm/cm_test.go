@@ -3,9 +3,12 @@ package cm
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fake records the args and answers with out.
@@ -13,6 +16,27 @@ func fake(out string, err error, got *[][]string) Runner {
 	return func(_ context.Context, args ...string) ([]byte, error) {
 		*got = append(*got, args)
 		return []byte(out), err
+	}
+}
+
+// Review of fd98368 (acfs-9hkh.65): a child of cm that holds stdout open
+// does not keep the call past its context.
+func TestExecEndsWhenAChildHoldsStdout(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "cm")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 30 &\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := WaitDelay
+	WaitDelay = 200 * time.Millisecond
+	defer func() { WaitDelay = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := Exec(bin)(ctx, "context", "x"); err == nil {
+		t.Fatal("a killed cm returned no error")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the call took %v after its context ended", took)
 	}
 }
 
