@@ -31,6 +31,10 @@ The same rules apply to code from pt and dcg.
 | `e2e/fakeagent/main_test.go` | `e2e/fakeagent/main_test.go` | provenance header; the tests that ran ntm's tmux detectors (`internal/agent`, `internal/ratelimit`, `internal/tmux`) are removed; `TestRenderComposerAndGate` is new and checks the screen text |
 | `e2e/fakeagent/resize_signal_other.go` | `e2e/fakeagent/resize_signal_other.go` | provenance header |
 | `e2e/fakeagent/resize_signal_unix.go` | `e2e/fakeagent/resize_signal_unix.go` | provenance header |
+| `internal/core/ensemble/LICENSE` | `LICENSE` | none |
+| `internal/core/ensemble/modes_ntm.go` | `internal/ensemble/modes.go` | provenance header |
+| `internal/core/ensemble/presets_ntm.go` | `internal/ensemble/ensembles.go` | provenance header |
+| `internal/core/ensemble/types.go` | `internal/ensemble/types.go` (in part) | only the types the catalog and presets use, with JSON tags only; ntm's UI fields (icon, color, preamble key), session, assignment, cache and output types and its TOML/YAML loading left out; `Catalog`, `Mode`, `Preset` and `Resolve` are nhm's |
 | `internal/robot/contract/LICENSE` | `LICENSE` | none |
 | `internal/robot/contract/assertions.go` | `internal/robot/contract/assertions.go` | provenance header |
 | `internal/robot/contract/assertions_test.go` | `internal/robot/contract/assertions_test.go` | provenance header |

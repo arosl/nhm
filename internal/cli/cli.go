@@ -51,6 +51,10 @@ Usage:
                          show the CM and CASS block a send would carry
   nhm feedback list|mark|outcomes [--json]
                          the rules each session got; tell CM how they did
+  nhm modes list|explain <mode> [--json]
+                         ntm's reasoning-mode catalog
+  nhm ensemble presets [--json]
+                         ntm's ensemble presets
   nhm activity <session> [--json]
                          each agent's activity in ntm's terms
   nhm health [session] [--json]
@@ -170,6 +174,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runMemory(args[1:], stdout, stderr)
 	case "feedback":
 		return runFeedback(args[1:], stdout, stderr)
+	case "modes":
+		return runModes(args[1:], stdout, stderr)
+	case "ensemble":
+		return runEnsemble(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "--robot-") {
 			return runRobot(args, stdout, stderr)
