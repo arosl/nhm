@@ -278,22 +278,65 @@ func Start(ctx context.Context, env RunEnv, cat *Catalog, req StartRequest) (Run
 // <project>/.nhm/ensemble/<run-id>, with a .gitignore of * beside the
 // runs so their results stay out of the project's git status. Like the
 // run's directory, it is never shared.
+//
+// A cloned repository may commit .nhm or .nhm/ensemble as a symlink: nhm
+// would then write the .gitignore into the link's target and hide it from
+// git, and the agents would write there. So each part must be a real
+// directory (Lstat, never followed), and the .gitignore is created only
+// when nothing is at its path, a symlink included.
 func makeArtifactDir(r Run) error {
 	if r.ArtifactDir == "" {
 		return nil
 	}
+	fail := func(err error) error { return fmt.Errorf("ensemble: artifact directory: %w", err) }
+	nhmDir := filepath.Join(r.ProjectRoot, ".nhm")
 	parent := filepath.Dir(r.ArtifactDir)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return fmt.Errorf("ensemble: artifact directory: %w", err)
+	if parent != filepath.Join(nhmDir, "ensemble") {
+		return fail(fmt.Errorf("%s is not under %s", r.ArtifactDir, nhmDir))
 	}
-	ignore := filepath.Join(parent, ".gitignore")
-	if _, err := os.Lstat(ignore); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(ignore, []byte("*\n"), 0o644); err != nil {
-			return fmt.Errorf("ensemble: artifact directory: %w", err)
+	for _, dir := range []string{nhmDir, parent} {
+		if err := realDir(dir); err != nil {
+			return fail(err)
 		}
 	}
+	ignore := filepath.Join(parent, ".gitignore")
+	f, err := os.OpenFile(ignore, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+	switch {
+	case err == nil:
+		_, werr := f.WriteString("*\n")
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return fail(werr)
+		}
+	case errors.Is(err, os.ErrExist):
+		// One is there already (a file the user keeps, or a symlink nhm
+		// does not write through).
+	default:
+		return fail(err)
+	}
 	if err := os.Mkdir(r.ArtifactDir, 0o700); err != nil {
-		return fmt.Errorf("ensemble: artifact directory: %w", err)
+		return fail(err)
+	}
+	return nil
+}
+
+// realDir makes dir when it is missing, and refuses it unless it is a
+// directory itself: a symlink, even to a directory, is refused.
+func realDir(dir string) error {
+	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; nhm does not write through it", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
 	}
 	return nil
 }

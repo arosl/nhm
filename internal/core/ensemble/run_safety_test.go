@@ -152,3 +152,61 @@ func TestResultsInTheProjectCheckedCopiesInState(t *testing.T) {
 		t.Fatalf("a run without a project = %+v %v", bare, err)
 	}
 }
+
+// A cloned repository can commit .nhm, .nhm/ensemble or the .gitignore as
+// a symlink. nhm writes through none of them: the start fails before it
+// spawns, and the link's target stays as it was (SageOak's review of
+// c74a72e).
+func TestStartRefusesSymlinksInTheArtifactPath(t *testing.T) {
+	cat, _ := Builtin()
+	for _, tc := range []struct {
+		name  string
+		plant func(project, target string) error
+	}{
+		{".nhm", func(p, target string) error { return os.Symlink(target, filepath.Join(p, ".nhm")) }},
+		{".nhm/ensemble", func(p, target string) error {
+			if err := os.Mkdir(filepath.Join(p, ".nhm"), 0o755); err != nil {
+				return err
+			}
+			return os.Symlink(target, filepath.Join(p, ".nhm", "ensemble"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakes{notReady: -1}
+			project, target := t.TempDir(), t.TempDir()
+			if err := tc.plant(project, target); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Start(context.Background(), f.env(t), cat, StartRequest{Preset: "project-diagnosis", Question: "q", ProjectRoot: project})
+			if err == nil || !strings.Contains(err.Error(), "symlink") {
+				t.Fatalf("start through a symlinked %s: %v", tc.name, err)
+			}
+			if len(f.spawned) != 0 {
+				t.Fatal("a refused start spawned")
+			}
+			if entries, _ := os.ReadDir(target); len(entries) != 0 {
+				t.Fatalf("nhm wrote into the link's target: %v", entries)
+			}
+		})
+	}
+
+	// A .gitignore that is a symlink is not written through; the run goes on.
+	f := &fakes{notReady: -1}
+	project := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, ".nhm", "ensemble"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(project, ".nhm", "ensemble", ".gitignore")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(context.Background(), f.env(t), cat, StartRequest{Preset: "project-diagnosis", Question: "q", ProjectRoot: project}); err != nil {
+		t.Fatalf("start beside a symlinked .gitignore: %v", err)
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "keep\n" {
+		t.Fatalf("the .gitignore link's target = %q", data)
+	}
+}
