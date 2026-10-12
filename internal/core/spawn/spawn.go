@@ -110,6 +110,7 @@ type Target struct {
 	Index      int    `json:"index"`
 	Kind       string `json:"kind"`
 	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
 	Slot       string `json:"slot"`
 	MailName   string `json:"mail_name,omitempty"`
 	HerdrName  string `json:"herdr_name,omitempty"`
@@ -468,7 +469,7 @@ func freeAlias(ctx context.Context, h Herdr, name string) (string, error) {
 // retried once. A first-run folder-trust dialog is answered only with
 // --trust-folder.
 func startAgent(ctx context.Context, env Env, req Request, t *Target, a kinds.Adapter) error {
-	argv := LaunchArgv(a, t.Model)
+	argv := LaunchArgv(a, t.Model, t.Effort, env.Admission.Settings)
 	ms := req.ReadyTimeout.Milliseconds()
 	params := herdr.AgentStartParams{Name: t.HerdrName, Kind: a.Name, PaneID: t.PaneID, Args: argv[1:], TimeoutMS: &ms}
 	_, err := env.Herdr.AgentStart(ctx, params)
@@ -688,7 +689,7 @@ func plan(ctx context.Context, db *store.DB, workspaceID string, req Request) ([
 			if pane == 1 {
 				maxTab++
 			}
-			out = append(out, Target{Index: i, Kind: w.Kind, Model: w.Model, Slot: fmt.Sprintf("%d.%d", maxTab, pane),
+			out = append(out, Target{Index: i, Kind: w.Kind, Model: w.Model, Effort: effortOf(req, w), Slot: fmt.Sprintf("%d.%d", maxTab, pane),
 				Status: StatusPlanned, newTab: pane == 1})
 			i++
 		}
@@ -699,7 +700,7 @@ func plan(ctx context.Context, db *store.DB, workspaceID string, req Request) ([
 // fingerprint is the claimed request: the caller's input, not the names
 // Agent Mail will give.
 func fingerprint(req Request) map[string]any {
-	return map[string]any{"session": req.Session, "add": req.Add, "project": req.ProjectRoot, "agents": req.Agents,
+	return map[string]any{"session": req.Session, "add": req.Add, "project": req.ProjectRoot, "agents": req.Agents, "effort": req.Effort,
 		"label": req.Label, "group": req.Group, "per_tab": req.PerTab, "prompt": req.Prompt, "no_kickoff": req.NoKickoff,
 		"assign": req.Assign, "stagger": req.StaggerMode, "delay_ms": req.StaggerDelay.Milliseconds(),
 		"force": req.Force, "allow_unguarded": req.AllowUnguarded, "require_observations": req.RequireObservations}

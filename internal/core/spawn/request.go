@@ -16,6 +16,8 @@ type Want struct {
 	Kind  string `json:"kind"`
 	Count int    `json:"count"`
 	Model string `json:"model,omitempty"`
+	// Effort overrides the request's effort for these agents.
+	Effort string `json:"effort,omitempty"`
 }
 
 // ParseCount reads "N" or "N:MODEL".
@@ -58,6 +60,9 @@ type Request struct {
 	ProjectRoot string
 	ProjectID   string
 	Agents      []Want
+	// Effort is the reasoning effort of the kinds that take one; empty is
+	// each kind's default (ntm's xhigh for Claude and Codex).
+	Effort string
 	// Label names the agents' tabs; Group is a token on the panes.
 	Label, Group string
 	// PerTab agents share one tab (pane.split); 1 by default.
@@ -92,6 +97,9 @@ func (r *Request) Validate() error {
 	if r.Session == "" {
 		return fmt.Errorf("name the session (a workspace label)")
 	}
+	if r.Effort != "" && !kinds.EffortPattern.MatchString(r.Effort) {
+		return fmt.Errorf("--effort %q is not a plain word (low, medium, high, xhigh, max)", r.Effort)
+	}
 	total := 0
 	for i, w := range r.Agents {
 		a, ok := kinds.Get(w.Kind)
@@ -103,6 +111,9 @@ func (r *Request) Validate() error {
 		}
 		if w.Model != "" && !modelPattern.MatchString(w.Model) {
 			return fmt.Errorf("invalid model %q", w.Model)
+		}
+		if w.Effort != "" && (!kinds.EffortPattern.MatchString(w.Effort) || len(a.EffortArgs) == 0) {
+			return fmt.Errorf("%s takes no effort %q (the kind sets none, or it is not a plain word)", w.Kind, w.Effort)
 		}
 		r.Agents[i].Kind = a.Name
 		total += w.Count

@@ -277,6 +277,8 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 	ctx := context.Background()
 	r := req(Want{Kind: "claude", Count: 1, Model: "opus"}, Want{Kind: "codex", Count: 1})
 	r.OperationID = "op-sp-1"
+	settings := HookSettings(func(bin string) (string, error) { return "/usr/bin/" + bin, nil })
+	w.env.Admission.Settings = settings
 	res, err := Spawn(ctx, w.env, r)
 	if err != nil {
 		t.Fatal(err)
@@ -290,8 +292,18 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 		t.Fatalf("targets = %+v / %+v", icy, blue)
 	}
 	calls := strings.Join(w.h.calls, "\n")
-	for _, want := range []string{"workspace.create swarm", "tab.create BlueLake", "agent.start icyknoll claude w1:p1 [--model opus]",
-		"agent.start bluelake codex w1:p2 [--no-daemon]", "pane.rename w1:p1 IcyKnoll opus", "pane.rename w1:p2 BlueLake codex"} {
+	// ntm's launch: Claude with --dangerously-skip-permissions, the model,
+	// --effort xhigh and the dcg and rch hooks on --settings; Codex with
+	// --dangerously-bypass-approvals-and-sandbox and xhigh, plus the
+	// fork's --no-daemon.
+	if settings != `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'/usr/bin/dcg'","timeout":5}]},`+
+		`{"matcher":"Bash","hooks":[{"type":"command","command":"'/usr/bin/rch'","timeout":5}]}]}}` {
+		t.Fatalf("settings = %s", settings)
+	}
+	for _, want := range []string{"workspace.create swarm", "tab.create BlueLake",
+		"agent.start icyknoll claude w1:p1 [--dangerously-skip-permissions --model opus --effort xhigh --settings " + settings + "]",
+		"agent.start bluelake codex w1:p2 [--no-daemon --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh]",
+		"pane.rename w1:p1 IcyKnoll opus", "pane.rename w1:p2 BlueLake codex"} {
 		if !strings.Contains(calls, want) {
 			t.Errorf("no %q in\n%s", want, calls)
 		}
@@ -368,6 +380,47 @@ func TestDryRunCreatesNothing(t *testing.T) {
 }
 
 func pct(v float64) *float64 { return &v }
+
+// Every distinct launch argv is screened: a second model of a kind too.
+func TestAdmissionScreensEveryArgv(t *testing.T) {
+	var screened []string
+	env := AdmissionEnv{
+		Guards: func(string) []guards.Result {
+			return []guards.Result{{Kind: "claude", Guard: "dcg", State: guards.Configured, Sources: []string{"user"}}}
+		},
+		Screen: func(_ context.Context, argv []string) (guards.Verdict, error) {
+			screened = append(screened, strings.Join(argv, " "))
+			if strings.Contains(strings.Join(argv, " "), "evil") {
+				return guards.Verdict{Decision: guards.Deny, Command: strings.Join(argv, " "), Reason: "rule"}, nil
+			}
+			return guards.Verdict{Decision: guards.Allow}, nil
+		},
+	}
+	r := req(Want{Kind: "claude", Count: 1, Model: "opus"}, Want{Kind: "claude", Count: 2, Model: "opus"},
+		Want{Kind: "claude", Count: 1, Model: "evil", Effort: "high"})
+	ad := Decide(context.Background(), env, r)
+	if len(screened) != 2 || ad.Decision != Refuse || !strings.Contains(ad.Reason, "evil") {
+		t.Fatalf("screened %v, admission %+v", screened, ad)
+	}
+	if screened[1] != "claude --dangerously-skip-permissions --model evil --effort high" {
+		t.Fatalf("argv = %q", screened[1])
+	}
+	r = req(Want{Kind: "claude", Count: 1})
+	r.Effort = "x y"
+	if err := r.Validate(); err == nil {
+		t.Fatal("a bad --effort was accepted")
+	}
+	r = req(Want{Kind: "agy", Count: 1, Effort: "high"})
+	if err := r.Validate(); err == nil {
+		t.Fatal("an effort for agy was accepted")
+	}
+	// A request-wide effort leaves the kinds that take none alone.
+	r = req(Want{Kind: "agy", Count: 1}, Want{Kind: "claude", Count: 1})
+	r.Effort = "high"
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestAdmission(t *testing.T) {
 	now := time.Now()

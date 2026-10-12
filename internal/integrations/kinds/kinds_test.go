@@ -17,11 +17,26 @@ func TestBuiltins(t *testing.T) {
 	if !c.Builtin || c.ModelFlag != "--model" || !slices.Equal(c.InterruptKeys, []string{"esc"}) || !c.CodeReview || c.Continue == nil {
 		t.Fatalf("claude = %+v", c)
 	}
-	if got := c.Resume("s-1"); !slices.Equal(got, []string{"claude", "--resume", "s-1"}) {
+	if got := c.Resume("s-1"); !slices.Equal(got, []string{"claude", "--dangerously-skip-permissions", "--resume", "s-1"}) {
+		t.Fatalf("resume = %v", got)
+	}
+	// A session id that is not a plain id never reaches an argv.
+	for _, bad := range []string{"-rf", "--help", "", "a b", "x;y", "../x"} {
+		if got := c.Resume(bad); got != nil {
+			t.Errorf("resume %q = %v", bad, got)
+		}
+	}
+	// ntm's launch flags and effort.
+	if !slices.Equal(c.LaunchArgs, []string{"--dangerously-skip-permissions"}) || !slices.Equal(c.Effort(""), []string{"--effort", "xhigh"}) ||
+		!slices.Equal(c.Effort("high"), []string{"--effort", "high"}) || c.Effort("x y") != nil || c.SettingsFlag != "--settings" {
+		t.Fatalf("claude launch = %+v", c)
+	}
+	if got := c.Resume("s-1"); got == nil {
 		t.Fatalf("resume = %v", got)
 	}
 	x, _ := r.Get("codex")
-	if x.CodeReview || !slices.Equal(x.LaunchArgs, []string{"--no-daemon"}) || !x.Hooks.Trust || x.NewSession != "/new" {
+	if x.CodeReview || !slices.Equal(x.LaunchArgs, []string{"--no-daemon", "--dangerously-bypass-approvals-and-sandbox"}) ||
+		!slices.Equal(x.Effort(""), []string{"-c", "model_reasoning_effort=xhigh"}) || !x.Hooks.Trust || x.NewSession != "/new" {
 		t.Fatalf("codex = %+v", x)
 	}
 	if a, _ := r.Get("agy"); a.NTMType != "antigravity" || a.ModelFlag != "" || a.InterruptKeys != nil || a.Resume("s") != nil || len(a.Cannot) == 0 {
@@ -192,6 +207,17 @@ session_start = true
 		"[kinds.x]\nresume_argv = [\"{session}\"]\n",
 		"[kinds.x]\nresume_argv = [\"{session}\", \"x\"]\n",
 		"[kinds.x]\nresume_argv = [\"sh\", \"-c\", \"x {session}\"]\n",
+		// A launcher anywhere, not only first (the review of 78b3037).
+		"[kinds.x]\nresume_argv = [\"nice\", \"sh\", \"-c\", \"{session}\"]\n",
+		"[kinds.x]\nresume_argv = [\"timeout\", \"5\", \"x\", \"{session}\"]\n",
+		"[kinds.x]\nresume_argv = [\"x\", \"sudo\", \"{session}\"]\n",
+		"[kinds.x]\nresume_argv = [\"x\", \"/usr/bin/ssh\", \"{session}\"]\n",
+		"[kinds.x]\nresume_argv = [\"x\", \"--resume\", \"{session}\", \"--watch\", \"watch\"]\n",
+		// {session} only last, or as a flag's value.
+		"[kinds.x]\nresume_argv = [\"x\", \"{session}\", \"run\"]\n",
+		"[kinds.x]\neffort_args = [\"--effort\"]\n",
+		"[kinds.x]\ndefault_effort = \"high\"\n",
+		"[kinds.x]\neffort_args = [\"--effort\", \"{effort}\"]\ndefault_effort = \"x y\"\n",
 		"[kinds.x]\nresume_argv = [\"/usr/bin/env\", \"{session}\"]\n",
 		"[kinds.x]\nresume_argv = [\"x\", \"--resume={session}\"]\n",
 		// Pane-typed fields take no control characters; keys are herdr's.

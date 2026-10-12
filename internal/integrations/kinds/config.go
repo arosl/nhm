@@ -44,6 +44,8 @@ type kindConfig struct {
 	Flags          []string   `toml:"flags"`
 	LaunchArgs     []string   `toml:"launch_args"`
 	ModelFlag      string     `toml:"model_flag"`
+	EffortArgs     []string   `toml:"effort_args"`
+	DefaultEffort  string     `toml:"default_effort"`
 	ResumeArgv     []string   `toml:"resume_argv"`
 	NewSession     string     `toml:"new_session"`
 	ExitCommand    string     `toml:"exit_command"`
@@ -110,7 +112,8 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 	a := Adapter{Name: name, NTMType: c.NTMType, Flags: c.Flags, LaunchArgs: c.LaunchArgs, ModelFlag: c.ModelFlag,
 		ResumeArgv: c.ResumeArgv, NewSession: c.NewSession, ExitCommand: c.ExitCommand, InterruptKeys: c.InterruptKeys,
 		QuotaPool: c.QuotaPool, QuotaSource: c.QuotaSource, Hooks: c.Hooks, Transcript: c.Transcript,
-		GuardSettings: c.GuardSettings, CodeReview: true, GuardSupported: true, Cannot: c.Cannot}
+		GuardSettings: c.GuardSettings, CodeReview: true, GuardSupported: true, Cannot: c.Cannot,
+		EffortArgs: c.EffortArgs, DefaultEffort: c.DefaultEffort}
 	if c.CodeReview != nil {
 		a.CodeReview = *c.CodeReview
 	}
@@ -126,6 +129,9 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 	}
 	if err := checkResumeArgv(a.ResumeArgv); err != nil {
 		return Adapter{}, fmt.Errorf("kinds.%s.resume_argv: %w", name, err)
+	}
+	if err := checkEffortArgs(a.EffortArgs, a.DefaultEffort); err != nil {
+		return Adapter{}, fmt.Errorf("kinds.%s.effort_args: %w", name, err)
 	}
 	if strings.Contains(a.GuardSettings, "..") || strings.HasPrefix(a.GuardSettings, "/") {
 		return Adapter{}, fmt.Errorf("kinds.%s.guard_settings: a path under the home directory", name)
@@ -158,14 +164,21 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 	return a, nil
 }
 
-// shells may not be a resume argv's program: the session id would become
-// shell text.
-var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
-	"csh": true, "tcsh": true, "env": true, "busybox": true, "nu": true, "pwsh": true, "xargs": true}
+// launchers run another program from their arguments: shells, and the
+// commands that exec what follows them. None may appear anywhere in a
+// resume argv, or the session id could become a program or shell text.
+var launchers = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
+	"csh": true, "tcsh": true, "nu": true, "pwsh": true, "busybox": true, "env": true, "xargs": true, "nice": true,
+	"nohup": true, "timeout": true, "sudo": true, "doas": true, "su": true, "runuser": true, "ssh": true, "watch": true,
+	"setsid": true, "stdbuf": true, "chroot": true, "flock": true, "script": true, "time": true, "exec": true,
+	"command": true, "ionice": true, "taskset": true, "chrt": true, "unshare": true, "nsenter": true,
+	"systemd-run": true, "parallel": true, "strace": true, "ltrace": true, "gdb": true, "eval": true,
+	"python": true, "python3": true, "perl": true, "ruby": true, "node": true, "osascript": true, "tmux": true}
 
-// checkResumeArgv: a fixed program that is not a shell, then arguments;
-// {session} only as a whole element, at least once; no control
-// characters. The session id comes from a hook and must stay one argument.
+// checkResumeArgv: a fixed program, then arguments; no shell or launcher
+// anywhere; {session} only as a whole argument, either the last one or
+// the value right after a flag, at least once; no control characters.
+// The session id comes from a hook and must stay one argument.
 func checkResumeArgv(argv []string) error {
 	if argv == nil {
 		return nil
@@ -177,22 +190,50 @@ func checkResumeArgv(argv []string) error {
 	if prog == "" || strings.ContainsAny(prog, "{}") || hasControl(prog) {
 		return fmt.Errorf("the program %q must be a fixed name", prog)
 	}
-	if shells[filepath.Base(prog)] {
-		return fmt.Errorf("the program %q is a shell or a launcher", prog)
-	}
 	whole := 0
-	for _, a := range argv[1:] {
+	for i, a := range argv {
+		if launchers[filepath.Base(a)] {
+			return fmt.Errorf("%q is a shell or a launcher", a)
+		}
 		switch {
+		case hasControl(a):
+			return fmt.Errorf("%q holds a control character", a)
 		case a == "{session}":
+			if i == 0 || (i != len(argv)-1 && !strings.HasPrefix(argv[i-1], "-")) {
+				return fmt.Errorf("{session} must be the last argument or a flag's value")
+			}
 			whole++
 		case strings.Contains(a, "{session}"):
 			return fmt.Errorf("%q: {session} must be a whole argument", a)
-		case hasControl(a):
-			return fmt.Errorf("%q holds a control character", a)
 		}
 	}
 	if whole == 0 {
 		return fmt.Errorf("no {session} argument")
+	}
+	return nil
+}
+
+// checkEffortArgs: no control characters; {effort} at least once. The
+// effort value itself is a plain word (EffortPattern).
+func checkEffortArgs(args []string, def string) error {
+	if args == nil {
+		if def != "" {
+			return fmt.Errorf("default_effort without effort_args")
+		}
+		return nil
+	}
+	found := false
+	for _, a := range args {
+		if hasControl(a) || a == "" {
+			return fmt.Errorf("%q is empty or holds a control character", a)
+		}
+		found = found || strings.Contains(a, "{effort}")
+	}
+	if !found {
+		return fmt.Errorf("no {effort}")
+	}
+	if def != "" && !EffortPattern.MatchString(def) {
+		return fmt.Errorf("default_effort %q is not a plain word", def)
 	}
 	return nil
 }

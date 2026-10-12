@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/arosl/nhm/internal/integrations/kinds"
@@ -309,7 +310,19 @@ func checkAgy(env Env) []Result {
 func VerifyLaunch(results []Result, argv []string) []Result {
 	out := make([]Result, len(results))
 	copy(out, results)
+	flagHooks, hasFlag := settingsFlagHooks(argv)
 	for i, r := range out {
+		// Claude's --settings on the launch argv carries hooks itself, as
+		// ntm passes them (plan-v8 2.14: the launch's own precedence).
+		// A guard it holds is verified for this launch whatever the
+		// user's settings hold.
+		if r.Kind == "claude" && hasFlag && r.State != Unsupported {
+			if _, _, _, ok := holds(flagHooks, r.Guard); ok {
+				out[i].State, out[i].Detail = VerifiedForLaunch, "the launch's --settings holds it"
+				out[i].Sources = append(append([]string{}, r.Sources...), "flag")
+				continue
+			}
+		}
 		if r.State != Configured {
 			continue
 		}
@@ -327,6 +340,37 @@ func VerifyLaunch(results []Result, argv []string) []Result {
 		}
 	}
 	return out
+}
+
+// settingsFlagHooks reads the hooks of a --settings value on the argv:
+// inline JSON, as spawn passes it, or a settings file.
+func settingsFlagHooks(argv []string) (hooksFile, bool) {
+	if slices.Contains(argv, "--bare") {
+		// --bare drops every hook, the flag's too.
+		return hooksFile{}, false
+	}
+	for i, a := range argv {
+		val := ""
+		switch {
+		case strings.HasPrefix(a, "--settings="):
+			val = strings.TrimPrefix(a, "--settings=")
+		case a == "--settings" && i+1 < len(argv):
+			val = argv[i+1]
+		default:
+			continue
+		}
+		var f hooksFile
+		if strings.HasPrefix(strings.TrimSpace(val), "{") {
+			if json.Unmarshal([]byte(val), &f) == nil {
+				return f, true
+			}
+			return hooksFile{}, false
+		}
+		if f, ok, err := readHooks(val); err == nil && ok {
+			return f, true
+		}
+	}
+	return hooksFile{}, false
 }
 
 // claudeKeeps applies Claude's --bare and --setting-sources to the

@@ -191,6 +191,31 @@ func TestVerifyLaunchAppliesClaudeMergeRules(t *testing.T) {
 	}
 }
 
+// The hooks spawn passes on --settings, as ntm does, verify the guards
+// they hold even when the user's settings hold none.
+func TestVerifyLaunchReadsTheSettingsFlag(t *testing.T) {
+	home := t.TempDir()
+	base := Check("claude", Env{Home: home, ProjectRoot: t.TempDir()})
+	if byGuard(base)[DCG].State != Missing {
+		t.Fatalf("base = %+v", byGuard(base)[DCG])
+	}
+	settings := `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'/usr/bin/dcg'","timeout":5}]},` +
+		`{"matcher":"Bash","hooks":[{"type":"command","command":"'/usr/local/bin/rch'","timeout":5}]}]}}`
+	got := byGuard(VerifyLaunch(base, []string{"--dangerously-skip-permissions", "--settings", settings}))
+	if got[DCG].State != VerifiedForLaunch || got[RCH].State != VerifiedForLaunch || got[AgentMailStop].State != Missing {
+		t.Fatalf("flag = %+v", got)
+	}
+	file := filepath.Join(home, "s.json")
+	write(t, file, settings)
+	if got = byGuard(VerifyLaunch(base, []string{"--settings=" + file})); got[DCG].State != VerifiedForLaunch {
+		t.Fatalf("file = %+v", got[DCG])
+	}
+	// --bare drops the flag's hooks too.
+	if got = byGuard(VerifyLaunch(base, []string{"--bare", "--settings", settings})); got[DCG].State == VerifiedForLaunch {
+		t.Fatal("--bare kept the flag's hooks")
+	}
+}
+
 func TestAgyPiAndUnknownKinds(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, ".gemini", "config", "hooks.json"),

@@ -134,7 +134,18 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, sendUsage) }
-	f := sendFlags{}
+	f := addSendFlags(fs)
+	pos, err := parseInterleaved(fs, args)
+	if err != nil {
+		return exitRefused
+	}
+	return sendMain(f, fs, pos, stdout, stderr)
+}
+
+// addSendFlags registers send's flags: its own first, then the kinds'
+// selector flags where the name is free.
+func addSendFlags(fs *flag.FlagSet) *sendFlags {
+	f := &sendFlags{}
 	fs.Var(&f.sel.names, "name", "an Agent Mail or herdr name (repeatable)")
 	fs.Var(&f.sel.slots, "pane", "ntm's pane number N.M, or a pane id (repeatable)")
 	fs.Var(&f.panes, "panes", "pane numbers, comma-separated")
@@ -171,13 +182,14 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&f.asJSON, "json", false, "nhm's JSON envelope")
 	// Last, so that send's own flags win over a kind's.
 	f.kindSel = registerKindFlags(fs)
-	pos, err := parseInterleaved(fs, args)
-	if err != nil {
-		return exitRefused
-	}
+	return f
+}
+
+func sendMain(f *sendFlags, fs *flag.FlagSet, pos []string, stdout, stderr io.Writer) int {
+	var err error
 	env := envelope{Command: "send"}
 	refuse := func(err error) int { return output(stdout, stderr, f.asJSON, env, err, exitRefused, nil) }
-	if err := laterFlags(fs, f); err != nil {
+	if err := laterFlags(fs, *f); err != nil {
 		return refuse(err)
 	}
 	session, prompt := "", ""

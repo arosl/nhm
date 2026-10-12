@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -80,19 +81,14 @@ type spawnFlags struct {
 	withMemory, withCASS     bool
 	noCASSContext            bool
 	project, opID, socket    string
+	effort                   string
 	dryRun, asJSON, interact bool
 }
 
 func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	f := &spawnFlags{counts: map[string]*string{}}
-	for _, a := range kinds.All() {
-		for _, name := range append([]string{a.Name}, a.Flags...) {
-			if fs.Lookup(name) == nil {
-				f.counts[name] = fs.String(name, "", a.Name+" agents: N[:MODEL]")
-			}
-		}
-	}
 	fs.Var(&f.agents, "agent", "KIND=N[:MODEL] (repeatable)")
+	fs.StringVar(&f.effort, "effort", "", "reasoning effort (default: each kind's, ntm's xhigh for claude and codex)")
 	fs.StringVar(&f.label, "label", "", "the tabs' label")
 	fs.StringVar(&f.group, "group", "", "a group token on the panes")
 	fs.IntVar(&f.perTab, "per-tab", 1, "agents per tab")
@@ -117,11 +113,21 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.StringVar(&f.socket, "socket", "", "herdr API socket")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print the plan and the admission; create nothing")
 	fs.BoolVar(&f.asJSON, "json", false, "nhm's JSON envelope")
+	// The kinds' count flags last: a flag spawn has stays spawn's, so a
+	// kind named after one never redefines it (kinds.Reserved refuses it
+	// too).
+	for _, a := range kinds.All() {
+		for _, name := range append([]string{a.Name}, a.Flags...) {
+			if fs.Lookup(name) == nil {
+				f.counts[name] = fs.String(name, "", a.Name+" agents: N[:MODEL]")
+			}
+		}
+	}
 	return f
 }
 
 func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
-	req := spawn.Request{Session: session, Add: add, Label: f.label, Group: f.group, PerTab: f.perTab,
+	req := spawn.Request{Session: session, Add: add, Label: f.label, Group: f.group, PerTab: f.perTab, Effort: f.effort,
 		NoKickoff: f.noKickoff, Assign: f.assign, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
 		ReadyTimeout: f.readyWait, TrustFolder: f.trustFolder, Force: f.force, AllowUnguarded: f.allowUnguarded,
 		RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID}
@@ -460,6 +466,8 @@ func (ie *instanceEnv) spawnEnv(projectRoot string) (spawn.Env, error) {
 			ad.Capacity = spawn.CommandCapacity(cfg.Providers.Capacity)
 		}
 		ad.AdmitUnknown = cfg.Quota.AdmitUnknown
+		// ntm's launch: Claude gets the dcg and rch hooks on --settings.
+		ad.Settings = spawn.HookSettings(exec.LookPath)
 	} else {
 		return spawn.Env{}, err
 	}
@@ -589,6 +597,41 @@ func printSpawn(w io.Writer, res spawn.Result) {
 	}
 }
 
+// robotSpawnFlags are --robot-spawn's flags.
+type robotSpawnFlags struct {
+	session, dir, format, prompt, opID, socket *string
+	counts                                     map[string]*int
+	readyTimeout                               *time.Duration
+	dryRun, assign                             *bool
+}
+
+// addRobotSpawnFlags registers ntm's robot spawn flags, then a
+// --spawn-<kind> count for each kind name and flag that is free.
+func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
+	f := robotSpawnFlags{counts: map[string]*int{}}
+	f.session = fs.String("robot-spawn", "", "")
+	f.dir = fs.String("spawn-dir", "", "")
+	f.format = fs.String("robot-format", "auto", "")
+	fs.Bool("spawn-no-user", false, "")
+	fs.Bool("spawn-safety", false, "")
+	fs.Bool("spawn-wait", false, "")
+	f.readyTimeout = fs.Duration("ready-timeout", 60*time.Second, "")
+	fs.Duration("timeout", 60*time.Second, "")
+	f.dryRun = fs.Bool("dry-run", false, "")
+	f.assign = fs.Bool("spawn-assign-work", false, "")
+	f.prompt = fs.String("spawn-prompt", "", "")
+	f.opID = fs.String("op-id", "", "")
+	f.socket = fs.String("socket", "", "")
+	for _, a := range kinds.All() {
+		for _, name := range append([]string{a.Name}, a.Flags...) {
+			if fs.Lookup("spawn-"+name) == nil {
+				f.counts[name] = fs.Int("spawn-"+name, 0, "")
+			}
+		}
+	}
+	return f
+}
+
 // hasRobotSpawn reports a --robot-spawn flag in args.
 func hasRobotSpawn(args []string) bool {
 	for _, a := range args {
@@ -607,27 +650,9 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	session := fs.String("robot-spawn", "", "")
-	dir := fs.String("spawn-dir", "", "")
-	format := fs.String("robot-format", "auto", "")
-	counts := map[string]*int{}
-	for _, a := range kinds.All() {
-		for _, name := range append([]string{a.Name}, a.Flags...) {
-			if fs.Lookup("spawn-"+name) == nil {
-				counts[name] = fs.Int("spawn-"+name, 0, "")
-			}
-		}
-	}
-	fs.Bool("spawn-no-user", false, "")
-	fs.Bool("spawn-safety", false, "")
-	fs.Bool("spawn-wait", false, "")
-	readyTimeout := fs.Duration("ready-timeout", 60*time.Second, "")
-	fs.Duration("timeout", 60*time.Second, "")
-	dryRun := fs.Bool("dry-run", false, "")
-	assign := fs.Bool("spawn-assign-work", false, "")
-	prompt := fs.String("spawn-prompt", "", "")
-	opID := fs.String("op-id", "", "")
-	socket := fs.String("socket", "", "")
+	rf := addRobotSpawnFlags(fs)
+	session, dir, format, counts, readyTimeout := rf.session, rf.dir, rf.format, rf.counts, rf.readyTimeout
+	dryRun, assign, prompt, opID, socket := rf.dryRun, rf.assign, rf.prompt, rf.opID, rf.socket
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		msg := "unexpected arguments"
 		if err != nil {

@@ -66,17 +66,65 @@ type AdmissionEnv struct {
 	// AdmitUnknown lists the pools whose unknown quota user config admits
 	// for robot calls.
 	AdmitUnknown []string
-	Now          func() time.Time
+	// Settings is the hook settings JSON a kind with a settings flag
+	// (Claude) gets at launch (HookSettings); "" passes none.
+	Settings string
+	Now      func() time.Time
 }
 
-// LaunchArgv is the argv herdr runs for a kind and model: the kind's
-// command, its launch args and its model flag.
-func LaunchArgv(a kinds.Adapter, model string) []string {
+// LaunchArgv is the argv herdr runs for an agent, as ntm launches it:
+// the kind's command and launch args (the permission flags), the model,
+// the reasoning effort (the kind's default when empty), and the guard
+// hooks through the kind's settings flag when settings is not empty.
+func LaunchArgv(a kinds.Adapter, model, effort, settings string) []string {
 	argv := append([]string{a.Name}, a.LaunchArgs...)
 	if model != "" && a.ModelFlag != "" {
 		argv = append(argv, a.ModelFlag, model)
 	}
+	argv = append(argv, a.Effort(effort)...)
+	if settings != "" && a.SettingsFlag != "" {
+		argv = append(argv, a.SettingsFlag, settings)
+	}
 	return argv
+}
+
+// hookEntry is one PreToolUse matcher group of Claude's settings.
+type hookEntry struct {
+	Matcher string        `json:"matcher"`
+	Hooks   []hookHandler `json:"hooks"`
+}
+
+type hookHandler struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Timeout int    `json:"timeout"`
+}
+
+// HookSettings is the --settings JSON a Claude agent gets, as ntm builds
+// it (policy.ClaudeAgentLaunchSettings): a Bash PreToolUse hook for dcg
+// and one for rch, each only when its binary is installed (a hook naming
+// a missing binary errors on every Bash call). lookPath is exec.LookPath.
+func HookSettings(lookPath func(string) (string, error)) string {
+	var entries []hookEntry
+	for _, bin := range []string{"dcg", "rch"} {
+		path, err := lookPath(bin)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, hookEntry{Matcher: "Bash",
+			Hooks: []hookHandler{{Type: "command", Command: shellQuote(path), Timeout: 5}}})
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	data, _ := json.Marshal(map[string]any{"hooks": map[string]any{"PreToolUse": entries}})
+	return string(data)
+}
+
+// shellQuote quotes a path for a hook command, which Claude Code runs
+// through a shell.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Decide decides whether the agents of a request may start (plan-v8 2.2,
@@ -112,15 +160,22 @@ func Decide(ctx context.Context, env AdmissionEnv, req Request) Admission {
 	if env.Quota != nil {
 		obs = env.Quota()
 	}
-	seen := map[string]bool{}
+	seenKind, seenArgv := map[string]bool{}, map[string]bool{}
 	for _, w := range req.Agents {
-		if seen[w.Kind] {
+		a := kinds.Lookup(w.Kind)
+		if !seenKind[w.Kind] {
+			seenKind[w.Kind] = true
+			admitQuota(&ad, req, env, obs, a, now, refuse, warn)
+		}
+		// Every distinct launch argv is checked and screened, not only
+		// the first of a kind.
+		argv := LaunchArgv(a, w.Model, effortOf(req, w), env.Settings)
+		key := strings.Join(argv, "\x00")
+		if seenArgv[key] {
 			continue
 		}
-		seen[w.Kind] = true
-		a := kinds.Lookup(w.Kind)
-		admitQuota(&ad, req, env, obs, a, now, refuse, warn)
-		admitGuards(ctx, &ad, req, env, a, w.Model, refuse, warn)
+		seenArgv[key] = true
+		admitGuards(ctx, &ad, req, env, a, argv, refuse, warn)
 	}
 	if len(ad.Reasons) > 0 {
 		ad.Decision, ad.Reason = Refuse, strings.Join(ad.Reasons, "; ")
@@ -173,7 +228,7 @@ func admitQuota(ad *Admission, req Request, env AdmissionEnv, obs []quota.Observ
 	refuse("%s", why)
 }
 
-func admitGuards(ctx context.Context, ad *Admission, req Request, env AdmissionEnv, a kinds.Adapter, model string,
+func admitGuards(ctx context.Context, ad *Admission, req Request, env AdmissionEnv, a kinds.Adapter, argv []string,
 	refuse, warn func(string, ...any)) {
 	if !a.GuardSupported {
 		warn("%s runs no hooks: DCG and the other guards do not protect it (F.9)", a.Name)
@@ -182,7 +237,6 @@ func admitGuards(ctx context.Context, ad *Admission, req Request, env AdmissionE
 	if env.Guards == nil {
 		return
 	}
-	argv := LaunchArgv(a, model)
 	results := guards.VerifyLaunch(env.Guards(a.Name), argv)
 	for _, r := range results {
 		if r.State == guards.Configured || r.State == guards.VerifiedForLaunch || r.State == guards.Unsupported {
@@ -211,6 +265,14 @@ func admitGuards(ctx context.Context, ad *Admission, req Request, env AdmissionE
 		// A denied argv is never an exception.
 		refuse("%s: DCG denies the launch argv %s: %s", a.Name, v.Command, v.Reason)
 	}
+}
+
+// effortOf is an agent's effort: its own, else the request's.
+func effortOf(req Request, w Want) string {
+	if w.Effort != "" {
+		return w.Effort
+	}
+	return req.Effort
 }
 
 // CommandCapacity runs a capacity provider command (ACFS configures

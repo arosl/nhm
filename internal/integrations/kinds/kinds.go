@@ -78,6 +78,14 @@ type Adapter struct {
 	LaunchArgs []string `json:"launch_args,omitempty"`
 	// ModelFlag sets the model; "" means spawn cannot set one.
 	ModelFlag string `json:"model_flag,omitempty"`
+	// EffortArgs set the reasoning effort; "{effort}" is the value, and
+	// DefaultEffort applies when the caller gives none (ntm's defaults).
+	EffortArgs    []string `json:"effort_args,omitempty"`
+	DefaultEffort string   `json:"default_effort,omitempty"`
+	// SettingsFlag passes a settings JSON with the guard hooks (Claude's
+	// --settings, as ntm does): the hooks then run whatever the user's own
+	// settings hold.
+	SettingsFlag string `json:"settings_flag,omitempty"`
 	// ResumeArgv resumes a native session; "{session}" is the id. nil:
 	// nhm cannot resume this kind.
 	ResumeArgv []string `json:"resume_argv,omitempty"`
@@ -139,14 +147,39 @@ func (a Adapter) LimitPattern() *regexp.Regexp {
 	return GenericLimit
 }
 
-// Resume returns the resume argv for a native session, or nil.
+// SessionPattern is a native session id nhm puts into an argv: it never
+// starts with "-", so it cannot become an option.
+var SessionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+
+// EffortPattern is a reasoning effort nhm puts into an argv.
+var EffortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
+
+// Resume returns the resume argv for a native session, or nil when the
+// kind has none or the id is not a plain session id.
 func (a Adapter) Resume(session string) []string {
-	if a.ResumeArgv == nil || session == "" {
+	if a.ResumeArgv == nil || !SessionPattern.MatchString(session) {
 		return nil
 	}
 	out := make([]string, len(a.ResumeArgv))
 	for i, s := range a.ResumeArgv {
 		out[i] = strings.ReplaceAll(s, "{session}", session)
+	}
+	return out
+}
+
+// Effort returns the effort args for effort (the kind's default when
+// empty), or nil when the kind takes none or the value is not a plain
+// word.
+func (a Adapter) Effort(effort string) []string {
+	if effort == "" {
+		effort = a.DefaultEffort
+	}
+	if len(a.EffortArgs) == 0 || !EffortPattern.MatchString(effort) {
+		return nil
+	}
+	out := make([]string, len(a.EffortArgs))
+	for i, s := range a.EffortArgs {
+		out[i] = strings.ReplaceAll(s, "{effort}", effort)
 	}
 	return out
 }
@@ -199,8 +232,13 @@ func fromCodex(e Event, bound string, launch bool) Decision {
 func builtins() []Adapter {
 	return []Adapter{
 		{
-			Name: "claude", NTMType: "claude", Program: "claude-code", TrustKeys: claudeTrust, Flags: []string{"cc"}, ModelFlag: "--model",
-			ResumeArgv: []string{"claude", "--resume", "{session}"}, NewSession: "/clear", ExitCommand: "/exit",
+			// ntm's launch: --dangerously-skip-permissions, --model,
+			// --effort xhigh, and the dcg and rch PreToolUse hooks through
+			// --settings (PreToolUse hooks run in every permission mode).
+			Name: "claude", NTMType: "claude", Program: "claude-code", TrustKeys: claudeTrust, Flags: []string{"cc"},
+			LaunchArgs: []string{"--dangerously-skip-permissions"}, ModelFlag: "--model",
+			EffortArgs: []string{"--effort", "{effort}"}, DefaultEffort: "xhigh", SettingsFlag: "--settings",
+			ResumeArgv: []string{"claude", "--dangerously-skip-permissions", "--resume", "{session}"}, NewSession: "/clear", ExitCommand: "/exit",
 			InterruptKeys: []string{"esc"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true},
 			Limit:      regexp.MustCompile(`(?i)usage limit reached|you('|’)ve (hit|reached) your ([a-z0-9-]+ )?limit|(5-hour|session|weekly|opus|sonnet) limit reached|rate_limit_error|api error: 429`),
@@ -211,8 +249,13 @@ func builtins() []Adapter {
 		},
 		{
 			// --no-daemon runs Codex's hooks in its own pane (F.22, exp.3).
-			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Flags: []string{"cod"}, LaunchArgs: []string{"--no-daemon"}, ModelFlag: "--model",
-			ResumeArgv: []string{"codex", "--no-daemon", "resume", "{session}"}, NewSession: "/new", ExitCommand: "/quit",
+			// ntm's launch: --dangerously-bypass-approvals-and-sandbox and
+			// model_reasoning_effort xhigh; --no-daemon is the fork's (F.22).
+			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Flags: []string{"cod"},
+			LaunchArgs: []string{"--no-daemon", "--dangerously-bypass-approvals-and-sandbox"}, ModelFlag: "--model",
+			EffortArgs: []string{"-c", "model_reasoning_effort={effort}"}, DefaultEffort: "xhigh",
+			ResumeArgv: []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "{session}"},
+			NewSession: "/new", ExitCommand: "/quit",
 			InterruptKeys: []string{"esc"}, QuotaPool: "codex", QuotaSource: "codex session logs",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true, Trust: true},
 			Limit:      regexp.MustCompile(`(?i)you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit reached|429 too many requests`),
@@ -281,10 +324,15 @@ func init() {
 		no-cass no-cass-check no-kickoff op-id pane panes per-tab poll project prompt prompt-file ready-timeout
 		require-observations socket stagger-delay stagger-mode state t template thread timeout trust-folder
 		type until var version wait when with-cass with-memory yes
+		no-cass-context effort memory-query
 		dir no-user safety assign-work robot-format robot-spawn robot-send`) {
 		reserved[f] = true
 	}
 }
+
+// Reserved reports a name that a kind or kind flag cannot take: a flag of
+// nhm's verbs. The CLI's tests check that every verb flag is here.
+func Reserved(name string) bool { return reserved[name] }
 
 // Register adds a kind. A built-in cannot be replaced, and a flag cannot
 // name two kinds.
