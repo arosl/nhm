@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: test
+        run: go test -race -count=1 ./...
+      - name: package
+        run: bash scripts/package.sh "${GITHUB_REF_NAME#v}" dist
+      - name: install.sh against the packaged release
+        run: |
+          sudo apt-get install -y zstd
+          NHM_TEST_VERSION="${GITHUB_REF_NAME#v}" bash tests/install_test.sh dist
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "nhm ${GITHUB_REF_NAME#v}" --generate-notes \
+            dist/*.tar.zst dist/SHA256SUMS

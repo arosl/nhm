@@ -1,0 +1,45 @@
+# Provenance
+
+nhm reuses code from ntm (github.com/Dicklesworthstone/ntm), under ntm's
+licence. The operator ruled on 2026-10-12, after a legal review of the
+full licence text: nhm may reuse or derive from ntm's code (ACFS bead
+acfs-9hkh, plan-v8 section 10).
+
+The rules:
+
+- Each file taken from ntm keeps ntm's licence: a `LICENSE` file with
+  ntm's text, unmodified and with its rider, sits in the file's directory.
+  The top-level `LICENSE` is the same text, because nhm as a whole is a
+  derivative work of ntm.
+- Each taken file starts with a header that names its source path and
+  commit, and its local changes.
+- This file lists every taken file. Add a line in the same commit that
+  takes a file.
+- nhm takes code, not architecture: no tmux backend, detection engine,
+  TUI, coordinator or task scheduler.
+- Each file is ported by hand. Nothing is generated from ntm by a script.
+
+The same rules apply to code from pt and dcg.
+
+## Files from ntm at 9d5ed97796e37fa7b7c89bc3ba4087c144f0102c
+
+| nhm path | ntm path | Local changes |
+|---|---|---|
+| `LICENSE` | `LICENSE` | none |
+| `e2e/fakeagent/LICENSE` | `LICENSE` | none |
+| `e2e/fakeagent/main.go` | `e2e/fakeagent/main.go` | provenance header |
+| `e2e/fakeagent/main_test.go` | `e2e/fakeagent/main_test.go` | provenance header; the tests that ran ntm's tmux detectors (`internal/agent`, `internal/ratelimit`, `internal/tmux`) are removed; `TestRenderComposerAndGate` is new and checks the screen text |
+| `e2e/fakeagent/resize_signal_other.go` | `e2e/fakeagent/resize_signal_other.go` | provenance header |
+| `e2e/fakeagent/resize_signal_unix.go` | `e2e/fakeagent/resize_signal_unix.go` | provenance header |
+| `internal/robot/contract/LICENSE` | `LICENSE` | none |
+| `internal/robot/contract/assertions.go` | `internal/robot/contract/assertions.go` | provenance header |
+| `internal/robot/contract/assertions_test.go` | `internal/robot/contract/assertions_test.go` | provenance header |
+| `internal/robot/contract/replay.go` | `internal/robot/contract/replay.go` | provenance header |
+| `internal/robot/contract/replay_test.go` | `internal/robot/contract/replay_test.go` | provenance header |
+| `internal/robot/contract/testdata/replay_manifest.json` | `internal/robot/contract/testdata/replay_manifest.json` | none |
+
+## Files from herdr
+
+| nhm path | Source | Local changes |
+|---|---|---|
+| `internal/herdr/schema/herdr-api.schema.json` | the output of `herdr api schema --json`, herdr 0.9.3, protocol 22 (github.com/herdrdev/herdr, Apache-2.0) | none |

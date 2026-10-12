@@ -1,0 +1,5 @@
+/nhm
+/dist/
+# The bead export stays local (ACFS AGENTS.md, "Bead export").
+/.beads/*
+!/.beads/.gitignore
