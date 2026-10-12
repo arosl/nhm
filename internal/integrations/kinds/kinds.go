@@ -269,11 +269,33 @@ func NewRegistry() *Registry {
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
+// reserved are the flags of nhm's verbs (send, spawn, wait, interrupt)
+// and the robot spawn's "spawn-" flags without that prefix. A kind's name
+// and flags become flags of the same verbs, so a kind called "force"
+// would take --force.
+var reserved = map[string]bool{}
+
+func init() {
+	for _, f := range strings.Fields(`all any after-op agent allow-unguarded assign bead cass-check count dry-run
+		file force group h help include-self include-user interactive json label limit msg msg-file name
+		no-cass no-cass-check no-kickoff op-id pane panes per-tab poll project prompt prompt-file ready-timeout
+		require-observations socket stagger-delay stagger-mode state t template thread timeout trust-folder
+		type until var version wait when with-cass with-memory yes
+		dir no-user safety assign-work robot-format robot-spawn robot-send`) {
+		reserved[f] = true
+	}
+}
+
 // Register adds a kind. A built-in cannot be replaced, and a flag cannot
 // name two kinds.
 func (r *Registry) Register(a Adapter) error {
 	if !namePattern.MatchString(a.Name) {
 		return fmt.Errorf("kinds: invalid kind name %q", a.Name)
+	}
+	for _, n := range append([]string{a.Name}, a.Flags...) {
+		if reserved[n] {
+			return fmt.Errorf("kinds: %q is a flag of nhm's verbs; a kind or kind flag cannot take it", n)
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

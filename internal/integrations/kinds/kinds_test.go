@@ -50,6 +50,35 @@ func TestBuiltins(t *testing.T) {
 	}
 }
 
+// The built-ins meet the rules that config kinds must meet.
+func TestBuiltinsMeetTheConfigRules(t *testing.T) {
+	for _, a := range NewRegistry().All() {
+		if err := checkResumeArgv(a.ResumeArgv); err != nil {
+			t.Errorf("%s resume_argv: %v", a.Name, err)
+		}
+		for _, k := range a.InterruptKeys {
+			if !KeyAllowed(k) {
+				t.Errorf("%s interrupt key %q", a.Name, k)
+			}
+		}
+		if a.TrustKeys != nil {
+			for _, screen := range []string{
+				"Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n",
+				"Trust this folder?\n› 1. Trust and continue\n",
+			} {
+				for _, k := range a.TrustKeys(screen) {
+					if !KeyAllowed(k) {
+						t.Errorf("%s trust key %q", a.Name, k)
+					}
+				}
+			}
+		}
+		if reserved[a.Name] {
+			t.Errorf("%s is reserved", a.Name)
+		}
+	}
+}
+
 func TestTrustKeysAndPrograms(t *testing.T) {
 	c, _ := Get("claude")
 	x, _ := Get("codex")
@@ -108,6 +137,11 @@ func TestRegisterAndConfig(t *testing.T) {
 	if err := r.Register(Adapter{Name: "cc"}); err == nil {
 		t.Fatal("a kind took another kind's flag as its name")
 	}
+	for _, a := range []Adapter{{Name: "force"}, {Name: "all"}, {Name: "help"}, {Name: "mine", Flags: []string{"wait"}}} {
+		if err := r.Register(a); err == nil {
+			t.Errorf("%+v took a verb flag", a)
+		}
+	}
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := r.LoadConfig(path); err != nil {
 		t.Fatalf("missing file = %v", err)
@@ -153,6 +187,23 @@ session_start = true
 		"[kinds.x]\nlimit = \"(\"\n",
 		"[kinds.x]\nresume_argv = [\"x\", \"--resume\"]\n",
 		"[kinds.x]\nguard_settings = \"../etc/passwd\"\n",
+		// resume_argv: the program is fixed, not a shell, and the
+		// session is a whole argument (acfs-9hkh.52).
+		"[kinds.x]\nresume_argv = [\"{session}\"]\n",
+		"[kinds.x]\nresume_argv = [\"{session}\", \"x\"]\n",
+		"[kinds.x]\nresume_argv = [\"sh\", \"-c\", \"x {session}\"]\n",
+		"[kinds.x]\nresume_argv = [\"/usr/bin/env\", \"{session}\"]\n",
+		"[kinds.x]\nresume_argv = [\"x\", \"--resume={session}\"]\n",
+		// Pane-typed fields take no control characters; keys are herdr's.
+		"[kinds.x]\nlaunch_args = [\"--a\\n--b\"]\n",
+		"[kinds.x]\nlaunch_args = [\"\"]\n",
+		"[kinds.x]\nnew_session = \"/new\\r\"\n",
+		"[kinds.x]\nexit_command = \"/quit\\n\"\n",
+		"[kinds.x]\nmodel_flag = \"model\"\n",
+		"[kinds.x]\ninterrupt_keys = [\"Escape\"]\n",
+		"[kinds.x]\ninterrupt_keys = [\"esc; rm\"]\n",
+		"[kinds.force]\n",
+		"[kinds.x]\nflags = [\"dry-run\"]\n",
 	} {
 		write(bad)
 		if err := NewRegistry().LoadConfig(path); err == nil {
