@@ -232,6 +232,103 @@ func TestTakeoverAndHandback(t *testing.T) {
 	}
 }
 
+// movingEvents is fakeEvents whose tail moves when mail is delivered.
+type movingEvents struct {
+	fakeEvents
+	tail *int64
+}
+
+func (m movingEvents) Tail(context.Context, string, string) (int64, error) { return *m.tail, nil }
+
+// acfs-9hkh.77 F1: mail delivered while handback brings the wake rows up
+// to date stays after the Bash's cursor: the tail is read first.
+func TestHandbackReadsTheTailFirst(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.export(t, "greencastle")
+	if _, err := Takeover(ctx, w.env, false); err != nil {
+		t.Fatal(err)
+	}
+	tail := int64(20)
+	w.env.Events = movingEvents{fakeEvents: w.events, tail: &tail}
+	// The inbox read happens before message 30 arrives (cursor 25), so it
+	// records no row for it; then the message is delivered.
+	w.env.RefreshWake = func(context.Context, bindings.Binding) error {
+		tail = 25
+		return nil
+	}
+	if _, err := Handback(ctx, w.env, false); err != nil {
+		t.Fatal(err)
+	}
+	if c := *w.bash.imported.Wake[0].State.Cursor; c != 20 {
+		t.Fatalf("the Bash's cursor = %d, want 20 (before message 30)", c)
+	}
+}
+
+// acfs-9hkh.77 F2: unread mail with no delivery event is new, not handled.
+func TestTakeoverTreatsEventlessMailAsNew(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.export(t, "greencastle")
+	w.env.Mail.(fakeMail).unread["IcyKnoll"] = []int64{5, 12, 40}
+	rep, err := Takeover(ctx, w.env, false)
+	if err != nil || rep.Wake[0].Handled != 1 || rep.Wake[0].New != 2 {
+		t.Fatalf("takeover = %+v %v", rep.Wake, err)
+	}
+	if _, ok := wakeRow(t, w, "40"); ok {
+		t.Fatal("message 40 (no event) was marked as already woken for")
+	}
+	if a, ok := wakeRow(t, w, "5"); !ok || !a {
+		t.Fatal("message 5 (event before the cursor) was not marked")
+	}
+}
+
+// acfs-9hkh.77 F3, F4: a stale token directory is swept; a switch to the
+// current owner is a refusal, like the dry run's.
+func TestHandbackSweepsAndSecondSwitchRefuses(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.export(t, "greencastle")
+	if _, err := Takeover(ctx, w.env, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Takeover(ctx, w.env, false); !errors.Is(err, ErrRefused) || !errors.Is(err, core.ErrAlreadyOwner) {
+		t.Fatalf("takeover --yes when nhm owns = %v", err)
+	}
+	stale := filepath.Join(w.env.InstanceDir, ".handback.stale")
+	fresh := filepath.Join(w.env.InstanceDir, ".handback.live")
+	for _, d := range []string{stale, fresh} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "token-x"), []byte("tok\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := w.env.now().Add(-time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(fresh, w.env.now(), w.env.now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Handback(ctx, w.env, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("the stale directory is still there: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("a live handback's directory was removed: %v", err)
+	}
+	if _, err := Handback(ctx, w.env, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Handback(ctx, w.env, false); !errors.Is(err, ErrRefused) || !errors.Is(err, core.ErrAlreadyOwner) {
+		t.Fatalf("handback --yes when the Bash owns = %v", err)
+	}
+}
+
 func TestTakeoverRefusals(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {

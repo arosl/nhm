@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -47,6 +48,8 @@ var (
 	ErrOwnerCorrupt     = errors.New("owner.toml is corrupt; every mutation is refused")
 	ErrNotOwner         = errors.New("this herdr instance is owned by another implementation")
 	ErrOwnerLockTimeout = errors.New("timed out waiting for the owner lock")
+	// ErrAlreadyOwner: a switch to the owner the instance has already.
+	ErrAlreadyOwner = errors.New("the instance has that owner already")
 )
 
 // Owner is the content of owner.toml.
@@ -123,7 +126,7 @@ func SwitchOwner(ctx context.Context, instanceDir, to string, now time.Time, pre
 		return Owner{}, err
 	}
 	if current.Owner == to {
-		return current, fmt.Errorf("core: the owner is already %s (generation %d)", to, current.Generation)
+		return current, fmt.Errorf("%w: the owner is already %s (generation %d)", ErrAlreadyOwner, to, current.Generation)
 	}
 	if prepare != nil {
 		if err := prepare(current); err != nil {
@@ -141,17 +144,58 @@ func SwitchOwner(ctx context.Context, instanceDir, to string, now time.Time, pre
 	return next, nil
 }
 
+// OwnerIntentFile is the writer-intent marker beside owner.lock. A
+// takeover or handback that waits for the exclusive lock keeps it fresh;
+// a shared taker (nhm's mutators and hooks, and ACFS's Bash) does not
+// take the lock while it is fresh. So a stream of overlapping shared
+// holders cannot starve the switch: once the marker is up, they drain.
+// A marker older than IntentMaxAge is a dead switch's, and is ignored.
+const OwnerIntentFile = "owner.lock.intent"
+
+// IntentMaxAge is how long an intent marker counts without a refresh; a
+// waiting switch refreshes it every intentRefresh.
+const (
+	IntentMaxAge  = 2 * time.Minute
+	intentRefresh = 10 * time.Second
+)
+
+// intentFresh says whether a switch is waiting for the lock now.
+func intentFresh(path string, now time.Time) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && now.Sub(info.ModTime()) < IntentMaxAge
+}
+
 // lockOwner takes owner.lock with how (LOCK_SH or LOCK_EX), polling until
-// ctx ends.
+// ctx ends. An exclusive taker puts up the intent marker while it waits;
+// a shared taker waits while a fresh marker is up.
 func lockOwner(ctx context.Context, instanceDir string, how int) (func(), error) {
 	path := filepath.Join(instanceDir, store.OwnerLockFile)
+	intent := filepath.Join(instanceDir, OwnerIntentFile)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("core: %w", err)
 	}
+	exclusive := how&syscall.LOCK_EX != 0
+	var marked time.Time
+	if exclusive {
+		// The marker comes down when this taker has the lock or gives up.
+		defer func() {
+			if !marked.IsZero() {
+				_ = os.Remove(intent)
+			}
+		}()
+	}
 	delay := 5 * time.Millisecond
 	for {
-		err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB)
+		if exclusive && time.Since(marked) >= intentRefresh {
+			if err := store.WriteFileAtomic(intent, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err == nil {
+				marked = time.Now()
+			}
+		}
+		var err error = syscall.EWOULDBLOCK
+		if exclusive || !intentFresh(intent, time.Now()) {
+			err = syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB)
+		}
 		if err == nil {
 			return func() {
 				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)

@@ -376,6 +376,48 @@ func TestAKilledAttemptDoesNotHoldTheRecipient(t *testing.T) {
 	}
 }
 
+// acfs-9hkh.77: Prune never drops the row of mail that is still unread
+// for an active agent, however old: the next inbox read would nudge for
+// it again. Rows of read mail, and of a binding that is gone, go after
+// Keep.
+func TestPruneKeepsUnreadMailAnnounced(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	b := w.bind(t, "IcyKnoll", "w1:p1", "pi", herdr.StatusIdle)
+	gone := w.bind(t, "BlueLake", "w1:p2", "pi", herdr.StatusIdle)
+	old := store.FormatTime(w.now.Add(-8 * 24 * time.Hour))
+	for _, r := range []struct{ binding, id, outcome string }{
+		{b.ID, "1", "submitted"}, {b.ID, "2", OutcomeRead}, {gone.ID, "3", "submitted"},
+	} {
+		if _, err := w.env.DB.SQL().Exec(`INSERT INTO wake (binding_id, message_id, first_seen_at, announced_at, last_outcome)
+			VALUES (?, ?, ?, ?, ?)`, r.binding, r.id, old, old, r.outcome); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.env.Bindings.Retire(ctx, gone.ID, gone.Generation, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Prune(ctx, w.env); err != nil || n != 2 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	var left []string
+	rows, _ := w.env.DB.SQL().Query(`SELECT message_id FROM wake ORDER BY message_id`)
+	for rows.Next() {
+		var id string
+		_ = rows.Scan(&id)
+		left = append(left, id)
+	}
+	_ = rows.Close()
+	if strings.Join(left, ",") != "1" {
+		t.Fatalf("left = %v", left)
+	}
+	// The unread mail is still announced: no second nudge.
+	w.mail.inbox["IcyKnoll"] = []InboxMessage{{ID: 1, From: "A", Kind: "to"}}
+	if added, _, err := ReadInbox(ctx, w.env, b); err != nil || added != 0 {
+		t.Fatalf("re-read added %d, %v", added, err)
+	}
+}
+
 // A prompt that outlives InFlight: resolveStale settles it first, then
 // its own outcome comes in. A refusal makes the mail pending again and
 // starts no cooldown; nothing was typed.

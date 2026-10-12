@@ -92,6 +92,68 @@ func TestTakeoverAndHandback(t *testing.T) {
 
 // A takeover waits for a mutator that holds the shared lock, and a
 // mutator cannot start while a takeover holds it.
+// acfs-9hkh.77 F5: a fresh intent marker holds new shared takers back; a
+// stale one (a dead switch's) does not.
+func TestIntentMarkerHoldsSharedTakers(t *testing.T) {
+	dir := t.TempDir()
+	intent := filepath.Join(dir, OwnerIntentFile)
+	if err := os.WriteFile(intent, []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := WithOwnerShared(ctx, dir, func(Owner) error { return nil }); !errors.Is(err, ErrOwnerLockTimeout) {
+		t.Fatalf("a shared taker behind a fresh marker = %v", err)
+	}
+	old := time.Now().Add(-IntentMaxAge - time.Minute)
+	if err := os.Chtimes(intent, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := WithOwnerShared(context.Background(), dir, func(Owner) error { return nil }); err != nil {
+		t.Fatalf("a stale marker held a shared taker: %v", err)
+	}
+}
+
+// acfs-9hkh.77 F5: overlapping shared holders, which alone would keep the
+// lock shared for ever, cannot starve a switch: its marker drains them.
+func TestSwitchIsNotStarvedByOverlappingSharedHolders(t *testing.T) {
+	dir := t.TempDir()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			defer func() { done <- struct{}{} }()
+			time.Sleep(time.Duration(i) * 15 * time.Millisecond)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+				_ = WithOwnerShared(ctx, dir, func(Owner) error { time.Sleep(30 * time.Millisecond); return nil })
+				cancel()
+			}
+		}(i)
+	}
+	time.Sleep(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	o, err := SwitchOwner(ctx, dir, OwnerNhm, t0, nil)
+	close(stop)
+	<-done
+	<-done
+	if err != nil || o.Owner != OwnerNhm {
+		t.Fatalf("switch = %+v, %v", o, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, OwnerIntentFile)); !os.IsNotExist(err) {
+		t.Fatalf("the intent marker stayed: %v", err)
+	}
+	if _, err := SwitchOwner(context.Background(), dir, OwnerNhm, t0, nil); !errors.Is(err, ErrAlreadyOwner) {
+		t.Fatalf("a switch to the current owner = %v", err)
+	}
+}
+
 func TestTakeoverWaitsForSharedHolders(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

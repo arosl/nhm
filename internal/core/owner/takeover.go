@@ -135,8 +135,9 @@ func Takeover(ctx context.Context, env Env, dry bool) (Report, error) {
 		return p.apply(ctx, env)
 	})
 	rep.Owner = o
-	if err != nil && o.Owner == core.OwnerNhm && !errors.Is(err, ErrRefused) {
-		err = fmt.Errorf("%w: %v", ErrRefused, err)
+	if err != nil && errors.Is(err, core.ErrAlreadyOwner) && !errors.Is(err, ErrRefused) {
+		// The same answer as the dry run's: a refusal, not a failure.
+		err = fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	return rep, err
 }
@@ -383,22 +384,26 @@ func planWake(ctx context.Context, env Env, idx *index, w WakeEntry, p *takeover
 	if err != nil {
 		return it, fmt.Errorf("the inbox of %s cannot be read: %w", w.Name, err)
 	}
-	newer, err := env.Events.After(ctx, project, w.Name, *w.State.Cursor)
+	// The Bash has woken the agent for a message only when the message's
+	// own delivery event is at or before its cursor. An unread message
+	// with no event (pruned, or under another key) proves nothing: it is
+	// new, and nhm's wake nudges for it, as a handback refuses it.
+	events, err := env.Events.After(ctx, project, w.Name, 0)
 	if err != nil {
 		return it, fmt.Errorf("the delivery events of %s cannot be read: %w", w.Name, err)
 	}
-	isNew := map[int64]bool{}
-	for _, e := range newer {
-		if e.recipient() {
-			isNew[e.MessageID] = true
+	delivered := map[int64]int64{}
+	for _, e := range events {
+		if c, ok := delivered[e.MessageID]; e.recipient() && (!ok || e.Cursor < c) {
+			delivered[e.MessageID] = e.Cursor
 		}
 	}
 	var handled []int64
 	for _, id := range unread {
-		if isNew[id] {
-			it.New++
-		} else {
+		if c, ok := delivered[id]; ok && c <= *w.State.Cursor {
 			handled = append(handled, id)
+		} else {
+			it.New++
 		}
 	}
 	it.Handled = len(handled)

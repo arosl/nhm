@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
@@ -95,8 +97,13 @@ func runSwitch(verb string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
+	// SIGINT and SIGTERM cancel the run instead of killing the process,
+	// so a handback removes its token files on the way out; the owner
+	// stays as it was.
+	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	// The lock wait and the import (an inbox read per agent) together.
-	ctx, cancel := context.WithTimeout(context.Background(), switchLockWait+5*time.Minute)
+	ctx, cancel := context.WithTimeout(sctx, switchLockWait+5*time.Minute)
 	defer cancel()
 	run := owner.Takeover
 	if verb == "handback" {

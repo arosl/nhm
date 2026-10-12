@@ -707,14 +707,20 @@ func PossiblySubmitted(ctx context.Context, env Env) ([]Uncertain, error) {
 	return out, rows.Err()
 }
 
-// Prune deletes rows and wake operations older than Keep. A row of a
-// message that is still unread stays announced until then, so it is
-// never announced twice.
+// Prune deletes wake operations older than Keep, and the rows that can no
+// longer cause a nudge, once Keep has passed: the rows of read mail, and
+// those of a binding that is not active. A row of mail that is still
+// unread stays for as long as it is unread, whatever its age (a takeover
+// announces old mail too): if it went, the next inbox read would find the
+// mail again and nudge for it a second time.
 func Prune(ctx context.Context, env Env) (int, error) {
 	cfg := env.config()
 	cut := env.now().Add(-cfg.Keep)
 	db := env.DB.SQL()
-	rows, err := db.QueryContext(ctx, `SELECT binding_id, message_id, announced_at FROM wake WHERE announced_at IS NOT NULL`)
+	rows, err := db.QueryContext(ctx, `SELECT w.binding_id, w.message_id, w.announced_at FROM wake w
+		LEFT JOIN bindings b ON b.binding_id = w.binding_id
+		WHERE w.announced_at IS NOT NULL
+		AND (COALESCE(w.last_outcome, '') = ? OR b.status IS NULL OR b.status <> 'active')`, OutcomeRead)
 	if err != nil {
 		return 0, fmt.Errorf("wake: prune: %w", err)
 	}

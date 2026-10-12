@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/arosl/nhm/internal/core"
@@ -41,8 +42,9 @@ func Handback(ctx context.Context, env Env, dry bool) (Report, error) {
 		return handback(ctx, env, &rep)
 	})
 	rep.Owner = o
-	if err != nil && o.Owner == core.OwnerBash && !errors.Is(err, ErrRefused) {
-		err = fmt.Errorf("%w: %v", ErrRefused, err)
+	if err != nil && errors.Is(err, core.ErrAlreadyOwner) && !errors.Is(err, ErrRefused) {
+		// The same answer as the dry run's: a refusal, not a failure.
+		err = fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	return rep, err
 }
@@ -56,7 +58,10 @@ func handback(ctx context.Context, env Env, rep *Report) error {
 	st := State{Format: StateFormat, Version: StateVersion, ExportedAt: env.now().UTC().Format(time.RFC3339),
 		Tokens: []TokenRef{}, Wake: []WakeEntry{}, Keep: rep.Keep}
 
-	dir, err := os.MkdirTemp(env.InstanceDir, ".handback.")
+	// A handback that a signal or a crash ended can leave its token
+	// directory behind: sweep any that is old enough to be no live run's.
+	sweepHandbackDirs(env.InstanceDir, env.now())
+	dir, err := os.MkdirTemp(env.InstanceDir, handbackDirPrefix)
 	if err != nil {
 		return err
 	}
@@ -98,15 +103,23 @@ func handback(ctx context.Context, env Env, rep *Report) error {
 		rep.Tokens = append(rep.Tokens, Item{Name: b.MailName, ProjectKey: project, BindingID: b.ID, Action: ActionExported})
 	}
 	for _, b := range filter(list, bindings.Active) {
-		// Settle stale attempts and mark read mail read first, so only
-		// mail still unread counts as pending.
+		// The tail first: mail delivered after it is after the Bash's
+		// cursor whatever happens next, so mail that arrives while the
+		// inbox is read below can never fall between the two.
+		tail, err := env.Events.Tail(ctx, b.MailProjectKey, b.MailName)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: the delivery cursor cannot be read: %w", b.MailName, err))
+			continue
+		}
+		// Settle stale attempts and mark read mail read, so only mail
+		// still unread counts as pending.
 		if env.RefreshWake != nil {
 			if err := env.RefreshWake(ctx, b); err != nil {
 				errs = append(errs, fmt.Errorf("%s: the wake state cannot be brought up to date: %w", b.MailName, err))
 				continue
 			}
 		}
-		w, it, err := exportWake(ctx, env, b)
+		w, it, err := exportWake(ctx, env, b, tail)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -141,6 +154,33 @@ func handback(ctx context.Context, env Env, rep *Report) error {
 	return nil
 }
 
+// handbackDirPrefix names the private directories that carry the tokens
+// to the Bash.
+const handbackDirPrefix = ".handback."
+
+// staleHandbackDir is the age past which a token directory is no live
+// handback's: a handback ends within its command timeouts.
+const staleHandbackDir = 10 * time.Minute
+
+// sweepHandbackDirs removes the token directories of handbacks that
+// ended without their cleanup (a signal, a crash).
+func sweepHandbackDirs(instanceDir string, now time.Time) {
+	entries, err := os.ReadDir(instanceDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), handbackDirPrefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || now.Sub(info.ModTime()) < staleHandbackDir {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(instanceDir, e.Name()))
+	}
+}
+
 func filter(list []bindings.Binding, st bindings.Status) []bindings.Binding {
 	var out []bindings.Binding
 	for _, b := range list {
@@ -153,8 +193,10 @@ func filter(list []bindings.Binding, st bindings.Status) []bindings.Binding {
 
 // exportWake is an agent's wake state for the Bash: its cursor sits just
 // before the first message nhm has not announced, so the Bash wakes the
-// agent for exactly that mail; with none pending, at the tail.
-func exportWake(ctx context.Context, env Env, b bindings.Binding) (WakeEntry, Item, error) {
+// agent for exactly that mail; with none pending, at tail. tail was read
+// before the wake rows were brought up to date, and the cursor never
+// passes it: mail delivered since then is new to the Bash.
+func exportWake(ctx context.Context, env Env, b bindings.Binding, tail int64) (WakeEntry, Item, error) {
 	project := b.MailProjectKey
 	it := Item{Name: b.MailName, ProjectKey: project, BindingID: b.ID, Action: ActionExported}
 	// The last nudge (the Bash's last_wake) and any nudge in flight.
@@ -192,12 +234,8 @@ func exportWake(ctx context.Context, env Env, b bindings.Binding) (WakeEntry, It
 	if pending, err = pendingIDs(ctx, env, b.ID); err != nil {
 		return WakeEntry{}, it, err
 	}
-	var cursor int64
-	if len(pending) == 0 {
-		if cursor, err = env.Events.Tail(ctx, project, b.MailName); err != nil {
-			return WakeEntry{}, it, fmt.Errorf("%s: the delivery cursor cannot be read: %w", b.MailName, err)
-		}
-	} else {
+	cursor := tail
+	if len(pending) > 0 {
 		events, err := env.Events.After(ctx, project, b.MailName, 0)
 		if err != nil {
 			return WakeEntry{}, it, fmt.Errorf("%s: the delivery events cannot be read: %w", b.MailName, err)
@@ -208,13 +246,12 @@ func exportWake(ctx context.Context, env Env, b bindings.Binding) (WakeEntry, It
 				at[e.MessageID] = e.Cursor
 			}
 		}
-		cursor = -1
 		for _, id := range pending {
 			c, ok := at[id]
 			if !ok {
 				return WakeEntry{}, it, refused("%s: message %d is unread and pending, but Agent Mail has no delivery event for it: the Bash would never wake for it", b.MailName, id)
 			}
-			if cursor < 0 || c-1 < cursor {
+			if c-1 < cursor {
 				cursor = c - 1
 			}
 		}
