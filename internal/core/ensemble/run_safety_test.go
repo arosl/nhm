@@ -210,3 +210,37 @@ func TestStartRefusesSymlinksInTheArtifactPath(t *testing.T) {
 		t.Fatalf("the .gitignore link's target = %q", data)
 	}
 }
+
+// .nhm/ensemble swapped for a symlink after nhm checked it: what nhm
+// writes next goes to the directory it opened, never through the link
+// (acfs-9hkh.79, the Lstat-to-Mkdir race).
+func TestASymlinkSwappedInAfterTheWalkIsNotFollowed(t *testing.T) {
+	f := &fakes{notReady: -1}
+	project, target := t.TempDir(), t.TempDir()
+	ensemble := filepath.Join(project, ".nhm", "ensemble")
+	moved := filepath.Join(project, "moved")
+	old := afterArtifactWalk
+	afterArtifactWalk = func() {
+		if err := os.Rename(ensemble, moved); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(target, ensemble); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { afterArtifactWalk = old })
+	cat, _ := Builtin()
+	r, err := Start(context.Background(), f.env(t), cat, StartRequest{Preset: "project-diagnosis", Question: "q", ProjectRoot: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(target); len(entries) != 0 {
+		t.Fatalf("nhm wrote through the swapped-in link: %v", entries)
+	}
+	if _, err := os.Stat(filepath.Join(moved, ".gitignore")); err != nil {
+		t.Fatalf("the .gitignore is not in the directory nhm opened: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(moved, r.ID)); err != nil || !info.IsDir() {
+		t.Fatalf("the run's directory is not in the directory nhm opened: %v", err)
+	}
+}

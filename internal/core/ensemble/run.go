@@ -279,11 +279,15 @@ func Start(ctx context.Context, env RunEnv, cat *Catalog, req StartRequest) (Run
 // runs so their results stay out of the project's git status. Like the
 // run's directory, it is never shared.
 //
-// A cloned repository may commit .nhm or .nhm/ensemble as a symlink: nhm
-// would then write the .gitignore into the link's target and hide it from
-// git, and the agents would write there. So each part must be a real
-// directory (Lstat, never followed), and the .gitignore is created only
-// when nothing is at its path, a symlink included.
+// A cloned repository may commit .nhm or .nhm/ensemble as a symlink, and
+// an agent may swap one in while nhm works: nhm would then write the
+// .gitignore into the link's target and hide it from git, and the agents
+// would write there. So nhm walks the path by file descriptor: each part
+// is made relative to its parent's descriptor and opened with
+// O_NOFOLLOW|O_DIRECTORY, so a symlink, even to a directory, is refused at
+// the moment it is used, not at an earlier check. The .gitignore and the
+// run's directory are made relative to the last descriptor too, and the
+// .gitignore only when nothing is at its path, a symlink included.
 func makeArtifactDir(r Run) error {
 	if r.ArtifactDir == "" {
 		return nil
@@ -294,15 +298,24 @@ func makeArtifactDir(r Run) error {
 	if parent != filepath.Join(nhmDir, "ensemble") {
 		return fail(fmt.Errorf("%s is not under %s", r.ArtifactDir, nhmDir))
 	}
+	fd, err := syscall.Open(r.ProjectRoot, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fail(fmt.Errorf("%s: %w", r.ProjectRoot, err))
+	}
 	for _, dir := range []string{nhmDir, parent} {
-		if err := realDir(dir); err != nil {
+		next, err := subdirAt(fd, dir)
+		_ = syscall.Close(fd)
+		if err != nil {
 			return fail(err)
 		}
+		fd = next
 	}
-	ignore := filepath.Join(parent, ".gitignore")
-	f, err := os.OpenFile(ignore, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+	defer syscall.Close(fd)
+	afterArtifactWalk()
+	gfd, err := syscall.Openat(fd, ".gitignore", syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o644)
 	switch {
 	case err == nil:
+		f := os.NewFile(uintptr(gfd), filepath.Join(parent, ".gitignore"))
 		_, werr := f.WriteString("*\n")
 		if cerr := f.Close(); werr == nil {
 			werr = cerr
@@ -310,35 +323,44 @@ func makeArtifactDir(r Run) error {
 		if werr != nil {
 			return fail(werr)
 		}
-	case errors.Is(err, os.ErrExist):
+	case errors.Is(err, syscall.EEXIST):
 		// One is there already (a file the user keeps, or a symlink nhm
 		// does not write through).
 	default:
-		return fail(err)
+		return fail(fmt.Errorf("%s: %w", filepath.Join(parent, ".gitignore"), err))
 	}
-	if err := os.Mkdir(r.ArtifactDir, 0o700); err != nil {
-		return fail(err)
+	if err := syscall.Mkdirat(fd, filepath.Base(r.ArtifactDir), 0o700); err != nil {
+		return fail(fmt.Errorf("%s: %w", r.ArtifactDir, err))
 	}
 	return nil
 }
 
-// realDir makes dir when it is missing, and refuses it unless it is a
-// directory itself: a symlink, even to a directory, is refused.
-func realDir(dir string) error {
-	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
+// afterArtifactWalk runs once makeArtifactDir holds the descriptor of
+// .nhm/ensemble; tests swap a symlink in there.
+var afterArtifactWalk = func() {}
+
+// subdirAt makes the last part of path in the directory dirfd when it is
+// missing, and opens it without following a symlink. A symlink or a file
+// there is refused, and says which.
+func subdirAt(dirfd int, path string) (int, error) {
+	name := filepath.Base(path)
+	if err := syscall.Mkdirat(dirfd, name, 0o755); err != nil && !errors.Is(err, syscall.EEXIST) {
+		return -1, fmt.Errorf("%s: %w", path, err)
 	}
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return err
+	fd, err := syscall.Openat(dirfd, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err == nil {
+		return fd, nil
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; nhm does not write through it", dir)
+	// The open has refused it already; this only says why.
+	if info, lerr := os.Lstat(path); lerr == nil {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			return -1, fmt.Errorf("%s is a symlink; nhm does not write through it", path)
+		case !info.IsDir():
+			return -1, fmt.Errorf("%s is not a directory", path)
+		}
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", dir)
-	}
-	return nil
+	return -1, fmt.Errorf("%s: %w", path, err)
 }
 
 // settleStart records a start's outcome under the run's lock. A stop that
