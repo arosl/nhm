@@ -830,6 +830,30 @@ func TestBatchSSH(t *testing.T) {
 	}
 }
 
+// InProgress reads each database once, read only, and groups the beads in
+// progress by assignee (a fake br on PATH answers and logs its argv).
+func TestInProgress(t *testing.T) {
+	bin, root := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(root, ".beads", "beads.db"), "")
+	logf := filepath.Join(bin, "argv.log")
+	writeFile(t, filepath.Join(bin, "br"), "#!/bin/sh\necho \"$*\" >> "+logf+"\n"+
+		`case "$2" in */beads.db) id=own ;; *) id=other ;; esac`+"\n"+
+		`echo "{\"issues\":[{\"id\":\"acfs-$id\",\"status\":\"in_progress\",\"assignee\":\"IcyKnoll\"},{\"id\":\"acfs-x\",\"status\":\"in_progress\",\"assignee\":\"\"}],\"has_more\":false}"`+"\n")
+	if err := os.Chmod(filepath.Join(bin, "br"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	got, err := CLI{BeadDBs: []string{"/acfs/beads2.db"}}.InProgress(context.Background(), root)
+	if err != nil || strings.Join(got["IcyKnoll"], ",") != "acfs-own,acfs-other" || len(got) != 1 {
+		t.Fatalf("InProgress = %v %v", got, err)
+	}
+	argv, _ := os.ReadFile(logf)
+	if lines := strings.Split(strings.TrimSpace(string(argv)), "\n"); len(lines) != 2 ||
+		!strings.Contains(lines[0], "--no-auto-import --no-auto-flush --allow-stale list --status in_progress") {
+		t.Fatalf("br argv = %q", argv)
+	}
+}
+
 func TestBrReadArgs(t *testing.T) {
 	got := strings.Join(brRead([]string{"--db", "/x/beads.db"}), " ")
 	if got != "--db /x/beads.db --no-auto-import --no-auto-flush --allow-stale" {

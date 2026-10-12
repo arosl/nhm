@@ -445,6 +445,36 @@ func (c CLI) Closed(ctx context.Context, root, agent string) ([]string, error) {
 	return ids, nil
 }
 
+// InProgress lists the beads in progress in root's databases (the
+// project's own and the config's), by assignee: one br list per
+// database, for nhm status (acfs-9hkh.82).
+func (c CLI) InProgress(ctx context.Context, root string) (map[string][]string, error) {
+	dbs, err := c.beadDBs(root)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	seen := map[string]bool{}
+	for _, db := range dbs {
+		args := append(brRead(db), "list", "--status", "in_progress", "--limit", "0", "--json")
+		raw, err := run(ctx, root, "br", args...)
+		if err != nil {
+			return nil, err
+		}
+		issues, err := parseBrList(raw)
+		if err != nil {
+			return nil, err
+		}
+		for _, is := range issues {
+			if is.Assignee != "" && !seen[is.ID] {
+				seen[is.ID] = true
+				out[is.Assignee] = append(out[is.Assignee], is.ID)
+			}
+		}
+	}
+	return out, nil
+}
+
 // Known lists beads of every status assigned to the agent, in each
 // database, and reports whether any exists.
 func (c CLI) Known(ctx context.Context, root, agent string) (bool, error) {
