@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -100,15 +102,32 @@ type hookHandler struct {
 	Timeout int    `json:"timeout"`
 }
 
+// ClaudeSettingsPath is the user's own Claude Code settings file
+// ($CLAUDE_CONFIG_DIR/settings.json, or ~/.claude/settings.json). A
+// variable so tests can point it elsewhere.
+var ClaudeSettingsPath = func() string {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return filepath.Join(dir, "settings.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", "settings.json")
+}
+
 // HookSettings is the --settings JSON a Claude agent gets, as ntm builds
 // it (policy.ClaudeAgentLaunchSettings): a Bash PreToolUse hook for dcg
 // and one for rch, each only when its binary is installed (a hook naming
-// a missing binary errors on every Bash call). lookPath is exec.LookPath.
+// a missing binary errors on every Bash call), and only when the user's
+// own settings do not already run it (Claude merges both, and the guard
+// would then run twice on every Bash call). lookPath is exec.LookPath.
 func HookSettings(lookPath func(string) (string, error)) string {
+	userRuns := userPreToolUsePrograms(ClaudeSettingsPath())
 	var entries []hookEntry
 	for _, bin := range []string{"dcg", "rch"} {
 		path, err := lookPath(bin)
-		if err != nil {
+		if err != nil || userRuns[bin] {
 			continue
 		}
 		entries = append(entries, hookEntry{Matcher: "Bash",
@@ -119,6 +138,38 @@ func HookSettings(lookPath func(string) (string, error)) string {
 	}
 	data, _ := json.Marshal(map[string]any{"hooks": map[string]any{"PreToolUse": entries}})
 	return string(data)
+}
+
+// userPreToolUsePrograms returns the programs (by base name) that the
+// PreToolUse hooks of a Claude settings file run: the first word of each
+// command, unquoted. A missing or unreadable file runs nothing.
+func userPreToolUsePrograms(path string) map[string]bool {
+	out := map[string]bool{}
+	if path == "" {
+		return out
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	var s struct {
+		Hooks struct {
+			PreToolUse []hookEntry `json:"PreToolUse"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(data, &s) != nil {
+		return out
+	}
+	for _, e := range s.Hooks.PreToolUse {
+		for _, h := range e.Hooks {
+			fields := strings.Fields(h.Command)
+			if len(fields) == 0 {
+				continue
+			}
+			out[filepath.Base(strings.Trim(fields[0], `'"`))] = true
+		}
+	}
+	return out
 }
 
 // shellQuote quotes a path for a hook command, which Claude Code runs

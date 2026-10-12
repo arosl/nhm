@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -127,7 +126,7 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 		}
 		a.Limit = re
 	}
-	if err := checkResumeArgv(a.ResumeArgv); err != nil {
+	if err := checkResumeArgv(name, a.ResumeArgv); err != nil {
 		return Adapter{}, fmt.Errorf("kinds.%s.resume_argv: %w", name, err)
 	}
 	if err := checkEffortArgs(a.EffortArgs, a.DefaultEffort); err != nil {
@@ -164,22 +163,23 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 	return a, nil
 }
 
-// launchers run another program from their arguments: shells, and the
-// commands that exec what follows them. None may appear anywhere in a
-// resume argv, or the session id could become a program or shell text.
-var launchers = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
-	"csh": true, "tcsh": true, "nu": true, "pwsh": true, "busybox": true, "env": true, "xargs": true, "nice": true,
-	"nohup": true, "timeout": true, "sudo": true, "doas": true, "su": true, "runuser": true, "ssh": true, "watch": true,
-	"setsid": true, "stdbuf": true, "chroot": true, "flock": true, "script": true, "time": true, "exec": true,
-	"command": true, "ionice": true, "taskset": true, "chrt": true, "unshare": true, "nsenter": true,
-	"systemd-run": true, "parallel": true, "strace": true, "ltrace": true, "gdb": true, "eval": true,
-	"python": true, "python3": true, "perl": true, "ruby": true, "node": true, "osascript": true, "tmux": true}
+// herdrAgentKinds are the agent CLIs herdr 0.9.3 starts (`herdr agent
+// start --kind`; herdr resolves each one's own executable). A resume argv
+// runs one of these and nothing else: an allowlist, so no shell, launcher
+// or interpreter can take the session id.
+var herdrAgentKinds = map[string]bool{"pi": true, "claude": true, "codex": true, "gemini": true, "cursor": true,
+	"devin": true, "agy": true, "cline": true, "omp": true, "mastracode": true, "opencode": true, "copilot": true,
+	"kimi": true, "kiro": true, "droid": true, "amp": true, "grok": true, "hermes": true, "kilo": true,
+	"qodercli": true, "qwen": true, "letta": true, "maki": true, "muse": true}
 
-// checkResumeArgv: a fixed program, then arguments; no shell or launcher
-// anywhere; {session} only as a whole argument, either the last one or
-// the value right after a flag, at least once; no control characters.
-// The session id comes from a hook and must stay one argument.
-func checkResumeArgv(argv []string) error {
+// checkResumeArgv: the program is the kind itself, by its bare name, and
+// one of the agent CLIs herdr starts; then arguments without control
+// characters. {session} is a whole argument at least once, and only as the
+// value of a named flag (--resume ID, -r ID) or right after the resume
+// subcommand (codex resume ID), never a bare positional elsewhere; "--"
+// is not a flag. The session id comes from a hook and must stay one
+// argument that the agent CLI reads as a session id.
+func checkResumeArgv(kind string, argv []string) error {
 	if argv == nil {
 		return nil
 	}
@@ -187,20 +187,24 @@ func checkResumeArgv(argv []string) error {
 		return fmt.Errorf("give the program and its arguments")
 	}
 	prog := argv[0]
-	if prog == "" || strings.ContainsAny(prog, "{}") || hasControl(prog) {
-		return fmt.Errorf("the program %q must be a fixed name", prog)
+	switch {
+	case strings.ContainsAny(prog, `/\`):
+		return fmt.Errorf("the program %q must be a bare name, not a path", prog)
+	case prog != kind:
+		return fmt.Errorf("the program %q must be the kind itself (%s)", prog, kind)
+	case !herdrAgentKinds[prog]:
+		return fmt.Errorf("%q is not an agent CLI that herdr starts", prog)
 	}
 	whole := 0
-	for i, a := range argv {
-		if launchers[filepath.Base(a)] {
-			return fmt.Errorf("%q is a shell or a launcher", a)
-		}
+	for i, a := range argv[1:] {
+		prev := argv[i]
 		switch {
 		case hasControl(a):
 			return fmt.Errorf("%q holds a control character", a)
 		case a == "{session}":
-			if i == 0 || (i != len(argv)-1 && !strings.HasPrefix(argv[i-1], "-")) {
-				return fmt.Errorf("{session} must be the last argument or a flag's value")
+			named := strings.HasPrefix(prev, "-") && prev != "--" && prev != "-"
+			if !named && prev != "resume" {
+				return fmt.Errorf("{session} must be a named flag's value (--resume {session}) or follow the resume subcommand")
 			}
 			whole++
 		case strings.Contains(a, "{session}"):

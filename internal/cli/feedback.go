@@ -16,6 +16,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/enrich"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -182,7 +183,8 @@ func findTranscript(kind, session string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.ContainsAny(session, `/\*?[`) {
+	// The id builds a glob: only a plain session id, as every argv takes it.
+	if !kinds.SessionPattern.MatchString(session) {
 		return "", fmt.Errorf("session id %q is not a plain id", session)
 	}
 	var pattern string

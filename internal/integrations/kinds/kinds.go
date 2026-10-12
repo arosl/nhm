@@ -155,14 +155,24 @@ var SessionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 var EffortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 
 // Resume returns the resume argv for a native session, or nil when the
-// kind has none or the id is not a plain session id.
-func (a Adapter) Resume(session string) []string {
+// kind has none or the id is not a plain session id. It adds what the
+// launch adds (spawn.LaunchArgv): the model, the effort ("" is the kind's
+// default) and the settings with the guard hooks, so a resumed agent runs
+// as guarded as the one that started (ntm's restart re-applies them too).
+func (a Adapter) Resume(session, model, effort, settings string) []string {
 	if a.ResumeArgv == nil || !SessionPattern.MatchString(session) {
 		return nil
 	}
-	out := make([]string, len(a.ResumeArgv))
-	for i, s := range a.ResumeArgv {
-		out[i] = strings.ReplaceAll(s, "{session}", session)
+	out := make([]string, 0, len(a.ResumeArgv)+6)
+	for _, s := range a.ResumeArgv {
+		out = append(out, strings.ReplaceAll(s, "{session}", session))
+	}
+	if model != "" && a.ModelFlag != "" {
+		out = append(out, a.ModelFlag, model)
+	}
+	out = append(out, a.Effort(effort)...)
+	if settings != "" && a.SettingsFlag != "" {
+		out = append(out, a.SettingsFlag, settings)
 	}
 	return out
 }

@@ -17,12 +17,18 @@ func TestBuiltins(t *testing.T) {
 	if !c.Builtin || c.ModelFlag != "--model" || !slices.Equal(c.InterruptKeys, []string{"esc"}) || !c.CodeReview || c.Continue == nil {
 		t.Fatalf("claude = %+v", c)
 	}
-	if got := c.Resume("s-1"); !slices.Equal(got, []string{"claude", "--dangerously-skip-permissions", "--resume", "s-1"}) {
+	// A resumed Claude runs as guarded as the spawned one (the review of
+	// b0902bb): the model, the effort and the hooks' --settings stay.
+	if got := c.Resume("s-1", "opus", "", `{"hooks":{}}`); !slices.Equal(got, []string{"claude", "--dangerously-skip-permissions",
+		"--resume", "s-1", "--model", "opus", "--effort", "xhigh", "--settings", `{"hooks":{}}`}) {
 		t.Fatalf("resume = %v", got)
+	}
+	if got := c.Resume("s-1", "", "high", ""); !slices.Equal(got, []string{"claude", "--dangerously-skip-permissions", "--resume", "s-1", "--effort", "high"}) {
+		t.Fatalf("resume without model and settings = %v", got)
 	}
 	// A session id that is not a plain id never reaches an argv.
 	for _, bad := range []string{"-rf", "--help", "", "a b", "x;y", "../x"} {
-		if got := c.Resume(bad); got != nil {
+		if got := c.Resume(bad, "", "", ""); got != nil {
 			t.Errorf("resume %q = %v", bad, got)
 		}
 	}
@@ -31,15 +37,16 @@ func TestBuiltins(t *testing.T) {
 		!slices.Equal(c.Effort("high"), []string{"--effort", "high"}) || c.Effort("x y") != nil || c.SettingsFlag != "--settings" {
 		t.Fatalf("claude launch = %+v", c)
 	}
-	if got := c.Resume("s-1"); got == nil {
-		t.Fatalf("resume = %v", got)
-	}
 	x, _ := r.Get("codex")
+	if got := x.Resume("thr-1", "", "", ""); !slices.Equal(got, []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox",
+		"resume", "thr-1", "-c", "model_reasoning_effort=xhigh"}) {
+		t.Fatalf("codex resume = %v", got)
+	}
 	if x.CodeReview || !slices.Equal(x.LaunchArgs, []string{"--no-daemon", "--dangerously-bypass-approvals-and-sandbox"}) ||
 		!slices.Equal(x.Effort(""), []string{"-c", "model_reasoning_effort=xhigh"}) || !x.Hooks.Trust || x.NewSession != "/new" {
 		t.Fatalf("codex = %+v", x)
 	}
-	if a, _ := r.Get("agy"); a.NTMType != "antigravity" || a.ModelFlag != "" || a.InterruptKeys != nil || a.Resume("s") != nil || len(a.Cannot) == 0 {
+	if a, _ := r.Get("agy"); a.NTMType != "antigravity" || a.ModelFlag != "" || a.InterruptKeys != nil || a.Resume("s", "", "", "") != nil || len(a.Cannot) == 0 {
 		t.Fatalf("agy = %+v", a)
 	}
 	if p, _ := r.Get("pi"); p.GuardSupported {
@@ -68,7 +75,7 @@ func TestBuiltins(t *testing.T) {
 // The built-ins meet the rules that config kinds must meet.
 func TestBuiltinsMeetTheConfigRules(t *testing.T) {
 	for _, a := range NewRegistry().All() {
-		if err := checkResumeArgv(a.ResumeArgv); err != nil {
+		if err := checkResumeArgv(a.Name, a.ResumeArgv); err != nil {
 			t.Errorf("%s resume_argv: %v", a.Name, err)
 		}
 		for _, k := range a.InterruptKeys {
@@ -171,7 +178,6 @@ cm = "off"
 [kinds.mycli]
 flags = ["my"]
 interrupt_keys = ["C-c"]
-resume_argv = ["mycli", "--resume", "{session}"]
 limit = "out of credits"
 code_review = false
 [kinds.mycli.hooks]
@@ -182,7 +188,7 @@ session_start = true
 	}
 	m, ok := r.ByFlag("my")
 	if !ok || m.Name != "mycli" || m.Builtin || m.CodeReview || !m.GuardSupported || m.NTMType != "mycli" || m.QuotaPool != "mycli" ||
-		!m.Hooks.SessionStart || m.Continue != nil || !m.LimitPattern().MatchString("OUT OF CREDITS") || m.Resume("x")[2] != "x" {
+		!m.Hooks.SessionStart || m.Continue != nil || !m.LimitPattern().MatchString("OUT OF CREDITS") || m.Resume("x", "", "", "") != nil {
 		t.Fatalf("mycli = %+v", m)
 	}
 	if r.Names()[len(r.Names())-1] != "mycli" {
@@ -200,26 +206,30 @@ session_start = true
 		"[kinds.mycli]\ninterupt_keys = [\"x\"]\n",
 		"[kinds.claude]\nflags = [\"c2\"]\n",
 		"[kinds.x]\nlimit = \"(\"\n",
-		"[kinds.x]\nresume_argv = [\"x\", \"--resume\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\"]\n",
 		"[kinds.x]\nguard_settings = \"../etc/passwd\"\n",
-		// resume_argv: the program is fixed, not a shell, and the
-		// session is a whole argument (acfs-9hkh.52).
-		"[kinds.x]\nresume_argv = [\"{session}\"]\n",
-		"[kinds.x]\nresume_argv = [\"{session}\", \"x\"]\n",
-		"[kinds.x]\nresume_argv = [\"sh\", \"-c\", \"x {session}\"]\n",
-		// A launcher anywhere, not only first (the review of 78b3037).
-		"[kinds.x]\nresume_argv = [\"nice\", \"sh\", \"-c\", \"{session}\"]\n",
-		"[kinds.x]\nresume_argv = [\"timeout\", \"5\", \"x\", \"{session}\"]\n",
-		"[kinds.x]\nresume_argv = [\"x\", \"sudo\", \"{session}\"]\n",
-		"[kinds.x]\nresume_argv = [\"x\", \"/usr/bin/ssh\", \"{session}\"]\n",
-		"[kinds.x]\nresume_argv = [\"x\", \"--resume\", \"{session}\", \"--watch\", \"watch\"]\n",
-		// {session} only last, or as a flag's value.
-		"[kinds.x]\nresume_argv = [\"x\", \"{session}\", \"run\"]\n",
+		// resume_argv runs the kind itself, by its bare name, and only an
+		// agent CLI that herdr starts: an allowlist (the review of
+		// b0902bb), so no shell, launcher, interpreter or symlinked name.
+		"[kinds.x]\nresume_argv = [\"x\", \"--resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"sh\", \"-c\", \"gemini {session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"find\", \"-exec\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"python3.12\", \"-c\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"/usr/local/bin/gemini\", \"--resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"claude\", \"--resume\", \"{session}\"]\n",
+		"[kinds.bash]\nresume_argv = [\"bash\", \"-c\", \"{session}\"]\n",
+		// {session} only as a named flag's value or after resume; "--" is
+		// not a flag, and a bare positional is refused.
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"{session}\", \"run\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--\", \"{session}\", \"y\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"chat\", \"{session}\"]\n",
 		"[kinds.x]\neffort_args = [\"--effort\"]\n",
 		"[kinds.x]\ndefault_effort = \"high\"\n",
 		"[kinds.x]\neffort_args = [\"--effort\", \"{effort}\"]\ndefault_effort = \"x y\"\n",
-		"[kinds.x]\nresume_argv = [\"/usr/bin/env\", \"{session}\"]\n",
-		"[kinds.x]\nresume_argv = [\"x\", \"--resume={session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"/usr/bin/env\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume={session}\"]\n",
 		// Pane-typed fields take no control characters; keys are herdr's.
 		"[kinds.x]\nlaunch_args = [\"--a\\n--b\"]\n",
 		"[kinds.x]\nlaunch_args = [\"\"]\n",
@@ -234,6 +244,22 @@ session_start = true
 		write(bad)
 		if err := NewRegistry().LoadConfig(path); err == nil {
 			t.Errorf("accepted:\n%s", bad)
+		}
+	}
+	// An agent CLI that herdr starts, with the session as a named flag's
+	// value, or after the resume subcommand.
+	for _, good := range []string{
+		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"resume\", \"{session}\"]\n",
+	} {
+		write(good)
+		r := NewRegistry()
+		if err := r.LoadConfig(path); err != nil {
+			t.Fatalf("refused:\n%s%v", good, err)
+		}
+		g, _ := r.Get("gemini")
+		if got := g.Resume("s-9", "flash", "", ""); len(got) != 5 || got[2] != "s-9" || got[3] != "-m" || got[4] != "flash" {
+			t.Fatalf("gemini resume = %v", got)
 		}
 	}
 }
