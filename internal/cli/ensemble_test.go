@@ -106,4 +106,11 @@ func TestEnsembleRunVerbs(t *testing.T) {
 	if code, _, _ := run("ensemble", "status", "x", "--partial", "--socket", s.SocketPath); code != 2 {
 		t.Fatalf("--partial outside synthesize = %d", code)
 	}
+	// acfs-9hkh.67: a run that is not running is refused (exit 2), with
+	// the reason; nothing is sent.
+	before = len(s.Requests())
+	code, _, errOut = run("ensemble", "synthesize", r.ID, "--partial", "--socket", s.SocketPath)
+	if code != 2 || !strings.Contains(errOut, "only a running run can be synthesized") || len(s.Requests()) != before {
+		t.Fatalf("synthesize a failed run = %d %q", code, errOut)
+	}
 }

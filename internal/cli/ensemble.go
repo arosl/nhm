@@ -258,7 +258,8 @@ func runEnsembleRun(verb string, args []string, stdout, stderr io.Writer) int {
 	}
 	code := exitOK
 	switch {
-	case errors.Is(err, ensemble.ErrNoRun), errors.Is(err, ensemble.ErrMissingAngles), errors.Is(err, ensemble.ErrRunStopped):
+	case errors.Is(err, ensemble.ErrNoRun), errors.Is(err, ensemble.ErrMissingAngles), errors.Is(err, ensemble.ErrRunStopped),
+		errors.Is(err, ensemble.ErrSynthesizing), errors.Is(err, ensemble.ErrNotRunning), errors.Is(err, ensemble.ErrRunBusy):
 		code = exitRefused
 	case err != nil:
 		code = exitError
