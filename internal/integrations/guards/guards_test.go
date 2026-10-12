@@ -129,6 +129,14 @@ func TestCodexProjectLayerNeedsProjectTrust(t *testing.T) {
 	if got := byGuard(Check("codex", env)); got[DCG].State != Missing {
 		t.Fatalf("an untrusted project's hooks counted: %+v", got[DCG])
 	}
+	// dcg install has no Codex option: the fix names ACFS's step
+	// (acfs-9hkh.81), not dcg install.
+	if got := byGuard(Check("codex", env))[DCG].Fix; !strings.Contains(got, "codex-dcg register") || strings.HasPrefix(got, "dcg install") {
+		t.Fatalf("codex dcg fix = %q", got)
+	}
+	if got := byGuard(Check("claude", Env{Home: t.TempDir()}))[DCG].Fix; got != "dcg install (ACFS's install runs it)" {
+		t.Fatalf("claude dcg fix = %q", got)
+	}
 	write(t, filepath.Join(codexHome, "config.toml"), cfg+"[projects.\""+project+"\"]\ntrust_level = \"trusted\"\n")
 	if got := byGuard(Check("codex", env)); got[DCG].State != Configured {
 		t.Fatalf("a trusted project's hooks did not count: %+v", got[DCG])

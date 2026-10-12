@@ -214,10 +214,13 @@ func holds(f hooksFile, guard string) (event string, group, handler int, ok bool
 
 // fixFor is the command that installs a guard.
 func fixFor(kind, guard string) string {
-	switch guard {
-	case DCG:
+	switch {
+	case guard == DCG && kind == "codex":
+		// dcg install configures Claude Code only (acfs-9hkh.81).
+		return "acfs update adds dcg's Bash guard to Codex's hooks.json and records its trust (nhm_hooks.sh codex-dcg register, then trust codex); dcg install covers Claude Code only"
+	case guard == DCG:
 		return "dcg install (ACFS's install runs it)"
-	case RCH:
+	case guard == RCH:
 		return "rch install (ACFS's install runs it)"
 	default:
 		return "ACFS's install adds agent_mail_hook.sh stop to " + kind + "'s hooks"
