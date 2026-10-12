@@ -555,21 +555,44 @@ func release(ctx context.Context, env Env, bindingID string, ids []string) error
 // finish records a nudge's outcome. Submitted and possibly submitted
 // announce the ids; refused and failed leave them pending, and a later
 // pass may try again.
+//
+// Both writes compare and set: the operation moves only from
+// attempt_started, or from the possibly_submitted that resolveStale set
+// when this prompt outlived InFlight (only resolveStale sets it before
+// finish, and finish runs once per operation). Its rows change only when
+// the operation did. So a prompt herdr refused after a stale settle makes
+// its mail pending again (nothing was typed), and a late outcome never
+// overwrites one that another path wrote.
 func finish(ctx context.Context, env Env, opID, bindingID string, ids []string, status string, now time.Time) error {
-	if err := env.DB.SetOperationStatus(ctx, opID, status, true, now); err != nil {
+	ts := store.FormatTime(now)
+	tx, err := env.DB.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("wake: finish %s: %w", opID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `UPDATE operations SET status = ?, updated_at = ?, completed_at = ?
+		WHERE operation_id = ? AND verb = ? AND status IN (?, ?)`,
+		status, ts, ts, opID, Verb, send.StatusAttemptStarted, send.StatusPossiblySubmitted)
+	if err != nil {
+		return fmt.Errorf("wake: finish %s: %w", opID, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		// Another path settled the operation; its outcome stands.
 		return err
 	}
 	list, _ := json.Marshal(ids)
-	ts := store.FormatTime(now)
 	var announced any
 	if status == send.StatusSubmitted || status == send.StatusPossiblySubmitted {
 		announced = ts
 	}
-	_, err := env.DB.SQL().ExecContext(ctx, `UPDATE wake SET last_outcome = ?, announced_at = ?,
+	_, err = tx.ExecContext(ctx, `UPDATE wake SET last_outcome = ?, announced_at = ?,
 		attempts = attempts + 1, last_attempt_at = ?
-		WHERE binding_id = ? AND message_id IN (SELECT value FROM json_each(?)) AND last_outcome = ?`,
-		status, announced, ts, bindingID, string(list), send.StatusAttemptStarted)
+		WHERE binding_id = ? AND message_id IN (SELECT value FROM json_each(?)) AND last_outcome IN (?, ?)`,
+		status, announced, ts, bindingID, string(list), send.StatusAttemptStarted, send.StatusPossiblySubmitted)
 	if err != nil {
+		return fmt.Errorf("wake: finish %s: %w", opID, err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("wake: finish %s: %w", opID, err)
 	}
 	return nil
@@ -637,9 +660,13 @@ func resolveStale(ctx context.Context, env Env, bindingID string) (int, error) {
 	if err := ops.Close(); err != nil {
 		return 0, fmt.Errorf("wake: stale: %w", err)
 	}
+	// Compare and set: an attempt whose own outcome came in meanwhile
+	// (finish) keeps it; a failed attempt must not start a cooldown.
 	for _, id := range staleOps {
-		if err := env.DB.SetOperationStatus(ctx, id, send.StatusPossiblySubmitted, true, now); err != nil {
-			return 0, err
+		if _, err := db.ExecContext(ctx, `UPDATE operations SET status = ?, updated_at = ?, completed_at = ?
+			WHERE operation_id = ? AND verb = ? AND status = ?`,
+			send.StatusPossiblySubmitted, ts, ts, id, Verb, send.StatusAttemptStarted); err != nil {
+			return 0, fmt.Errorf("wake: stale: %w", err)
 		}
 	}
 	return len(stale), nil

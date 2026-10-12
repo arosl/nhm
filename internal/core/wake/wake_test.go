@@ -376,6 +376,66 @@ func TestAKilledAttemptDoesNotHoldTheRecipient(t *testing.T) {
 	}
 }
 
+// A prompt that outlives InFlight: resolveStale settles it first, then
+// its own outcome comes in. A refusal makes the mail pending again and
+// starts no cooldown; nothing was typed.
+func TestFinishAfterAStaleSettleKeepsTheTruth(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	b := w.bind(t, "IcyKnoll", "w1:p1", "pi", herdr.StatusIdle)
+	if _, err := Record(ctx, w.env, b, []Message{{ID: 1, Sender: "SageOak"}}); err != nil {
+		t.Fatal(err)
+	}
+	opID, claimed, _, err := claim(ctx, w.env, b, TriggerMailSent, w.now)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	w.now = w.now.Add(w.env.Config.InFlight + time.Second)
+	if n, err := ResolveStale(ctx, w.env); err != nil || n != 1 {
+		t.Fatalf("stale = %d, %v", n, err)
+	}
+	if err := finish(ctx, w.env, opID, b.ID, claimed, send.StatusRefused, w.now); err != nil {
+		t.Fatal(err)
+	}
+	if op, _ := w.env.DB.Operation(ctx, opID); op.Status != send.StatusRefused {
+		t.Fatalf("op = %s", op.Status)
+	}
+	if got := pendingIDs(t, w, "IcyKnoll"); len(got) != 1 || got[0] != "1" {
+		t.Fatalf("pending = %v", got)
+	}
+	if d, _ := Nudge(ctx, w.env, b, TriggerMaintain); d.Action != ActionNudged {
+		t.Fatalf("retry = %+v", d)
+	}
+}
+
+// The other order: the attempt failed, then a stale pass runs. The failed
+// operation stays failed and starts no cooldown.
+func TestStaleNeverOverwritesAnOutcome(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	b := w.bind(t, "IcyKnoll", "w1:p1", "pi", herdr.StatusIdle)
+	if _, err := Record(ctx, w.env, b, []Message{{ID: 1, Sender: "SageOak"}}); err != nil {
+		t.Fatal(err)
+	}
+	opID, claimed, _, err := claim(ctx, w.env, b, TriggerMailSent, w.now)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	if err := finish(ctx, w.env, opID, b.ID, claimed, send.StatusFailed, w.now); err != nil {
+		t.Fatal(err)
+	}
+	w.now = w.now.Add(w.env.Config.InFlight + time.Second)
+	if _, err := ResolveStale(ctx, w.env); err != nil {
+		t.Fatal(err)
+	}
+	if op, _ := w.env.DB.Operation(ctx, opID); op.Status != send.StatusFailed {
+		t.Fatalf("op = %s", op.Status)
+	}
+	if d, _ := Nudge(ctx, w.env, b, TriggerMaintain); d.Action != ActionNudged {
+		t.Fatalf("no false cooldown: %+v", d)
+	}
+}
+
 // claim checks the cooldown again inside its transaction: a path that
 // passed Nudge's first check before another path's nudge finished does
 // not prompt.
