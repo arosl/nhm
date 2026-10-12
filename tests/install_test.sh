@@ -117,6 +117,79 @@ else
   fail "a release without nhm-hook: $(cat "$work/log4"); link: $(readlink "$home/.local/bin/nhm-hook" || true)"
 fi
 
+# --archive-sha256: a pin kept outside the release (acfs-9hkh.42).
+rm "$work/releases/v$version"
+ln -s "$dist" "$work/releases/v$version"
+pin="$(sha256sum "$dist/$newname.tar.zst" | cut -d' ' -f1)"
+pinned_install() {
+  HOME="$1" NHM_RELEASE_BASE="file://$work/releases" bash "$root/install.sh" --version "$version" "${@:2}"
+}
+
+home="$work/home-pin"
+mkdir -p "$home"
+if pinned_install "$home" --archive-sha256 "$pin" 2> "$work/log5" &&
+  [[ "$(cat "$home/.local/share/nhm/releases/$version/.archive-sha256")" == "$pin" ]]; then
+  pass "the pinned archive installs and its SHA-256 is recorded"
+else
+  fail "pinned install: $(cat "$work/log5")"
+fi
+if pinned_install "$home" --archive-sha256 "${pin^^}" 2> "$work/log6" && grep -q 'already unpacked' "$work/log6"; then
+  pass "a second pinned run (pin in upper case) only re-points the links"
+else
+  fail "second pinned run: $(cat "$work/log6")"
+fi
+
+home="$work/home-wrongpin"
+mkdir -p "$home"
+wrong="$(printf '%064d' 0)"
+if pinned_install "$home" --archive-sha256 "$wrong" 2> "$work/log7"; then
+  fail "a wrong pin is refused"
+elif grep -q 'not the pinned' "$work/log7" && [[ ! -e "$home/.local/share/nhm/releases/$version" ]]; then
+  pass "a wrong pin is refused, and nothing is unpacked"
+else
+  fail "a wrong pin is refused: $(cat "$work/log7")"
+fi
+
+# A re-uploaded release: another archive with a SHA256SUMS that agrees.
+evil="$work/evil"
+mkdir -p "$evil"
+cp "$dist"/* "$evil/"
+printf 'x' >> "$evil/$newname.tar.zst"
+(cd "$evil" && sha256sum ./*.tar.zst | sed 's# \./# #' > SHA256SUMS)
+rm "$work/releases/v$version"
+ln -s "$evil" "$work/releases/v$version"
+home="$work/home-evil"
+mkdir -p "$home"
+if pinned_install "$home" --archive-sha256 "$pin" 2> "$work/log8"; then
+  fail "a re-uploaded archive with a matching SHA256SUMS is refused under a pin"
+elif grep -q 'the release asset changed' "$work/log8" && [[ ! -e "$home/.local/share/nhm/releases/$version" ]]; then
+  pass "a re-uploaded archive with a matching SHA256SUMS is refused under a pin"
+else
+  fail "re-uploaded archive: $(cat "$work/log8")"
+fi
+rm "$work/releases/v$version"
+ln -s "$dist" "$work/releases/v$version"
+
+# An install from before the pin (no record) is fetched again and replaced.
+home="$work/home-old-install"
+mkdir -p "$home"
+pinned_install "$home" 2> /dev/null
+rm "$home/.local/share/nhm/releases/$version/.archive-sha256"
+if pinned_install "$home" --archive-sha256 "$pin" 2> "$work/log9" && grep -q 'fetching it again' "$work/log9" &&
+  [[ "$(cat "$home/.local/share/nhm/releases/$version/.archive-sha256")" == "$pin" ]] &&
+  ! compgen -G "$home/.local/share/nhm/releases/$version.*" > /dev/null &&
+  "$home/.local/bin/nhm" version --json > /dev/null; then
+  pass "an unpinned install is replaced by the pinned archive, with no leftovers"
+else
+  fail "unpinned install replaced: $(cat "$work/log9")"
+fi
+
+if pinned_install "$work/home-pin" --archive-sha256 "not-hex" 2> /dev/null; then
+  fail "a malformed pin is refused"
+else
+  pass "a malformed pin is refused"
+fi
+
 if [[ $fails -eq 0 ]]; then
   echo "RESULT: pass"
 else

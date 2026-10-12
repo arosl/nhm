@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Install an nhm release for the current user.
 #
-# Usage: install.sh [--version <x.y.z>|latest]
+# Usage: install.sh [--version <x.y.z>|latest] [--archive-sha256 <hex>]
 #
 # Downloads nhm-<version>-<platform>.tar.zst and SHA256SUMS from the same
 # tagged release of arosl/nhm, checks the archive against SHA256SUMS, and
-# unpacks it to ~/.local/share/nhm/releases/<version>/. Then it points
+# unpacks it to ~/.local/share/nhm/releases/<version>/. With
+# --archive-sha256, the archive must also have that SHA-256: a pin kept
+# outside the release (ACFS keeps one per platform in checksums.yaml), so
+# a re-uploaded archive and SHA256SUMS are refused too. The unpacked
+# release records its archive's SHA-256 in .archive-sha256; with a pin,
+# only a release unpacked from the pinned archive counts as installed,
+# and any other is fetched again and replaced. Then it points
 # ~/.local/share/nhm/current at that release, and ~/.local/bin/nhm and
 # ~/.local/bin/nhm-hook at current/nhm and current/nhm-hook (an older
 # release without nhm-hook gets no nhm-hook link). Running it again for
@@ -13,6 +19,7 @@
 #
 # Environment:
 #   NHM_VERSION       the version, when --version is not given
+#   NHM_ARCHIVE_SHA256 the pin, when --archive-sha256 is not given
 #   NHM_RELEASE_BASE  the release download base (tests use a file:// URL);
 #                     default https://github.com/arosl/nhm/releases/download
 #   XDG_DATA_HOME     default ~/.local/share
@@ -22,6 +29,7 @@ set -euo pipefail
 repo_url="https://github.com/arosl/nhm"
 base="${NHM_RELEASE_BASE:-$repo_url/releases/download}"
 version="${NHM_VERSION:-latest}"
+pin="${NHM_ARCHIVE_SHA256:-}"
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 bin_dir="${NHM_BIN_DIR:-$HOME/.local/bin}"
 
@@ -42,15 +50,27 @@ while [[ $# -gt 0 ]]; do
       version="${1#--version=}"
       shift
       ;;
+    --archive-sha256)
+      [[ $# -ge 2 ]] || die "--archive-sha256 needs a value"
+      pin="$2"
+      shift 2
+      ;;
+    --archive-sha256=*)
+      pin="${1#--archive-sha256=}"
+      shift
+      ;;
     -h | --help)
       # Static text: under `curl ... | bash` there is no script file to read.
-      printf '%s\n' "usage: install.sh [--version <x.y.z>|latest]" \
+      printf '%s\n' "usage: install.sh [--version <x.y.z>|latest] [--archive-sha256 <hex>]" \
         "Installs nhm to ~/.local/share/nhm/releases/<version>/ and links ~/.local/bin/nhm." >&2
       exit 0
       ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+pin="${pin,,}"
+[[ -z "$pin" || "$pin" =~ ^[0-9a-f]{64}$ ]] || die "--archive-sha256 needs 64 hex digits"
 
 for tool in curl tar zstd sha256sum; do
   command -v "$tool" > /dev/null 2>&1 || die "$tool is required"
@@ -80,14 +100,27 @@ name="nhm-${version}-${platform}"
 releases="$data_home/nhm/releases"
 target="$releases/$version"
 
+installed=false
 if [[ -x "$target/nhm" ]]; then
-  log "nhm $version is already unpacked in $target"
-else
+  if [[ -z "$pin" || "$(cat "$target/.archive-sha256" 2> /dev/null)" == "$pin" ]]; then
+    installed=true
+    log "nhm $version is already unpacked in $target"
+  else
+    log "nhm $version in $target is not known to come from the pinned archive; fetching it again"
+  fi
+fi
+if [[ "$installed" == false ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf -- "$tmp"' EXIT
   url="$base/v$version"
   log "downloading $name.tar.zst from $url"
   curl -fsSL --retry 3 -o "$tmp/$name.tar.zst" "$url/$name.tar.zst" || die "download failed: $url/$name.tar.zst"
+  archive_sha="$(sha256sum "$tmp/$name.tar.zst" | cut -d' ' -f1)"
+  if [[ -n "$pin" ]]; then
+    [[ "$archive_sha" == "$pin" ]] ||
+      die "$name.tar.zst has SHA-256 $archive_sha, not the pinned $pin: the release asset changed; nothing was installed"
+    log "archive matches the pinned SHA-256"
+  fi
   curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "$url/SHA256SUMS" || die "download failed: $url/SHA256SUMS"
   line="$(awk -v f="$name.tar.zst" '$2 == f || $2 == "*" f' "$tmp/SHA256SUMS")"
   [[ -n "$line" ]] || die "SHA256SUMS of v$version has no line for $name.tar.zst"
@@ -98,10 +131,18 @@ else
   # nhm-hook came with the hooks; an older pinned release has none.
   [[ -x "$tmp/$name/nhm" ]] || die "archive has no $name/nhm"
   (cd "$tmp/$name" && sha256sum -c --quiet SHA256SUMS >&2) || die "archive contents do not match its SHA256SUMS"
+  printf '%s\n' "$archive_sha" > "$tmp/$name/.archive-sha256"
   # A rename inside one file system is atomic: target is complete or absent.
   mv -T "$tmp/$name" "$target.partial.$$"
-  mv -T "$target.partial.$$" "$target" ||
-    die "$target exists but has no nhm binary; move it away and run again"
+  if [[ -e "$target" ]]; then
+    # An unpacked release not known to be the pinned one is replaced.
+    mv -T "$target" "$target.old.$$"
+    mv -T "$target.partial.$$" "$target"
+    rm -rf -- "$target.old.$$"
+  else
+    mv -T "$target.partial.$$" "$target" ||
+      die "$target exists but has no nhm binary; move it away and run again"
+  fi
 fi
 
 ln -sfn "releases/$version" "$data_home/nhm/current.new.$$"
