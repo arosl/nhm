@@ -646,6 +646,9 @@ func TestExportImport(t *testing.T) {
 	}
 	blue := w.bind(t, "BlueLake", "w1:p2", herdr.StatusIdle)
 	setEffort(t, w, blue.ID, "high")
+	if _, err := w.db.SQL().Exec(`UPDATE bindings SET role = 'reviewer' WHERE binding_id = ?`, blue.ID); err != nil {
+		t.Fatal(err)
+	}
 	// An existing directory that is not an empty 0700 one is refused.
 	shared := t.TempDir()
 	if err := os.Chmod(shared, 0o775); err != nil {
@@ -674,8 +677,8 @@ func TestExportImport(t *testing.T) {
 	if tok, err := store.ReadSecret(target.env.InstanceDir, list[0].ID); err != nil || tok != "tok-BlueLake" {
 		t.Fatalf("token = %q %v", tok, err)
 	}
-	if list[0].Effort != "high" {
-		t.Fatalf("effort = %q", list[0].Effort)
+	if list[0].Effort != "high" || list[0].Role != "reviewer" {
+		t.Fatalf("effort = %q, role = %q", list[0].Effort, list[0].Role)
 	}
 }
 
@@ -705,6 +708,7 @@ func TestImportValidation(t *testing.T) {
 	for name, mutate := range map[string]func(*Export){
 		"session climbs out":    func(x *Export) { x.Bindings[0].NativeSession.Value = "../../../.ssh" },
 		"model reads as a flag": func(x *Export) { x.Bindings[0].Model = "--dangerously-skip-permissions" },
+		"unknown role":          func(x *Export) { x.Bindings[0].Role = "boss" },
 		"relative project":      func(x *Export) { x.Project = "p" },
 		"unclean project":       func(x *Export) { x.Project = "/p/../etc" },
 		"unknown kind":          func(x *Export) { x.Bindings[0].Kind = "bash" },
@@ -813,7 +817,7 @@ func TestReapReviewerAndNoBeadsAudit(t *testing.T) {
 
 func TestBatchSSH(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-	core := func(s string) func() string { return func() string { return s } }
+	core := func(s string) func() (string, bool) { return func() (string, bool) { return s, true } }
 	for _, c := range []struct {
 		env  map[string]string
 		core string
@@ -822,11 +826,19 @@ func TestBatchSSH(t *testing.T) {
 		{nil, "", "ssh -o BatchMode=yes"},
 		{map[string]string{"GIT_SSH_COMMAND": "ssh -i ~/.ssh/deploy"}, "ssh -i other", "ssh -i ~/.ssh/deploy -o BatchMode=yes"},
 		{nil, "ssh -J jump", "ssh -J jump -o BatchMode=yes"},
+		{nil, "/usr/bin/ssh -p 2222", "/usr/bin/ssh -p 2222 -o BatchMode=yes"},
 		{map[string]string{"GIT_SSH": "/usr/bin/plink"}, "", ""},
+		{map[string]string{"GIT_SSH_COMMAND": "plink -batch"}, "", ""},
+		{map[string]string{"GIT_SSH_COMMAND": "ssh -i k # deploy key"}, "", ""},
+		{map[string]string{"GIT_SSH_COMMAND": `ssh -i k \`}, "", ""},
 	} {
 		if got := batchSSH(env(c.env), core(c.core)); got != c.want {
 			t.Errorf("%v %q: %q, want %q", c.env, c.core, got, c.want)
 		}
+	}
+	// core.sshCommand that cannot be read: the user's command is kept.
+	if got := batchSSH(env(nil), func() (string, bool) { return "", false }); got != "" {
+		t.Errorf("unreadable core.sshCommand: %q", got)
 	}
 }
 

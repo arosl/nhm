@@ -318,6 +318,7 @@ type ExportedBinding struct {
 	Kind          string                  `json:"kind"`
 	Model         string                  `json:"model,omitempty"`
 	Effort        string                  `json:"effort,omitempty"`
+	Role          string                  `json:"role,omitempty"`
 	ProjectID     string                  `json:"project_id"`
 	NativeSession *bindings.NativeSession `json:"native_session,omitempty"`
 	Token         string                  `json:"token,omitempty"`
@@ -350,7 +351,7 @@ func ExportTo(ctx context.Context, env Env, project, dir string, keep []string) 
 	}
 	for _, b := range list {
 		eb := ExportedBinding{BindingID: b.ID, MailName: b.MailName, Kind: b.Kind, Model: b.Model, Effort: b.Effort,
-			ProjectID: b.ProjectID, NativeSession: b.NativeSession}
+			Role: b.Role, ProjectID: b.ProjectID, NativeSession: b.NativeSession}
 		eb.Token, _ = store.ReadSecret(env.InstanceDir, b.ID)
 		x.Bindings = append(x.Bindings, eb)
 		rows, err := env.DB.SQL().QueryContext(ctx, `SELECT path, reason FROM transcripts WHERE binding_id = ?`, b.ID)
@@ -431,7 +432,7 @@ func ImportFrom(ctx context.Context, env Env, dir string) ([]string, []string, e
 			eb.NativeSession = &ns
 		}
 		b, err := env.Bindings.Create(ctx, bindings.New{MailName: eb.MailName, MailProjectKey: x.Project, ProjectID: eb.ProjectID,
-			Provenance: bindings.Imported, Occupant: bindings.Occupant{Kind: eb.Kind, Model: eb.Model, Effort: eb.Effort,
+			Provenance: bindings.Imported, Role: eb.Role, Occupant: bindings.Occupant{Kind: eb.Kind, Model: eb.Model, Effort: eb.Effort,
 				NativeSession: eb.NativeSession,
 				Evidence:      []bindings.Evidence{{Kind: "import", Detail: "host move from binding " + eb.BindingID}}}})
 		if err != nil {
@@ -605,6 +606,9 @@ func validateExport(x Export) error {
 		}
 		if eb.Model != "" && !spawn.ValidModel(eb.Model) {
 			bad = append(bad, "model")
+		}
+		if eb.Role != "" && eb.Role != spawn.RoleReviewer {
+			bad = append(bad, "role")
 		}
 		if eb.Effort != "" && !kinds.EffortPattern.MatchString(eb.Effort) {
 			bad = append(bad, "effort")

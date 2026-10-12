@@ -201,9 +201,16 @@ var buildCaches = map[string]bool{"node_modules": true, "target": true, "dist": 
 // Fetch runs `git fetch --quiet origin main`.
 func (CLI) Fetch(ctx context.Context, root string) error {
 	var extra []string
-	if ssh := batchSSH(os.Getenv, func() string {
-		out, _ := run(ctx, root, "git", "config", "--get", "core.sshCommand")
-		return strings.TrimSpace(string(out))
+	if ssh := batchSSH(os.Getenv, func() (string, bool) {
+		out, err := run(ctx, root, "git", "config", "--get", "core.sshCommand")
+		var exit *exec.ExitError
+		switch {
+		case err == nil:
+			return strings.TrimSpace(string(out)), true
+		case errors.As(err, &exit) && exit.ExitCode() == 1:
+			return "", true // not set
+		}
+		return "", false
 	}); ssh != "" {
 		extra = append(extra, "GIT_SSH_COMMAND="+ssh)
 	}
@@ -216,16 +223,31 @@ func (CLI) Fetch(ctx context.Context, root string) error {
 // BatchMode on, so a custom key or jump host still works. With only
 // GIT_SSH set (a program, not a command line) it returns "": that program
 // is left as it is, and GIT_TERMINAL_PROMPT and the closed stdin remain.
-func batchSSH(getenv func(string) string, coreSSH func() string) string {
+//
+// BatchMode is added only to a plain OpenSSH command: one whose first
+// word is ssh and that ends in no comment and no line continuation. Any
+// other command (a wrapper, plink, a trailing "# ...") is kept exactly as
+// the user has it, and "" is returned. So is it when core.sshCommand
+// cannot be read: nhm never replaces a command it could not see.
+func batchSSH(getenv func(string) string, coreSSH func() (string, bool)) string {
 	base := getenv("GIT_SSH_COMMAND")
 	if base == "" {
-		base = coreSSH()
+		core, ok := coreSSH()
+		if !ok {
+			return ""
+		}
+		base = core
 	}
 	if base == "" {
 		if getenv("GIT_SSH") != "" {
 			return ""
 		}
 		base = "ssh"
+	}
+	fields := strings.Fields(base)
+	if len(fields) == 0 || path.Base(fields[0]) != "ssh" || strings.Contains(base, "#") ||
+		strings.HasSuffix(strings.TrimSpace(base), `\`) {
+		return ""
 	}
 	return base + " -o BatchMode=yes"
 }
