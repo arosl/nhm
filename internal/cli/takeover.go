@@ -16,6 +16,7 @@ import (
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/owner"
 	"github.com/arosl/nhm/internal/core/wake"
+	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 )
 
@@ -60,8 +61,8 @@ func (ie *instanceEnv) ownerEnv() (owner.Env, error) {
 	}
 	return owner.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), InstanceDir: ie.inst.Dir,
 		Bash: owner.BashCLI{Acfs: os.Getenv("ACFS_BIN")}, Events: owner.EventsCLI{}, Mail: mail,
-		ImportBindings: func(ctx context.Context, dry bool) (bindings.ImportReport, error) {
-			return bindings.ImportOnly(ctx, ie.env(), projectOf, bindings.ImportRequest{DryRun: dry, ProjectAt: projectAt})
+		ImportBindings: func(ctx context.Context, dry bool, snap *herdr.SessionSnapshot) (bindings.ImportReport, error) {
+			return bindings.ImportOnly(ctx, ie.env(), projectOf, bindings.ImportRequest{DryRun: dry, ProjectAt: projectAt, Snapshot: snap})
 		},
 		Keep: func() ([]string, error) { return lifecycle.LoadKeep(keepPaths()...) },
 		RefreshWake: func(ctx context.Context, b bindings.Binding) error {

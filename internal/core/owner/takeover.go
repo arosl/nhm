@@ -13,6 +13,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -30,8 +31,10 @@ type Env struct {
 	Events      Events
 	Mail        Mail
 	// ImportBindings reads the agents the Bash spawned into bindings
-	// (bindings.ImportOnly), or with dry says what it would import.
-	ImportBindings func(ctx context.Context, dry bool) (bindings.ImportReport, error)
+	// (bindings.ImportOnly), or with dry says what it would import. snap,
+	// when set, is the herdr state to decide on instead of a fresh read
+	// (ImportRequest.Snapshot).
+	ImportBindings func(ctx context.Context, dry bool, snap *herdr.SessionSnapshot) (bindings.ImportReport, error)
 	// Keep is nhm's keep list (the [reap] keep of its config and ACFS's
 	// agents.toml).
 	Keep func() ([]string, error)
@@ -131,22 +134,33 @@ func Takeover(ctx context.Context, env Env, dry bool) (Report, error) {
 		if o.Owner == core.OwnerNhm {
 			return rep, refused("nhm owns the instance already (generation %d)", o.Generation)
 		}
-		_, err = planTakeover(ctx, env, &rep)
+		_, err = planTakeover(ctx, env, &rep, nil)
 		return rep, err
 	}
 	o, err := core.SwitchOwner(ctx, env.InstanceDir, core.OwnerNhm, env.now(), func(core.Owner) error {
 		// Check everything as the dry run does first, which writes
 		// nothing: a refusal must leave no binding, operation row or
 		// identity-file repair behind (acfs-9hkh.80). The exclusive owner
-		// lock keeps the Bash's state as it is until the real pass.
+		// lock keeps the Bash's state as it is until the real pass, but
+		// not herdr's: a pane can exit or a tab be renamed in between. So
+		// the real pass decides on the herdr state the check saw, and
+		// applies the plan the check passed instead of a new one
+		// (acfs-9hkh.85).
 		check := newReport(true)
-		if _, err := planTakeover(ctx, env, &check); err != nil {
+		if _, err := planTakeover(ctx, env, &check, nil); err != nil {
 			rep.Bindings, rep.Tokens, rep.Wake, rep.Keep, rep.Excluded, rep.Notes =
 				check.Bindings, check.Tokens, check.Wake, check.Keep, check.Excluded, check.Notes
 			return err
 		}
-		p, err := planTakeover(ctx, env, &rep)
+		var seen *herdr.SessionSnapshot
+		if check.Bindings != nil {
+			seen = check.Bindings.Snapshot
+		}
+		p, err := planTakeover(ctx, env, &rep, seen)
 		if err != nil {
+			return err
+		}
+		if err := samePlan(check.Bindings, rep.Bindings); err != nil {
 			return err
 		}
 		return p.apply(ctx, env)
@@ -165,7 +179,42 @@ type takeoverPlan struct {
 	wake    map[string][]int64 // binding id -> message ids to announce
 }
 
-func planTakeover(ctx context.Context, env Env, rep *Report) (*takeoverPlan, error) {
+// samePlan checks that the real import did what the dry check planned:
+// each pane would_import is now imported, every other decision the same.
+// With one herdr snapshot only Agent Mail's identity files or the Bash's
+// state could differ, and the owner lock holds the Bash; it reports what
+// changed instead of switching the owner over it.
+func samePlan(check, real *bindings.ImportReport) error {
+	if check == nil || real == nil {
+		return nil
+	}
+	want := map[string]string{}
+	for _, it := range check.Items {
+		a := it.Action
+		if a == bindings.ActionWouldImport {
+			a = bindings.ActionImported
+		}
+		want[it.PaneID] = a + " " + it.MailName
+	}
+	var diffs []string
+	for _, it := range real.Items {
+		if w, ok := want[it.PaneID]; !ok || w != it.Action+" "+it.MailName {
+			diffs = append(diffs, fmt.Sprintf("pane %s: checked %q, did %q", it.PaneID, w, it.Action+" "+it.MailName))
+		}
+		delete(want, it.PaneID)
+	}
+	for pane, w := range want {
+		diffs = append(diffs, fmt.Sprintf("pane %s: checked %q, did nothing", pane, w))
+	}
+	if len(diffs) == 0 {
+		return nil
+	}
+	sort.Strings(diffs)
+	return fmt.Errorf("the import changed between the check and the takeover (the Bash stays the owner; `nhm admin recover reconcile` shows the bindings): %s",
+		strings.Join(diffs, "; "))
+}
+
+func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.SessionSnapshot) (*takeoverPlan, error) {
 	data, err := env.Bash.Export(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("the Bash's state cannot be exported: %w", err)
@@ -183,7 +232,7 @@ func planTakeover(ctx context.Context, env Env, rep *Report) (*takeoverPlan, err
 		return nil, refused("nhm's keep list lacks %s: add them to [reap] keep in ~/.config/nhm/config.toml or ACFS's agents.toml first",
 			strings.Join(missing, ", "))
 	}
-	imp, err := env.ImportBindings(ctx, rep.DryRun)
+	imp, err := env.ImportBindings(ctx, rep.DryRun, snap)
 	rep.Bindings = &imp
 	if err != nil {
 		return nil, fmt.Errorf("the Bash's agents cannot be imported: %w", err)

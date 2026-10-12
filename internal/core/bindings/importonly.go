@@ -52,6 +52,11 @@ type ImportRequest struct {
 	// agent spawned with --cwd there by the folder (acfs-9hkh.80). The key
 	// with verified evidence wins; the work tree's key is tried first.
 	ProjectAt ProjectOf `json:"-"`
+	// Snapshot, when set, is the herdr state to decide on instead of a
+	// fresh read: a takeover's real pass decides on what its dry check
+	// saw, so herdr changing in between cannot change the plan
+	// (acfs-9hkh.85).
+	Snapshot *herdr.SessionSnapshot `json:"-"`
 }
 
 // Import actions.
@@ -82,6 +87,8 @@ type ImportReport struct {
 	Items       []ImportItem `json:"items"`
 	Imported    int          `json:"imported"`
 	Warnings    []string     `json:"warnings"`
+	// Snapshot is the herdr state the run decided on (ImportRequest's).
+	Snapshot *herdr.SessionSnapshot `json:"-"`
 }
 
 // ImportOnly runs the import. The caller holds the owner lock shared; any
@@ -92,10 +99,15 @@ func ImportOnly(ctx context.Context, env Env, projectOf ProjectOf, req ImportReq
 	if req.AcfsHome == "" {
 		req.AcfsHome = DefaultAcfsHome()
 	}
-	snap, err := env.Herdr.Snapshot(ctx)
-	if err != nil {
-		return rep, fmt.Errorf("bindings: import: %w", err)
+	rep.Snapshot = req.Snapshot
+	if rep.Snapshot == nil {
+		s, err := env.Herdr.Snapshot(ctx)
+		if err != nil {
+			return rep, fmt.Errorf("bindings: import: %w", err)
+		}
+		rep.Snapshot = &s
 	}
+	snap := *rep.Snapshot
 	if !req.DryRun {
 		claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: "recover.import",
 			Scope: map[string]string{"mail_project_key": req.ProjectKey}, Request: req}, env.now())

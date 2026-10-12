@@ -12,6 +12,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -110,7 +111,7 @@ func newWorld(t *testing.T) *world {
 	w := &world{bash: &fakeBash{}, events: fakeEvents{events: map[string][]Event{}, tail: 99}, keep: []string{"GreenCastle"}, dir: t.TempDir()}
 	w.env = Env{DB: db, Bindings: bindings.NewStore(db), InstanceDir: inst.Dir, Bash: w.bash,
 		Mail: fakeMail{unread: map[string][]int64{"IcyKnoll": {5, 12}}, down: map[string]bool{}},
-		ImportBindings: func(context.Context, bool) (bindings.ImportReport, error) {
+		ImportBindings: func(context.Context, bool, *herdr.SessionSnapshot) (bindings.ImportReport, error) {
 			return bindings.ImportReport{Imported: 1}, nil
 		},
 		Keep: func() ([]string, error) { return w.keep, nil },
@@ -400,7 +401,7 @@ func TestTakeoverRefusesWhatItLeavesBehind(t *testing.T) {
 			w.env.Exclude = c.exclude
 			if c.imp != nil {
 				imp := *c.imp
-				w.env.ImportBindings = func(context.Context, bool) (bindings.ImportReport, error) { return imp, nil }
+				w.env.ImportBindings = func(context.Context, bool, *herdr.SessionSnapshot) (bindings.ImportReport, error) { return imp, nil }
 			}
 			for _, dry := range []bool{true, false} {
 				rep, err := Takeover(ctx, w.env, dry)
@@ -427,6 +428,93 @@ func TestTakeoverRefusesWhatItLeavesBehind(t *testing.T) {
 	}
 }
 
+// Review of a1b9425 (acfs-9hkh.85): the owner lock holds the Bash, not
+// herdr. The real pass decides on the herdr state the dry check saw, so a
+// pane that exits in between changes nothing; an import that still
+// decides otherwise refuses, and the Bash stays the owner.
+func TestTakeoverAppliesTheCheckedPlan(t *testing.T) {
+	ctx := context.Background()
+	checked := herdr.SessionSnapshot{Agents: []herdr.AgentInfo{{PaneID: "w1:p2", Agent: "claude"}}}
+	// decide is the import: it binds IcyKnoll while its pane is in the
+	// snapshot it decides on; herdr itself has lost the pane by the real
+	// pass.
+	decide := func(snap *herdr.SessionSnapshot, dry bool, calls *[]*herdr.SessionSnapshot) bindings.ImportReport {
+		*calls = append(*calls, snap)
+		if snap == nil {
+			if len(*calls) > 1 {
+				// A fresh read after the check: the pane exited.
+				return bindings.ImportReport{Items: []bindings.ImportItem{{PaneID: "w1:p2", Kind: "claude",
+					Action: bindings.ActionSkipped, Reason: "the pane is gone"}}}
+			}
+			snap = &checked
+		}
+		action := bindings.ActionImported
+		if dry {
+			action = bindings.ActionWouldImport
+		}
+		return bindings.ImportReport{Snapshot: snap, Items: []bindings.ImportItem{{PaneID: snap.Agents[0].PaneID, Kind: "claude",
+			MailName: "IcyKnoll", ProjectKey: "/data/projects/x", Action: action}}}
+	}
+
+	t.Run("the real pass reuses the check's snapshot", func(t *testing.T) {
+		w := newWorld(t)
+		w.export(t)
+		var calls []*herdr.SessionSnapshot
+		w.env.ImportBindings = func(_ context.Context, dry bool, snap *herdr.SessionSnapshot) (bindings.ImportReport, error) {
+			return decide(snap, dry, &calls), nil
+		}
+		if _, err := Takeover(ctx, w.env, false); err != nil {
+			t.Fatalf("= %v", err)
+		}
+		if len(calls) != 2 || calls[0] != nil || calls[1] != &checked {
+			t.Fatalf("import snapshots = %v, want a fresh read, then the check's", calls)
+		}
+		if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerNhm {
+			t.Fatalf("owner = %+v", o)
+		}
+	})
+
+	t.Run("an import that decides otherwise refuses, the Bash stays the owner", func(t *testing.T) {
+		w := newWorld(t)
+		w.export(t)
+		var calls []*herdr.SessionSnapshot
+		w.env.ImportBindings = func(_ context.Context, dry bool, _ *herdr.SessionSnapshot) (bindings.ImportReport, error) {
+			// An import that ignores the snapshot it is given.
+			return decide(nil, dry, &calls), nil
+		}
+		// The skip now refuses as a left-behind agent, before the plan
+		// check; either refusal keeps the Bash the owner.
+		_, err := Takeover(ctx, w.env, false)
+		if err == nil || !strings.Contains(err.Error(), "w1:p2") {
+			t.Fatalf("= %v", err)
+		}
+		if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerBash || o.Generation != 0 {
+			t.Fatalf("owner = %+v", o)
+		}
+		if _, err := store.ReadSecret(w.env.InstanceDir, w.b.ID); err == nil {
+			t.Fatal("a changed import still kept a token")
+		}
+	})
+
+	t.Run("samePlan names each pane that changed", func(t *testing.T) {
+		check := &bindings.ImportReport{Items: []bindings.ImportItem{
+			{PaneID: "w1:p2", MailName: "IcyKnoll", Action: bindings.ActionWouldImport},
+			{PaneID: "w1:p3", MailName: "RedFox", Action: bindings.ActionBound}}}
+		same := &bindings.ImportReport{Items: []bindings.ImportItem{
+			{PaneID: "w1:p2", MailName: "IcyKnoll", Action: bindings.ActionImported},
+			{PaneID: "w1:p3", MailName: "RedFox", Action: bindings.ActionBound}}}
+		if err := samePlan(check, same); err != nil {
+			t.Fatalf("would_import then imported: %v", err)
+		}
+		other := &bindings.ImportReport{Items: []bindings.ImportItem{
+			{PaneID: "w1:p2", MailName: "BlueLake", Action: bindings.ActionImported}}}
+		err := samePlan(check, other)
+		if err == nil || !strings.Contains(err.Error(), "pane w1:p2") || !strings.Contains(err.Error(), "pane w1:p3: checked") {
+			t.Fatalf("= %v", err)
+		}
+	})
+}
+
 // Review of c6f599a: a refused --yes writes nothing, not even the import's
 // bindings (the import runs dry first); --exclude by pane id covers that
 // agent's token; a bare name in two projects is ambiguous, and
@@ -439,7 +527,7 @@ func TestTakeoverExcludeIsScopedAndRefusesBeforeWriting(t *testing.T) {
 		w.export(t)
 		w.env.Exclude = nil // GhostOwl's token refuses
 		var calls []bool
-		w.env.ImportBindings = func(_ context.Context, dry bool) (bindings.ImportReport, error) {
+		w.env.ImportBindings = func(_ context.Context, dry bool, _ *herdr.SessionSnapshot) (bindings.ImportReport, error) {
 			calls = append(calls, dry)
 			return bindings.ImportReport{}, nil
 		}
@@ -455,7 +543,7 @@ func TestTakeoverExcludeIsScopedAndRefusesBeforeWriting(t *testing.T) {
 		w := newWorld(t)
 		w.export(t)
 		w.env.Exclude = []string{"w1:p3"}
-		w.env.ImportBindings = func(context.Context, bool) (bindings.ImportReport, error) {
+		w.env.ImportBindings = func(context.Context, bool, *herdr.SessionSnapshot) (bindings.ImportReport, error) {
 			return bindings.ImportReport{Items: []bindings.ImportItem{{PaneID: "w1:p3", Kind: "codex", HerdrName: "ghostowl",
 				Action: bindings.ActionSkipped, Reason: "no verified evidence"}}}, nil
 		}
@@ -500,7 +588,7 @@ func TestTakeoverExcludeIsScopedAndRefusesBeforeWriting(t *testing.T) {
 			twoProjects(t, w)
 			w.env.Exclude = c.exclude
 			if strings.Contains(strings.Join(c.exclude, " "), "w1:p3") {
-				w.env.ImportBindings = func(context.Context, bool) (bindings.ImportReport, error) {
+				w.env.ImportBindings = func(context.Context, bool, *herdr.SessionSnapshot) (bindings.ImportReport, error) {
 					return bindings.ImportReport{Items: []bindings.ImportItem{{PaneID: "w1:p3", Kind: "codex", HerdrName: "ghostowl",
 						Action: bindings.ActionSkipped, Reason: "no project"}}}, nil
 				}

@@ -145,6 +145,17 @@ func TestBeadLess(t *testing.T) {
 	if got := strings.Join(ids, ","); got != want {
 		t.Fatalf("order %s, want %s", got, want)
 	}
+	// Ids that read as the same numbers still have one order (the review
+	// of 22d64d0): a strict order, whatever the input order.
+	if !beadLess("a-01", "a-1") || beadLess("a-1", "a-01") || beadLess("a-1", "a-1") {
+		t.Fatal("a-01 / a-1 is not a strict order")
+	}
+	for _, in := range [][]string{{"a-1", "a-01", "a-001"}, {"a-001", "a-1", "a-01"}, {"a-01", "a-001", "a-1"}} {
+		sort.Slice(in, func(i, j int) bool { return beadLess(in[i], in[j]) })
+		if got := strings.Join(in, ","); got != "a-001,a-01,a-1" {
+			t.Fatalf("tied ids sort to %s", got)
+		}
+	}
 }
 
 func TestBuildAddsEachAgentsBead(t *testing.T) {

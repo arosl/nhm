@@ -385,8 +385,11 @@ func (m *Model) addBeads(ctx context.Context, list func(context.Context, string)
 }
 
 // beadLess orders bead ids with their numbers as numbers: acfs-9 before
-// acfs-10, acfs-9hkh.9 before acfs-9hkh.84.
+// acfs-10, acfs-9hkh.9 before acfs-9hkh.84. Ids that read as the same
+// numbers (a-01, a-1) fall back to plain string order, so it is a strict
+// order and every sort gives the same result.
 func beadLess(a, b string) bool {
+	oa, ob := a, b
 	for a != "" && b != "" {
 		da, db := digitRun(a), digitRun(b)
 		if da > 0 && db > 0 {
@@ -406,7 +409,10 @@ func beadLess(a, b string) bool {
 		}
 		a, b = a[1:], b[1:]
 	}
-	return len(a) < len(b)
+	if len(a) != len(b) {
+		return len(a) < len(b)
+	}
+	return oa < ob
 }
 
 // digitRun is the length of s's leading run of ASCII digits.
