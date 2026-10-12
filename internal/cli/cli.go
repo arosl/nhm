@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/arosl/nhm/internal/herdr/schema"
 )
@@ -25,6 +26,33 @@ const usage = `nhm: the herdr wrapper of the ACFS flywheel (what ntm is to tmux)
 
 Usage:
   nhm version [--json]   print the version
+  nhm status [session] [--watch] [--json]
+                         one row per agent: slot, name, kind, state, mail
+  nhm list [--project DIR] [--json]
+                         every bound agent across workspaces
+  nhm snapshot [session] the machine read model, as JSON
+  nhm attention [session] [--watch] [--json|--jsonl]
+                         what needs a decision
+  nhm read <name> [--lines N] [--source visible|recent] [--raw-to FILE]
+                         print an agent's pane
+  nhm watch <session> [name|slot ...]
+                         follow the agents' output
+  nhm wait [session] [selector] [--until idle|done|complete|generating|healthy] [--after-op OP] [--timeout D] [--json]
+                         wait until agents reach a state, or a turn completes
+  nhm interrupt [session] [selector] [--json]
+                         send each agent its kind's interrupt key
+  nhm activity <session> [--json]
+                         each agent's activity in ntm's terms
+  nhm health [session] [--json]
+                         runtime health of sources and sessions
+  nhm doctor [--json]    check what nhm needs
+  nhm capabilities [--json]
+                         what this nhm answers, and why not
+  nhm compatibility status [--json]
+                         the ntm forms implemented, deferred, waived
+  nhm --robot-status | --robot-snapshot | --robot-activity=S |
+      --robot-tail=S [--lines N] | --robot-capabilities
+                         ntm's robot read flags, ntm's types
   nhm resolve <name|herdr-name|pane-id|--current> [--json]
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
@@ -56,7 +84,36 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runAdopt(args[1:], stdout, stderr)
 	case "admin":
 		return runAdmin(args[1:], stdout, stderr)
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
+	case "list":
+		return runList(args[1:], stdout, stderr)
+	case "snapshot":
+		return runSnapshot(args[1:], stdout, stderr)
+	case "attention":
+		return runAttention(args[1:], stdout, stderr)
+	case "read":
+		return runRead(args[1:], stdout, stderr)
+	case "watch":
+		return runWatch(args[1:], stdout, stderr)
+	case "activity":
+		return runActivity(args[1:], stdout, stderr)
+	case "health":
+		return runHealth(args[1:], stdout, stderr)
+	case "doctor":
+		return runDoctor(args[1:], stdout, stderr)
+	case "capabilities":
+		return runCapabilities(args[1:], stdout, stderr)
+	case "compatibility":
+		return runCompatibility(args[1:], stdout, stderr)
+	case "wait":
+		return runWait(args[1:], stdout, stderr)
+	case "interrupt":
+		return runInterrupt(args[1:], stdout, stderr)
 	default:
+		if strings.HasPrefix(args[0], "--robot-") {
+			return runRobot(args, stdout, stderr)
+		}
 		fmt.Fprintf(stderr, "nhm: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
