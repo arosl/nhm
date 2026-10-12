@@ -90,6 +90,19 @@ func TestEnrollLayoutAndModes(t *testing.T) {
 	}
 }
 
+func TestEnrollTightensAWideStateRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "nhm")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Enroll(root, "/run/herdr/herdr.sock", "default", t0); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(root); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("state root = %v %v", info, err)
+	}
+}
+
 func TestConcurrentEnrollMakesOneInstance(t *testing.T) {
 	root := t.TempDir()
 	var wg sync.WaitGroup

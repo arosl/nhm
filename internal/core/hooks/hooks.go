@@ -388,6 +388,9 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	name, projectKey := c.Facts.MailName, c.Facts.MailProject
 	if b := *bp; b != nil {
 		if strings.EqualFold(b.MailName, name) && sameProject(b.MailProjectKey, projectKey) {
+			// A hook stopped between the create and its writes leaves the
+			// candidate pending; finish those writes now.
+			repairBinding(env, c, *b, r)
 			return "already bound as " + b.ID, nil
 		}
 		return fmt.Sprintf("refused: the pane is bound to %s (%s); use nhm adopt", b.MailName, b.ID), nil
@@ -404,20 +407,34 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	if err != nil {
 		return "", err
 	}
-	if c.Facts.TokenRef != "" {
-		if tok, err := store.ReadSecret(env.InstanceDir, c.Facts.TokenRef); err == nil {
-			if err := store.WriteSecret(env.InstanceDir, b.ID, tok); err != nil {
-				r.warn("registration token for %s not kept: %v", b.ID, err)
-			}
-		}
-	}
-	if _, err := agentmail.WriteIdentity(env.ConfigHome, b.MailProjectKey, b.PaneID, b.MailName, env.now()); err != nil {
-		r.warn("Agent Mail identity file: %v", err)
-	}
+	repairBinding(env, c, b, r)
 	*bp = &b
 	r.act("bound %s to %s as %s", b.PaneID, b.MailName, b.ID)
 	labelPane(ctx, env, b, r)
 	return "bound " + b.ID, nil
+}
+
+// repairBinding makes the writes that follow a registration's bind, when
+// they are missing: the token under the binding id, and Agent Mail's
+// identity file for the pane. It is idempotent, so a reconcile can run
+// it for a binding that a stopped hook created.
+func repairBinding(env Env, c Candidate, b bindings.Binding, r *Reconcile) {
+	if c.Facts.TokenRef != "" {
+		if _, err := store.ReadSecret(env.InstanceDir, b.ID); errors.Is(err, store.ErrNoSecret) {
+			if tok, err := store.ReadSecret(env.InstanceDir, c.Facts.TokenRef); err == nil {
+				if err := store.WriteSecret(env.InstanceDir, b.ID, tok); err != nil {
+					r.warn("registration token for %s not kept: %v", b.ID, err)
+				}
+			}
+		}
+	}
+	rec, ok, err := agentmail.ReadIdentity(env.ConfigHome, b.MailProjectKey, b.PaneID)
+	if err == nil && ok && strings.EqualFold(rec.Name, b.MailName) {
+		return
+	}
+	if _, err := agentmail.WriteIdentity(env.ConfigHome, b.MailProjectKey, b.PaneID, b.MailName, env.now()); err != nil {
+		r.warn("Agent Mail identity file: %v", err)
+	}
 }
 
 func applyContinuation(ctx context.Context, env Env, c Candidate, st paneState, bp **bindings.Binding, r *Reconcile) (string, error) {

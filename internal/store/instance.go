@@ -44,6 +44,11 @@ func Enroll(root, socketPath, session string, now time.Time) (inst Instance, cre
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return Instance{}, false, fmt.Errorf("store: %w", err)
 	}
+	// MkdirAll keeps an existing directory's mode; the state root holds
+	// every instance, so it is 0700 whatever made it.
+	if err := os.Chmod(root, 0o700); err != nil {
+		return Instance{}, false, fmt.Errorf("store: %w", err)
+	}
 	unlock, err := lockFile(filepath.Join(root, ".enroll.lock"))
 	if err != nil {
 		return Instance{}, false, err

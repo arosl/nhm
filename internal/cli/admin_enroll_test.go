@@ -75,6 +75,24 @@ func TestEnrollFindsHerdrsDefaultSocket(t *testing.T) {
 	}
 }
 
+// Inside a pane of the default server, --session names another server;
+// the pane's socket must not be recorded under that session.
+func TestExplicitSessionWinsOverThePaneSocket(t *testing.T) {
+	cfg := enrollEnv(t)
+	t.Setenv("HERDR_SOCKET_PATH", "/run/pane/herdr.sock")
+	t.Setenv("HERDR_SESSION", "")
+	code, out, errOut := run("admin", "instance", "enroll", "--session", "exp4", "--json")
+	if code != 0 || !strings.Contains(out, filepath.Join(cfg, "herdr", "sessions", "exp4", "herdr.sock")) || strings.Contains(out, "/run/pane/") {
+		t.Fatalf("explicit session = %d %s %s", code, out, errOut)
+	}
+	// Without --session the pane's socket counts, under the pane's session.
+	t.Setenv("HERDR_SESSION", "work")
+	code, out, _ = run("admin", "instance", "enroll", "--json")
+	if code != 0 || !strings.Contains(out, `"socket_path": "/run/pane/herdr.sock"`) || !strings.Contains(out, `"session": "work"`) {
+		t.Fatalf("pane socket = %d %s", code, out)
+	}
+}
+
 func TestAdminUsageNamesEnroll(t *testing.T) {
 	code, _, errOut := run("admin")
 	if code != 2 || !strings.Contains(errOut, "nhm admin instance enroll") {

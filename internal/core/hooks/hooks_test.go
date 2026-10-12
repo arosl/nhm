@@ -490,6 +490,49 @@ func TestParseRegistrationShapes(t *testing.T) {
 	}
 }
 
+// A hook stopped by its hard stop between the create and its writes
+// leaves a binding without a token or an identity file, and the candidate
+// pending. The next reconcile finishes the writes.
+func TestReconcileRepairsAStoppedRegistration(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	project := t.TempDir()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	id, err := recordCandidate(ctx, h.env.DB.SQL(), Candidate{PaneID: "w1:p1", Session: "sess-a", HookEvent: "PostToolUse",
+		HookEventID: "e1", ReceivedAt: h.clock, Facts: CandidateFacts{HookEventName: "PostToolUse", SessionID: "sess-a",
+			ToolName: "mcp__mcp-agent-mail__register_agent", MailName: "IcyKnoll", MailProject: project, TokenRef: "cand-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteSecret(h.env.InstanceDir, "cand-1", "tok-secret-1"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := h.env.Bindings.Create(ctx, bindings.New{MailName: "IcyKnoll", MailProjectKey: canonical(project),
+		ProjectID: core.ProjectID(canonical(project)), Provenance: bindings.Adopted,
+		Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p1", HerdrAlias: "icyknoll", Kind: "claude",
+			NativeSession: &bindings.NativeSession{Value: "sess-a"}, ForegroundPID: 500, ForegroundStart: 5000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The hook died here.
+	if _, err := ReconcilePane(ctx, h.env, "w1:p1"); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := store.ReadSecret(h.env.InstanceDir, b.ID); err != nil || tok != "tok-secret-1" {
+		t.Fatalf("token = %q %v", tok, err)
+	}
+	if rec, ok, err := agentmail.ReadIdentity(h.env.ConfigHome, b.MailProjectKey, "w1:p1"); err != nil || !ok || rec.Name != "IcyKnoll" {
+		t.Fatalf("identity file = %+v %v %v", rec, ok, err)
+	}
+	got, _ := CandidateResults(ctx, h.env.DB, "w1:p1")
+	if len(got) != 1 || got[0].ID != id || !got[0].Processed || !strings.HasPrefix(got[0].Result, "already bound") {
+		t.Fatalf("candidates = %+v", got)
+	}
+	if _, err := store.ReadSecret(h.env.InstanceDir, "cand-1"); err == nil {
+		t.Fatal("the candidate's token file stayed")
+	}
+}
+
 func TestSubagentNeverBindsThePane(t *testing.T) {
 	h := newHarness(t, core.OwnerNhm)
 	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})

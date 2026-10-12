@@ -33,8 +33,14 @@ import (
 	"github.com/arosl/nhm/internal/store"
 )
 
-// budget bounds a hook call (plan-v8 2.7: two seconds, fail open).
-const budget = 2 * time.Second
+// The hook's time (plan-v8 2.7: two seconds, fail open). budget is the
+// deadline of the work: herdr calls and SQLite statements end there and
+// the hook returns cleanly. hardStop is the backstop that exits whatever
+// still blocks; it comes later, so the clean stop always ends first.
+const (
+	budget   = 1500 * time.Millisecond
+	hardStop = 1900 * time.Millisecond
+)
 
 // maxPayload bounds what a hook reads from stdin.
 const maxPayload = 1 << 20
@@ -52,9 +58,24 @@ HERDR_PLUGIN_EVENT_JSON. Every hook exits 0.
 const busyWait = 200 * time.Millisecond
 
 func main() {
-	// The hard stop: whatever blocks, the hook exits 0 within its budget.
-	time.AfterFunc(budget, func() { os.Exit(0) })
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	// The backstop: whatever blocks, the hook exits 0 inside two seconds.
+	time.AfterFunc(hardStop, func() { os.Exit(0) })
+	os.Exit(safeRun(run, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+}
+
+type runFunc func(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int
+
+// safeRun runs the hook and turns a panic into exit 0: Claude Code treats
+// exit 2 from PostToolUse as a blocking error and shows it to the agent,
+// and Go exits 2 on a panic.
+func safeRun(f runFunc, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) (code int) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(stderr, "nhm-hook: panic: %v\n", r)
+			code = 0
+		}
+	}()
+	return f(args, stdin, stdout, stderr, getenv)
 }
 
 // readPayload reads stdin until EOF or until ctx ends.

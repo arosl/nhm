@@ -105,7 +105,8 @@ func TestHookExitsWithinBudgetUnderAWriter(t *testing.T) {
 		var out, errb bytes.Buffer
 		start := time.Now()
 		code := run([]string{c.verb}, strings.NewReader(c.stdin), &out, &errb, env(vars))
-		if took := time.Since(start); code != 0 || took > budget {
+		// The clean stop must come before the hard stop.
+		if took := time.Since(start); code != 0 || took >= hardStop {
 			t.Fatalf("%s under a writer: exit %d after %s (%s)", c.verb, code, took, errb.String())
 		}
 	}
@@ -119,8 +120,22 @@ func TestStdinHasADeadline(t *testing.T) {
 	var out, errb bytes.Buffer
 	start := time.Now()
 	code := run([]string{"sessionstart"}, r, &out, &errb, env(map[string]string{}))
-	if took := time.Since(start); code != 0 || took > budget || !strings.Contains(errb.String(), "stdin") {
+	if took := time.Since(start); code != 0 || took >= hardStop || !strings.Contains(errb.String(), "stdin") {
 		t.Fatalf("exit %d after %s: %q", code, took, errb.String())
+	}
+}
+
+func TestAPanicExitsZero(t *testing.T) {
+	var errb bytes.Buffer
+	boom := func([]string, io.Reader, io.Writer, io.Writer, func(string) string) int { panic("boom") }
+	if code := safeRun(boom, nil, strings.NewReader(""), io.Discard, &errb, env(nil)); code != 0 || !strings.Contains(errb.String(), "panic: boom") {
+		t.Fatalf("exit %d, stderr %q", code, errb.String())
+	}
+}
+
+func TestTheCleanStopComesFirst(t *testing.T) {
+	if budget >= hardStop || hardStop >= 2*time.Second {
+		t.Fatalf("budget %s, hard stop %s: the work must end before the backstop, and both inside 2 s", budget, hardStop)
 	}
 }
 

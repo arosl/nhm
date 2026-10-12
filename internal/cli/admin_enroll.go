@@ -19,12 +19,14 @@ const enrollUsage = `Usage: nhm admin instance enroll [--session NAME] [--socket
 
 Enroll a herdr server: give it an instance directory under
 ~/.local/state/nhm with its database. ACFS's install runs this once per
-herdr server. Running it again changes nothing. Hooks and plugin actions
-from a server that is not enrolled do nothing.
+herdr server. Running it again keeps the instance and only records the
+session name it was given. Hooks and plugin actions from a server that
+is not enrolled do nothing.
 
-The socket is --socket, else HERDR_SOCKET_PATH, else herdr's own path for
-the session: ~/.config/herdr/herdr.sock for "default", or
-~/.config/herdr/sessions/<NAME>/herdr.sock. A server that does not answer
+The socket is --socket; else, with --session, herdr's own path for that
+session: ~/.config/herdr/herdr.sock for "default", or
+~/.config/herdr/sessions/<NAME>/herdr.sock; else HERDR_SOCKET_PATH (with
+HERDR_SESSION as the session name); else the default session's path. A server that does not answer
 is enrolled anyway, with a warning: the install may run before herdr
 starts.
 `
@@ -60,9 +62,17 @@ func runInstanceEnroll(args []string, stdout, stderr io.Writer) int {
 		return exitRefused
 	}
 	env := envelope{Command: "admin instance enroll"}
+	sessionGiven := false
+	fs.Visit(func(f *flag.Flag) { sessionGiven = sessionGiven || f.Name == "session" })
+	// An explicit --session names its server; HERDR_SOCKET_PATH (the pane
+	// this runs in) counts only without it.
 	path := *socket
-	if path == "" {
-		path = os.Getenv("HERDR_SOCKET_PATH")
+	if path == "" && !sessionGiven {
+		if path = os.Getenv("HERDR_SOCKET_PATH"); path != "" {
+			if s := strings.TrimSpace(os.Getenv("HERDR_SESSION")); s != "" {
+				*session = s
+			}
+		}
 	}
 	if path == "" {
 		if path, err = defaultSocket(*session); err != nil {
