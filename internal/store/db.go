@@ -51,6 +51,43 @@ func Open(instanceDir string) (*DB, error) {
 	return db, nil
 }
 
+// ErrSchemaOld means the database is older than this nhm; a hook does not
+// migrate it, the next nhm command does.
+var ErrSchemaOld = errors.New("store: the database schema is older than this nhm")
+
+// OpenForHook opens an instance's database for a hook, which runs on the
+// agent's turn and must stay inside its budget: it never migrates (so it
+// takes no write lock to open), and a statement waits at most busy for
+// another writer before it fails with SQLITE_BUSY. It refuses a schema
+// other than this build's.
+func OpenForHook(ctx context.Context, instanceDir string, busy time.Duration) (*DB, error) {
+	path := filepath.Join(instanceDir, DatabaseFile)
+	dsn := sqliteutil.ImmediateTransactionFileDSN(path,
+		fmt.Sprintf("busy_timeout(%d)", busy.Milliseconds()),
+		"foreign_keys(1)",
+		"synchronous(NORMAL)",
+	)
+	sdb, err := sql.Open(sqliteutil.DriverName, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	db := &DB{sql: sdb, path: path}
+	v, err := db.UserVersion(ctx)
+	if err != nil {
+		_ = sdb.Close()
+		return nil, err
+	}
+	switch {
+	case v > len(migrations):
+		_ = sdb.Close()
+		return nil, fmt.Errorf("%w: %s has user_version %d, this nhm knows %d", ErrSchemaTooNew, path, v, len(migrations))
+	case v < len(migrations):
+		_ = sdb.Close()
+		return nil, fmt.Errorf("%w: %s has user_version %d, this nhm writes %d", ErrSchemaOld, path, v, len(migrations))
+	}
+	return db, nil
+}
+
 // Close closes the database.
 func (db *DB) Close() error { return db.sql.Close() }
 

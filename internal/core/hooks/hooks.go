@@ -122,6 +122,11 @@ func RunAgentHook(ctx context.Context, env Env, h AgentHook) (Result, error) {
 	if pane == "" {
 		return Result{Skipped: "not in a herdr pane"}, nil
 	}
+	// A subagent passes the session check, since it shares its parent's
+	// session; it must never bind the pane or speak for its parent.
+	if p.AgentID != "" || p.AgentType != "" {
+		return Result{Skipped: "subagent call (agent_id " + p.AgentID + ")"}, nil
+	}
 	facts := CandidateFacts{HookEventName: p.HookEventName, SessionID: p.SessionID, Source: p.Source,
 		Model: p.Model, Entrypoint: env.getenv("CLAUDE_CODE_ENTRYPOINT")}
 	var token string
@@ -159,6 +164,18 @@ func RunAgentHook(ctx context.Context, env Env, h AgentHook) (Result, error) {
 		} else if err := setTokenRef(ctx, env, id, ref); err != nil {
 			early = append(early, "registration token not kept: "+err.Error())
 			_ = store.DeleteSecret(env.InstanceDir, ref)
+		}
+	}
+	// Pruning keeps the table bounded under any owner and changes no
+	// binding. It is a write, so it runs on one candidate in pruneEvery,
+	// not on every hook.
+	if id%pruneEvery == 0 {
+		if refs, err := prune(ctx, env.DB.SQL(), env.now()); err != nil {
+			early = append(early, err.Error())
+		} else {
+			for _, ref := range refs {
+				_ = store.DeleteSecret(env.InstanceDir, ref)
+			}
 		}
 	}
 	res.Report, err = ReconcilePane(ctx, env, pane)
@@ -220,15 +237,6 @@ func ReconcilePane(ctx context.Context, env Env, pane string) (Reconcile, error)
 	wait := env.LockWait
 	if wait <= 0 {
 		wait = time.Second
-	}
-	// Pruning keeps the table bounded under any owner; it changes no
-	// binding.
-	if refs, err := prune(ctx, env.DB.SQL(), env.now()); err != nil {
-		r.warn("%v", err)
-	} else {
-		for _, ref := range refs {
-			_ = store.DeleteSecret(env.InstanceDir, ref)
-		}
 	}
 	lctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()

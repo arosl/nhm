@@ -139,6 +139,43 @@ func TestNewerSchemaIsRefused(t *testing.T) {
 	}
 }
 
+func TestOpenForHookNeverMigratesAndWaitsBriefly(t *testing.T) {
+	inst := enroll(t)
+	ctx := context.Background()
+	db, err := Open(inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another writer holds the write lock.
+	conn, err := db.SQL().Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	hook, err := OpenForHook(ctx, inst.Dir, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("OpenForHook under a writer: %v", err)
+	}
+	start := time.Now()
+	_, err = hook.SQL().ExecContext(ctx, `INSERT INTO meta (key, value) VALUES ('k', 'v')`)
+	if err == nil || time.Since(start) > time.Second {
+		t.Fatalf("hook write under a writer = %v after %s", err, time.Since(start))
+	}
+	_ = hook.Close()
+	_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	_ = conn.Close()
+	// An older schema is left for the next nhm command.
+	if _, err := db.SQL().Exec("PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	if _, err := OpenForHook(ctx, inst.Dir, 100*time.Millisecond); !errors.Is(err, ErrSchemaOld) {
+		t.Fatalf("OpenForHook of an older schema = %v", err)
+	}
+}
+
 func TestBindingUniqueness(t *testing.T) {
 	inst := enroll(t)
 	db, err := Open(inst.Dir)

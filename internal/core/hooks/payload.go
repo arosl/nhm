@@ -29,6 +29,12 @@ type AgentPayload struct {
 	ToolName      string          `json:"tool_name,omitempty"`
 	ToolInput     json.RawMessage `json:"tool_input,omitempty"`
 	ToolResponse  json.RawMessage `json:"tool_response,omitempty"`
+	// AgentID and AgentType are set when a Claude Code subagent (the
+	// Task tool) made the call. A subagent shares its parent's session
+	// id and pane, so only these fields tell it apart (herdr's own
+	// integration checks agent_id too).
+	AgentID   string `json:"agent_id,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
 }
 
 // ParseAgentPayload decodes a hook's stdin.

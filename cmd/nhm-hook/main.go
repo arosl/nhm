@@ -46,8 +46,34 @@ stdin. herdr plugin event hooks (reconcile-pane, agent-status) read
 HERDR_PLUGIN_EVENT_JSON. Every hook exits 0.
 `
 
+// busyWait bounds each SQLite statement's wait for another writer. A
+// burst of hooks (herdr runs up to 32 plugin commands at once) or a long
+// nhm transaction must not hold the agent's turn.
+const busyWait = 200 * time.Millisecond
+
 func main() {
+	// The hard stop: whatever blocks, the hook exits 0 within its budget.
+	time.AfterFunc(budget, func() { os.Exit(0) })
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+}
+
+// readPayload reads stdin until EOF or until ctx ends.
+func readPayload(ctx context.Context, stdin io.Reader) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
+		done <- result{data, err}
+	}()
+	select {
+	case r := <-done:
+		return r.data, r.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("stdin: %w", ctx.Err())
+	}
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -69,15 +95,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	defer cancel()
 	var payload []byte
 	if verb == "posttooluse" || verb == "sessionstart" {
-		data, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
+		rctx, rcancel := context.WithTimeout(ctx, budget/4)
+		data, err := readPayload(rctx, stdin)
+		rcancel()
 		if err != nil {
-			fmt.Fprintf(stderr, "nhm-hook %s: stdin: %v\n", verb, err)
+			fmt.Fprintf(stderr, "nhm-hook %s: %v\n", verb, err)
 			return 0
 		}
 		payload = data
 	}
-	env, closeEnv, err := openEnv(getenv)
-	if errors.Is(err, store.ErrNotEnrolled) || errors.Is(err, errNoSocket) {
+	env, closeEnv, err := openEnv(ctx, getenv)
+	if errors.Is(err, store.ErrNotEnrolled) || errors.Is(err, errNoSocket) || errors.Is(err, store.ErrSchemaOld) {
 		debug(stderr, getenv, verb, map[string]string{"skipped": err.Error()})
 		return 0
 	}
@@ -118,8 +146,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 
 var errNoSocket = errors.New("no HERDR_SOCKET_PATH: not in a herdr pane")
 
-// openEnv opens the instance enrolled for the hook's herdr socket.
-func openEnv(getenv func(string) string) (hooks.Env, func(), error) {
+// openEnv opens the instance enrolled for the hook's herdr socket. It
+// never migrates the database: an older schema waits for the next nhm
+// command.
+func openEnv(ctx context.Context, getenv func(string) string) (hooks.Env, func(), error) {
 	socket := getenv("HERDR_SOCKET_PATH")
 	if socket == "" {
 		return hooks.Env{}, nil, errNoSocket
@@ -132,12 +162,12 @@ func openEnv(getenv func(string) string) (hooks.Env, func(), error) {
 	if err != nil {
 		return hooks.Env{}, nil, err
 	}
-	db, err := store.Open(inst.Dir)
+	db, err := store.OpenForHook(ctx, inst.Dir, busyWait)
 	if err != nil {
 		return hooks.Env{}, nil, err
 	}
 	env := hooks.Env{DB: db, Bindings: bindings.NewStore(db), Herdr: herdr.New(socket), InstanceDir: inst.Dir,
-		Getenv: getenv, Now: time.Now}
+		Getenv: getenv, Now: time.Now, LockWait: 300 * time.Millisecond, Settle: 500 * time.Millisecond}
 	return env, func() { _ = db.Close() }, nil
 }
 

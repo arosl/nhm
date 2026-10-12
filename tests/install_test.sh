@@ -96,6 +96,27 @@ else
   pass "a bad version is refused"
 fi
 
+# A release older than nhm-hook: it installs, and the nhm-hook link from
+# the newer release goes instead of dangling.
+old="0.0.0-old"
+oldname="nhm-$old-linux-$(go env GOARCH 2> /dev/null || echo amd64)"
+newname="nhm-$version-linux-$(go env GOARCH 2> /dev/null || echo amd64)"
+mkdir -p "$work/oldsrc" "$work/olddist"
+tar --zstd -xf "$dist/$newname.tar.zst" -C "$work/oldsrc"
+mv "$work/oldsrc/$newname" "$work/oldsrc/$oldname"
+rm "$work/oldsrc/$oldname/nhm-hook"
+(cd "$work/oldsrc/$oldname" && sha256sum nhm LICENSE PROVENANCE.md > SHA256SUMS)
+tar --zstd -C "$work/oldsrc" -cf "$work/olddist/$oldname.tar.zst" "$oldname"
+(cd "$work/olddist" && sha256sum "$oldname.tar.zst" > SHA256SUMS)
+ln -s "$work/olddist" "$work/releases/v$old"
+home="$work/home"
+if run_install --version "$old" 2> "$work/log4" && [[ ! -e "$home/.local/bin/nhm-hook" && ! -L "$home/.local/bin/nhm-hook" ]] &&
+  [[ -x "$home/.local/bin/nhm" ]]; then
+  pass "a release without nhm-hook installs and leaves no dangling link"
+else
+  fail "a release without nhm-hook: $(cat "$work/log4"); link: $(readlink "$home/.local/bin/nhm-hook" || true)"
+fi
+
 if [[ $fails -eq 0 ]]; then
   echo "RESULT: pass"
 else

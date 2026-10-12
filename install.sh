@@ -7,8 +7,9 @@
 # tagged release of arosl/nhm, checks the archive against SHA256SUMS, and
 # unpacks it to ~/.local/share/nhm/releases/<version>/. Then it points
 # ~/.local/share/nhm/current at that release, and ~/.local/bin/nhm and
-# ~/.local/bin/nhm-hook at current/nhm and current/nhm-hook. Running it again for the same version only re-points the
-# links. Messages go to stderr.
+# ~/.local/bin/nhm-hook at current/nhm and current/nhm-hook (an older
+# release without nhm-hook gets no nhm-hook link). Running it again for
+# the same version only re-points the links. Messages go to stderr.
 #
 # Environment:
 #   NHM_VERSION       the version, when --version is not given
@@ -94,9 +95,8 @@ else
   log "checksum ok"
   mkdir -p "$releases"
   tar --zstd -xf "$tmp/$name.tar.zst" -C "$tmp"
-  for cmd in nhm nhm-hook; do
-    [[ -x "$tmp/$name/$cmd" ]] || die "archive has no $name/$cmd"
-  done
+  # nhm-hook came with the hooks; an older pinned release has none.
+  [[ -x "$tmp/$name/nhm" ]] || die "archive has no $name/nhm"
   (cd "$tmp/$name" && sha256sum -c --quiet SHA256SUMS >&2) || die "archive contents do not match its SHA256SUMS"
   # A rename inside one file system is atomic: target is complete or absent.
   mv -T "$tmp/$name" "$target.partial.$$"
@@ -107,12 +107,19 @@ fi
 ln -sfn "releases/$version" "$data_home/nhm/current.new.$$"
 mv -T "$data_home/nhm/current.new.$$" "$data_home/nhm/current"
 mkdir -p "$bin_dir"
-# nhm-hook is the stable command line of the agent and plugin hooks.
+# nhm-hook is the stable command line of the agent and plugin hooks. A
+# release without it gets no link, and a link that would dangle goes.
 for cmd in nhm nhm-hook; do
-  ln -sfn "$data_home/nhm/current/$cmd" "$bin_dir/$cmd.new.$$"
-  mv -T "$bin_dir/$cmd.new.$$" "$bin_dir/$cmd"
+  if [[ -x "$data_home/nhm/current/$cmd" ]]; then
+    ln -sfn "$data_home/nhm/current/$cmd" "$bin_dir/$cmd.new.$$"
+    mv -T "$bin_dir/$cmd.new.$$" "$bin_dir/$cmd"
+    log "linked $bin_dir/$cmd -> $data_home/nhm/current/$cmd"
+  elif [[ -L "$bin_dir/$cmd" && "$(readlink "$bin_dir/$cmd")" == "$data_home/nhm/current/$cmd" ]]; then
+    rm -f -- "$bin_dir/$cmd"
+    log "nhm $version has no $cmd; removed the link $bin_dir/$cmd"
+  fi
 done
-log "installed nhm $version: $bin_dir/nhm and $bin_dir/nhm-hook -> $data_home/nhm/current/"
+log "installed nhm $version"
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
   *) log "note: $bin_dir is not on PATH" ;;

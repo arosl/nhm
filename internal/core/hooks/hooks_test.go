@@ -490,6 +490,28 @@ func TestParseRegistrationShapes(t *testing.T) {
 	}
 }
 
+func TestSubagentNeverBindsThePane(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	// A Task subagent shares the parent's session id and pane.
+	reg := registration("sess-a", "IcyKnoll", t.TempDir())
+	reg["agent_id"], reg["agent_type"] = "agent-7", "general-purpose"
+	if res := h.hook(reg, "e1"); !strings.HasPrefix(res.Skipped, "subagent call") {
+		t.Fatalf("subagent registration = %+v", res)
+	}
+	start := sessionStart("sess-a", "compact")
+	start["agent_id"] = "agent-7"
+	if res := h.hook(start, "e2"); !strings.HasPrefix(res.Skipped, "subagent call") {
+		t.Fatalf("subagent SessionStart = %+v", res)
+	}
+	if list, _ := h.env.Bindings.List(context.Background(), bindings.Filter{}); len(list) != 0 {
+		t.Fatalf("bindings = %+v", list)
+	}
+	if got, _ := CandidateResults(context.Background(), h.env.DB, "w1:p1"); len(got) != 0 {
+		t.Fatalf("candidates = %+v", got)
+	}
+}
+
 func TestRulesSpellVerdictsAlike(t *testing.T) {
 	if codex.Continue != claude.Continue || codex.Displace != claude.Displace || codex.Ignore != claude.Ignore {
 		t.Fatal("the claude and codex rules spell their verdicts differently")

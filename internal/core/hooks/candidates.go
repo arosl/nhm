@@ -29,6 +29,9 @@ const (
 	keepProcessed = 7 * 24 * time.Hour
 	// maxRows bounds the table; the oldest rows go first.
 	maxRows = 2000
+	// pruneEvery: an agent hook prunes when its candidate id is a
+	// multiple of this, so the table stays near maxRows+pruneEvery.
+	pruneEvery = 64
 )
 
 // CandidateFacts is what a candidate row keeps of a payload. It never
