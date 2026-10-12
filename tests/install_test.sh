@@ -78,6 +78,17 @@ else
   fail "second run: $(cat "$work/log2")"
 fi
 
+# The herdr plugin herdr links is a real directory that stays (herdr
+# stores the resolved path), and its ../nhm and ../nhm-hook follow current.
+plug="$home/.local/share/nhm/plugin"
+if [[ -d "$plug" && ! -L "$plug" ]] && grep -q "^version = \"$version\"" "$plug/herdr-plugin.toml" &&
+  [[ "$(readlink "$plug/../nhm")" == "current/nhm" && "$(readlink "$plug/../nhm-hook")" == "current/nhm-hook" ]] &&
+  "$plug/../nhm" version --json > /dev/null 2>&1; then
+  pass "the stable plugin dir holds the current manifest; ../nhm and ../nhm-hook follow current"
+else
+  fail "stable plugin dir: $(ls -la "$plug" "$plug/.." 2>&1)"
+fi
+
 # A tampered archive must be refused before anything is unpacked.
 bad="$work/bad"
 mkdir -p "$bad"
@@ -111,7 +122,8 @@ newname="nhm-$version-linux-$(go env GOARCH 2> /dev/null || echo amd64)"
 mkdir -p "$work/oldsrc" "$work/olddist"
 tar --zstd -xf "$dist/$newname.tar.zst" -C "$work/oldsrc"
 mv "$work/oldsrc/$newname" "$work/oldsrc/$oldname"
-rm "$work/oldsrc/$oldname/nhm-hook"
+rm "$work/oldsrc/$oldname/nhm-hook" "$work/oldsrc/$oldname/nhm-palette" "$work/oldsrc/$oldname/plugin/herdr-plugin.toml"
+rmdir "$work/oldsrc/$oldname/plugin"
 (cd "$work/oldsrc/$oldname" && sha256sum nhm LICENSE PROVENANCE.md > SHA256SUMS)
 tar --zstd -C "$work/oldsrc" -cf "$work/olddist/$oldname.tar.zst" "$oldname"
 (cd "$work/olddist" && sha256sum "$oldname.tar.zst" > SHA256SUMS)
@@ -122,6 +134,11 @@ if run_install --version "$old" 2> "$work/log4" && [[ ! -e "$home/.local/bin/nhm
   pass "a release without nhm-hook installs and leaves no dangling link"
 else
   fail "a release without nhm-hook: $(cat "$work/log4"); link: $(readlink "$home/.local/bin/nhm-hook" || true)"
+fi
+if [[ ! -e "$home/.local/share/nhm/plugin/herdr-plugin.toml" ]] && grep -q 'has no herdr plugin' "$work/log4"; then
+  pass "a release without the plugin removes the stable manifest, so herdr runs no command it lacks"
+else
+  fail "a release without the plugin: $(cat "$work/log4")"
 fi
 
 # --archive-sha256: a pin kept outside the release (acfs-9hkh.42).

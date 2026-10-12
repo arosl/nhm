@@ -218,6 +218,32 @@ for cmd in nhm nhm-hook; do
     log "nhm $version has no $cmd; removed the link $bin_dir/$cmd"
   fi
 done
+# The herdr plugin. herdr stores a linked plugin's resolved path, so a
+# link to current/plugin would stay on one release dir (acfs-9hkh.14).
+# plugin/ is a real directory that stays: it holds the current release's
+# manifest, whose "../nhm" and "../nhm-hook" are links here that follow
+# current. Link it once: herdr plugin link <data_home>/nhm/plugin
+plugin_dir="$data_home/nhm/plugin"
+if [[ -f "$data_home/nhm/current/plugin/herdr-plugin.toml" ]]; then
+  for cmd in nhm nhm-hook; do
+    if [[ -x "$data_home/nhm/current/$cmd" ]]; then
+      ln -sfn "current/$cmd" "$data_home/nhm/$cmd.new.$$"
+      mv -T "$data_home/nhm/$cmd.new.$$" "$data_home/nhm/$cmd"
+    elif [[ -L "$data_home/nhm/$cmd" ]]; then
+      rm -f -- "$data_home/nhm/$cmd"
+    fi
+  done
+  [[ ! -L "$plugin_dir" ]] || die "$plugin_dir is a symlink; herdr would store where it points. Make it a directory."
+  mkdir -p "$plugin_dir"
+  cp "$data_home/nhm/current/plugin/herdr-plugin.toml" "$plugin_dir/herdr-plugin.toml.new.$$"
+  mv -f "$plugin_dir/herdr-plugin.toml.new.$$" "$plugin_dir/herdr-plugin.toml"
+  log "the herdr plugin is $plugin_dir (link it once: herdr plugin link $plugin_dir)"
+elif [[ -f "$plugin_dir/herdr-plugin.toml" ]]; then
+  # A release without the plugin: herdr shows the plugin as unavailable
+  # instead of running commands this nhm does not have.
+  rm -f -- "$plugin_dir/herdr-plugin.toml"
+  log "nhm $version has no herdr plugin; removed $plugin_dir/herdr-plugin.toml"
+fi
 log "installed nhm $version"
 case ":$PATH:" in
   *":$bin_dir:"*) ;;

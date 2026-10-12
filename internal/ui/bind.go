@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Key is one key `nhm bind` writes: a herdr key and the plugin action it
@@ -86,35 +88,69 @@ func withoutBlock(text, begin, end string) (string, error) {
 	return strings.Join(out, "\n"), nil
 }
 
-// Unbind returns the config without nhm's block and without ACFS's old
-// palette block.
+// Unbind returns the config without nhm's block. ACFS's palette block
+// stays: it is ACFS's, and only Bind replaces it.
 func Unbind(config string) (string, error) {
-	text, err := withoutBlock(config, BlockBegin, BlockEnd)
-	if err != nil {
-		return "", err
+	return withoutBlock(config, BlockBegin, BlockEnd)
+}
+
+// quoted finds TOML's basic ("…") and literal ('…') strings.
+var quoted = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"|'([^']*)'`)
+
+// usesKey returns the line of config that assigns key to anything: `key =
+// "prefix+a"` in a [[keys.command]], `zoom = 'prefix+a'`, or `zoom =
+// ["x", "prefix+a"]` in [keys], over one line or several, any quote
+// style, ignoring case: any quoted value that is exactly the key.
+// Comments do not count, nor do table headers.
+func usesKey(config, key string) string {
+	for _, line := range strings.Split(config, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "[") && !strings.Contains(t, "=") {
+			continue
+		}
+		// The value side of `name = value`; an array's later lines have
+		// no name.
+		if i := strings.Index(t, "="); i >= 0 && !strings.ContainsAny(t[:i], `"'`) {
+			t = t[i+1:]
+		}
+		for _, m := range quoted.FindAllStringSubmatch(t, -1) {
+			if strings.EqualFold(m[1]+m[2], key) {
+				return strings.TrimSpace(line)
+			}
+		}
 	}
-	return withoutBlock(text, acfsBlockBegin, acfsBlockEnd)
+	return ""
 }
 
 // Bind returns the config with nhm's block in place of any earlier one,
 // ACFS's palette block removed, and the block appended at the end. It
-// refuses when the rest of the config already uses one of nhm's keys.
+// refuses when the rest of the config already uses one of nhm's keys, or
+// when the result is not valid TOML (an inline `[keys] command = [...]`
+// cannot take an appended [[keys.command]]: herdr would then ignore the
+// whole file).
 func Bind(config string) (string, error) {
 	rest, err := Unbind(config)
+	if err == nil {
+		rest, err = withoutBlock(rest, acfsBlockBegin, acfsBlockEnd)
+	}
 	if err != nil {
 		return "", err
 	}
 	for _, k := range Keys {
-		re := regexp.MustCompile(`(?m)^\s*[A-Za-z_]+\s*=\s*"` + regexp.QuoteMeta(k.Key) + `"`)
-		if loc := re.FindString(rest); loc != "" {
-			return "", fmt.Errorf("ui: herdr's config already binds %s (%s); free it, then run nhm bind again", k.Key, strings.TrimSpace(loc))
+		if line := usesKey(rest, k.Key); line != "" {
+			return "", fmt.Errorf("ui: herdr's config already binds %s (%s); free it, then run nhm bind again", k.Key, line)
 		}
 	}
 	rest = strings.TrimRight(rest, "\n")
 	if rest != "" {
 		rest += "\n\n"
 	}
-	return rest + Block(), nil
+	next := rest + Block()
+	if _, err := toml.Decode(next, new(map[string]any)); err != nil {
+		return "", fmt.Errorf("ui: with nhm's keys appended, herdr's config would not parse (%v); "+
+			"move its key bindings to [[keys.command]] tables, then run nhm bind again", err)
+	}
+	return next, nil
 }
 
 // ClientNote is what `nhm bind --print-client` prints with the block: a

@@ -43,7 +43,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: shellcheck
-        run: shellcheck install.sh scripts/*.sh tests/*.sh
+        # nhm-palette is a Bash script without the .sh suffix.
+        run: shellcheck install.sh scripts/*.sh scripts/nhm-palette tests/*.sh
+      - name: the palette
+        run: bash tests/palette_test.sh
       - name: install.sh against a local release
         run: |
           sudo apt-get install -y zstd
