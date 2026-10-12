@@ -91,7 +91,11 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm bind: %v\n", err)
 		return exitError
 	}
-	seen := fileState(path)
+	// The state of the bytes just read, not of a second read.
+	seen := ""
+	if err == nil {
+		seen = stateOf(path, old)
+	}
 	var next string
 	if *unbind {
 		next, err = ui.Unbind(string(old))
@@ -186,19 +190,20 @@ func requireNhmOwner(socket string, stderr io.Writer) int {
 }
 
 // serverConfig is the config.toml of the herdr server at socket:
-// $HERDR_CONFIG_PATH, else the herdr directory the socket lives in
-// (herdr/herdr.sock or herdr/sessions/<name>/herdr.sock), else the
-// default. A --socket whose config cannot be told is refused: nhm would
-// check one server and write another's keys.
+// $HERDR_CONFIG_PATH when socket is the calling pane's server (no
+// --socket, or --socket naming $HERDR_SOCKET_PATH), since that variable
+// belongs to the pane's server; else the herdr directory of the socket in
+// one of herdr's layouts (<dir>/herdr/herdr.sock or
+// <dir>/herdr/sessions/<name>/herdr.sock); else the default. A --socket
+// whose config cannot be told is refused: nhm would check one server and
+// write another's keys.
 func serverConfig(socket string, explicit bool) (string, error) {
-	if p := os.Getenv("HERDR_CONFIG_PATH"); p != "" {
+	if p := os.Getenv("HERDR_CONFIG_PATH"); p != "" && (socket == "" || socket == os.Getenv("HERDR_SOCKET_PATH")) {
 		return p, nil
 	}
 	if socket != "" {
-		for dir := filepath.Dir(socket); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-			if filepath.Base(dir) == "herdr" {
-				return filepath.Join(dir, "config.toml"), nil
-			}
+		if dir, ok := herdrDir(socket); ok {
+			return filepath.Join(dir, "config.toml"), nil
 		}
 		if explicit {
 			return "", fmt.Errorf("cannot tell which config.toml the herdr server at %s reads; give --config", socket)
@@ -207,16 +212,45 @@ func serverConfig(socket string, explicit bool) (string, error) {
 	return ui.ConfigPath(os.Getenv)
 }
 
-// fileState is what a file looked like: its size, modification time and
-// content hash ("" when it does not exist).
+// herdrDir is the herdr directory of a socket in herdr's own layouts:
+// <dir>/herdr/herdr.sock, or <dir>/herdr/sessions/<name>/herdr.sock. Any
+// other path, such as a project directory that happens to be named herdr,
+// is not one.
+func herdrDir(socket string) (string, bool) {
+	if filepath.Base(socket) != "herdr.sock" {
+		return "", false
+	}
+	dir := filepath.Dir(socket)
+	if filepath.Base(dir) == "herdr" {
+		return dir, true
+	}
+	if sessions := filepath.Dir(dir); filepath.Base(sessions) == "sessions" && filepath.Base(filepath.Dir(sessions)) == "herdr" {
+		return filepath.Dir(sessions), true
+	}
+	return "", false
+}
+
+// fileState is what a file looks like now: its size, modification time
+// and content hash ("" when it does not exist).
 func fileState(path string) string {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		return "unreadable"
+	}
+	return stateOf(path, data)
+}
+
+// stateOf is fileState for bytes already read from path: the file's size
+// and modification time with the hash of those bytes, so a change between
+// the read and this stat shows as a different state ("" when the file
+// is gone).
+func stateOf(path string, data []byte) string {
 	info, err := os.Stat(path)
 	if err != nil {
 		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "unreadable"
 	}
 	return fmt.Sprintf("%d %d %x", info.Size(), info.ModTime().UnixNano(), sha256.Sum256(data))
 }

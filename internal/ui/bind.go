@@ -71,11 +71,11 @@ func multiline(open, line string) string {
 	for i := 0; i < len(line); {
 		rest := line[i:]
 		if open != "" {
-			j := strings.Index(rest, open)
+			j := closeIndex(rest, open)
 			if j < 0 {
 				return open
 			}
-			i, open = i+j+3, ""
+			i, open = i+j, ""
 			continue
 		}
 		switch {
@@ -104,6 +104,50 @@ func multiline(open, line string) string {
 		}
 	}
 	return open
+}
+
+// closeIndex returns the index just past the delimiter that closes a
+// multi-line string in s, or -1 when s does not close it. In a basic
+// string (""") a backslash escapes the next character, so \""" does not
+// close it. Up to two quotes before the delimiter belong to the string
+// (TOML: """a""""" is a"" closed), so the closing run is taken whole.
+func closeIndex(s, delim string) int {
+	for k := 0; k < len(s); k++ {
+		if delim == `"""` && s[k] == '\\' {
+			k++
+			continue
+		}
+		if strings.HasPrefix(s[k:], delim) {
+			end := k + len(delim)
+			for n := 0; n < 2 && end < len(s) && s[end] == delim[0]; n++ {
+				end++
+			}
+			return end
+		}
+	}
+	return -1
+}
+
+// codeOf is a TOML line without its comment: the text before the first #
+// outside a string. A line that opens a multi-line string is kept whole.
+func codeOf(line string) string {
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '#':
+			return line[:i]
+		case '"', '\'':
+			if strings.HasPrefix(line[i:], `"""`) || strings.HasPrefix(line[i:], `'''`) {
+				return line
+			}
+			q := line[i]
+			for i++; i < len(line) && line[i] != q; i++ {
+				if q == '"' && line[i] == '\\' {
+					i++
+				}
+			}
+		}
+	}
+	return line
 }
 
 // withoutBlock removes a marked block (and the blank line after it). A
@@ -160,8 +204,8 @@ func usesKey(config, key string) string {
 	for _, line := range strings.Split(config, "\n") {
 		inString := open != ""
 		open = multiline(open, line)
-		t := strings.TrimSpace(line)
-		if inString || t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "[") && !strings.Contains(t, "=") {
+		t := strings.TrimSpace(codeOf(line))
+		if inString || t == "" || strings.HasPrefix(t, "[") && !strings.Contains(t, "=") {
 			continue
 		}
 		// The value side of `name = value`; an array's later lines have

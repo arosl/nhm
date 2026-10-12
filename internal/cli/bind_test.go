@@ -290,9 +290,49 @@ func TestServerConfig(t *testing.T) {
 	if got, err := serverConfig(filepath.Join(base, "elsewhere.sock"), false); err != nil || got != filepath.Join(base, "xdg", "herdr", "config.toml") {
 		t.Errorf("the pane's socket outside a herdr dir = %q, %v", got, err)
 	}
+	// Only herdr's own layouts count, not any directory named herdr
+	// (acfs-9hkh.63).
+	for _, socket := range []string{
+		filepath.Join(base, "projects", "herdr", "x.sock"),
+		filepath.Join(base, "herdr", "deep", "herdr.sock"),
+		filepath.Join(base, "herdr", "sessions", "herdr.sock"),
+	} {
+		if got, err := serverConfig(socket, true); err == nil {
+			t.Errorf("serverConfig(%q) = %q; want a refusal", socket, got)
+		}
+	}
+	// HERDR_CONFIG_PATH belongs to the calling pane's server: it counts
+	// for that server, not for a --socket that names another.
+	pane := filepath.Join(base, "a", "herdr", "herdr.sock")
+	other := filepath.Join(base, "b", "herdr", "herdr.sock")
+	t.Setenv("HERDR_SOCKET_PATH", pane)
 	t.Setenv("HERDR_CONFIG_PATH", filepath.Join(base, "mine.toml"))
-	if got, _ := serverConfig(filepath.Join(base, "a", "herdr", "herdr.sock"), true); got != filepath.Join(base, "mine.toml") {
-		t.Errorf("HERDR_CONFIG_PATH did not win: %q", got)
+	if got, _ := serverConfig(pane, true); got != filepath.Join(base, "mine.toml") {
+		t.Errorf("HERDR_CONFIG_PATH did not count for the pane's own server: %q", got)
+	}
+	if got, _ := serverConfig("", false); got != filepath.Join(base, "mine.toml") {
+		t.Errorf("HERDR_CONFIG_PATH did not count without a socket: %q", got)
+	}
+	if got, err := serverConfig(other, true); err != nil || got != filepath.Join(base, "b", "herdr", "config.toml") {
+		t.Errorf("--socket for another server took the pane's HERDR_CONFIG_PATH: %q, %v", got, err)
+	}
+}
+
+// The state bind compares against is that of the bytes it read: a file
+// rewritten between the read and the stat does not match it (acfs-9hkh.63).
+func TestStateOfHashesTheBytesRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("a = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if stateOf(path, []byte("a = 1\n")) != fileState(path) {
+		t.Error("the state of the bytes on disk differs from fileState")
+	}
+	if stateOf(path, []byte("a = 2\n")) == fileState(path) {
+		t.Error("the state of other bytes matched fileState")
+	}
+	if stateOf(filepath.Join(t.TempDir(), "gone"), nil) != "" || fileState(filepath.Join(t.TempDir(), "gone")) != "" {
+		t.Error("a missing file has a state")
 	}
 }
 

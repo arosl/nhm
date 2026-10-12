@@ -23,6 +23,11 @@ func TestUsesKey(t *testing.T) {
 		{"[keys]\nnew_tab = \"Prefix + A\"\n", true},
 		// Inside a multi-line string it is text, not a key.
 		{"[x]\nnote = \"\"\"\nzoom = \"prefix+a\"\n\"\"\"\n", false},
+		// A trailing comment is not a value; a # inside a string is.
+		{"[keys]\nnew_tab = 'x' # 'prefix+a'\n", false},
+		{"[keys]\nnew_tab = \"prefix+a\" # was ctrl+t\n", true},
+		{"[keys]\nnew_tab = \"x#\" # \"prefix+a\"\n", false},
+		{"[keys]\nzoom = [\"x\", # 'prefix+a'\n  'y']\n", false},
 	} {
 		if got := usesKey(tc.config, "prefix+a") != ""; got != tc.want {
 			t.Errorf("usesKey(%q) = %v, want %v", tc.config, got, tc.want)
@@ -57,6 +62,23 @@ func TestMarkersInsideMultilineStringsAreText(t *testing.T) {
 	}
 	if got := multiline("", `a = """one""" # """`); got != "" {
 		t.Errorf("a closed string and a comment left %q open", got)
+	}
+	// An escaped \""" does not close a basic multi-line string, so a
+	// marker after it is still text (acfs-9hkh.63).
+	escaped := "[x]\nnote = \"\"\"\nquote: \\\"\"\"\n" + BlockBegin + "\nkept\n" + BlockEnd + "\n\"\"\"\n"
+	if got, err := Unbind(escaped); err != nil || got != escaped {
+		t.Errorf("Unbind changed a string with an escaped delimiter: %q %v", got, err)
+	}
+	for line, want := range map[string]string{
+		`a = """x\"""`:      `"""`, // escaped: still open
+		`a = """x\\"""`:     "",    // an escaped backslash, then the close
+		`a = """x"""""`:     "",    // up to two quotes belong to the string
+		`a = '''x\'''`:      "",    // literal strings have no escapes
+		`a = """x""""" # '`: "",
+	} {
+		if got := multiline("", line); got != want {
+			t.Errorf("multiline(%q) = %q, want %q", line, got, want)
+		}
 	}
 }
 
