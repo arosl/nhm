@@ -37,7 +37,10 @@ type ProjectOf func(ctx context.Context, cwd string) (projectKey, projectID stri
 type ImportRequest struct {
 	// ProjectKey limits the run to one project; empty takes every project.
 	ProjectKey string `json:"mail_project_key,omitempty"`
-	DryRun     bool   `json:"dry_run"`
+	// PaneID limits the run to one pane (the hook path); empty takes every
+	// pane.
+	PaneID string `json:"pane_id,omitempty"`
+	DryRun bool   `json:"dry_run"`
 	// AcfsHome is where the Bash keeps its state ("" means
 	// DefaultAcfsHome()).
 	AcfsHome    string `json:"-"`
@@ -100,7 +103,7 @@ func ImportOnly(ctx context.Context, env Env, projectOf ProjectOf, req ImportReq
 	agents := append([]herdr.AgentInfo(nil), snap.Agents...)
 	sort.Slice(agents, func(i, j int) bool { return agents[i].PaneID < agents[j].PaneID })
 	for _, a := range agents {
-		if a.Agent == "" {
+		if a.Agent == "" || (req.PaneID != "" && a.PaneID != req.PaneID) {
 			continue
 		}
 		item, keep := importOne(ctx, env, projectOf, req, snap, a, rep.OperationID)

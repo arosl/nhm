@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -41,6 +42,9 @@ type EnrollResult struct {
 	// HerdrVersion is empty when the server did not answer.
 	HerdrVersion  string `json:"herdr_version,omitempty"`
 	HerdrProtocol int    `json:"herdr_protocol,omitempty"`
+	// Import is the import of Bash-spawned agents that runs after enroll
+	// when herdr answers (bindings.AutoImport); nil when it did not run.
+	Import *bindings.AutoImportResult `json:"import,omitempty"`
 }
 
 // pingWait bounds enroll's check of the herdr server.
@@ -96,6 +100,12 @@ func runInstanceEnroll(args []string, stdout, stderr io.Writer) int {
 		res.HerdrVersion, res.HerdrProtocol = pong.Version, pong.Protocol
 		if pong.Protocol != herdr.Protocol {
 			env.Warnings = append(env.Warnings, fmt.Sprintf("herdr %s speaks protocol %d; this nhm speaks %d", pong.Version, pong.Protocol, herdr.Protocol))
+		} else {
+			// Read the agents ACFS's Bash spawned, so nhm sees them from
+			// the start (ACFS acfs-9hkh.41). A failure is a warning: enroll
+			// itself succeeded, and the read verbs try again.
+			res.Import = importAfterEnroll(inst)
+			env.Warnings = append(env.Warnings, res.Import.Warnings...)
 		}
 	}
 	env.Result = res
@@ -105,7 +115,26 @@ func runInstanceEnroll(args []string, stdout, stderr io.Writer) int {
 			verb = "already enrolled"
 		}
 		fmt.Fprintf(w, "%s %s: session %s, socket %s\n", verb, inst.ID, inst.Session, inst.SocketPath)
+		if res.Import != nil && res.Import.Imported > 0 {
+			fmt.Fprintf(w, "imported %d Bash-spawned agent(s)\n", res.Import.Imported)
+		}
 	})
+}
+
+// enrollImportWait bounds enroll's import of Bash-spawned agents.
+const enrollImportWait = 20 * time.Second
+
+// importAfterEnroll imports the Bash-spawned agents of every pane.
+func importAfterEnroll(inst store.Instance) *bindings.AutoImportResult {
+	db, err := store.Open(inst.Dir)
+	if err != nil {
+		return &bindings.AutoImportResult{Warnings: []string{"import of Bash-spawned agents: " + err.Error()}}
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), enrollImportWait)
+	defer cancel()
+	r := autoImport(ctx, inst, db, herdr.New(inst.SocketPath))
+	return &r
 }
 
 // defaultSocket is herdr's own socket path for a session (herdr 0.9.3):

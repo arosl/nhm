@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,7 @@ type pane struct {
 	name    string
 	session string
 	pid     int
+	cwd     string
 }
 
 // world is a herdr stub with mutable panes, and the calls nhm made.
@@ -94,8 +96,18 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 			"number": 1, "label": p.Label, "focused": false, "pane_count": 1, "agent_status": "idle"}}, nil
 	})
 	s.Handle("session.snapshot", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		w.mu.Lock()
+		panes, agents := []any{}, []any{}
+		for id, pn := range w.panes {
+			panes = append(panes, map[string]any{"pane_id": id, "tab_id": "w1:t1", "workspace_id": "w1",
+				"terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1, "cwd": pn.cwd, "agent": pn.kind})
+			if pn.kind != "" {
+				agents = append(agents, w.agentJSON(id, pn))
+			}
+		}
+		w.mu.Unlock()
 		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 22, "version": "0.9.3",
-			"workspaces": []any{}, "panes": []any{}, "agents": []any{},
+			"workspaces": []any{}, "panes": panes, "agents": agents,
 			"tabs": []any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1, "label": "1",
 				"focused": false, "pane_count": 1, "agent_status": "idle"}}}}, nil
 	})
@@ -129,6 +141,9 @@ func (w *world) agentJSON(id string, pn *pane) map[string]any {
 	}
 	if pn.session != "" {
 		a["agent_session"] = map[string]any{"source": "herdr:" + pn.kind, "agent": pn.kind, "kind": "id", "value": pn.session}
+	}
+	if pn.cwd != "" {
+		a["cwd"] = pn.cwd
 	}
 	return a
 }
@@ -419,6 +434,52 @@ func TestBashOwnerLeavesCandidatesPending(t *testing.T) {
 	}
 	if h.world.called("agent.rename") {
 		t.Fatal("renamed under the Bash owner")
+	}
+}
+
+// While the Bash owns the instance, a hook imports its own pane's
+// Bash-spawned agent (acfs-9hkh.41): verified evidence only, no rename,
+// and nothing for another pane.
+func TestBashOwnerImportsTheHookPane(t *testing.T) {
+	h := newHarness(t, core.OwnerBash)
+	ctx := context.Background()
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repo = canonical(repo)
+	h.env.AcfsHome = t.TempDir()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500, cwd: repo, name: "icyknoll"})
+	h.world.set("w1:p2", pane{kind: "codex", session: "thr-1", pid: 600, cwd: repo})
+	for pane, name := range map[string]string{"w1:p1": "IcyKnoll", "w1:p2": "BlueLake"} {
+		if _, err := agentmail.WriteIdentity(h.env.ConfigHome, repo, pane, name, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := RunPluginEvent(ctx, h.env, PaneEvent{PaneID: "w1:p1", Agent: "claude"})
+	if err != nil || rep.Ran {
+		t.Fatalf("report = %+v %v", rep, err)
+	}
+	b, err := h.env.Bindings.ActiveByPane(ctx, "w1:p1")
+	if err != nil || b.MailName != "IcyKnoll" || b.Provenance != bindings.Imported || b.MailProjectKey != repo {
+		t.Fatalf("w1:p1 binding = %+v %v (report %+v)", b, err, rep)
+	}
+	if _, err := h.env.Bindings.ActiveByPane(ctx, "w1:p2"); !errors.Is(err, bindings.ErrNotFound) {
+		t.Fatalf("w1:p2 was imported by w1:p1's hook: %v", err)
+	}
+	if h.world.called("agent.rename") || h.world.called("pane.rename") {
+		t.Fatalf("the import renamed: %v", h.world.calls)
+	}
+	var ops int
+	if err := h.env.DB.SQL().QueryRow(`SELECT count(*) FROM operations`).Scan(&ops); err != nil || ops != 1 {
+		t.Fatalf("operations = %d %v", ops, err)
+	}
+	// The pane is bound now: the next hook claims nothing.
+	if _, err := RunPluginEvent(ctx, h.env, PaneEvent{PaneID: "w1:p1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.env.DB.SQL().QueryRow(`SELECT count(*) FROM operations`).Scan(&ops); err != nil || ops != 1 {
+		t.Fatalf("operations after a second hook = %d %v", ops, err)
 	}
 }
 

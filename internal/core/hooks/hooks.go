@@ -51,8 +51,11 @@ type Env struct {
 	// ConfigHome holds Agent Mail's identity files; "" means
 	// agentmail.ConfigHome().
 	ConfigHome string
-	Getenv     func(string) string
-	Now        func() time.Time
+	// AcfsHome is where ACFS's Bash keeps its state, for the import of
+	// Bash-spawned agents; "" means bindings.DefaultAcfsHome().
+	AcfsHome string
+	Getenv   func(string) string
+	Now      func() time.Time
 	// LockWait bounds the wait for the owner lock; a hook never waits
 	// long (0 means one second).
 	LockWait time.Duration
@@ -243,6 +246,9 @@ func ReconcilePane(ctx context.Context, env Env, pane string) (Reconcile, error)
 	err := core.WithOwnerShared(lctx, env.InstanceDir, func(o core.Owner) error {
 		r.Owner = o.Owner
 		if o.Owner != core.OwnerNhm {
+			// The Bash owns the instance: the candidates wait, and the
+			// pane's Bash-spawned agent is imported (acfs-9hkh.41).
+			importPane(ctx, env, pane, &r)
 			return nil
 		}
 		r.Ran = true
