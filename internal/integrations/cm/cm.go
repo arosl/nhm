@@ -32,10 +32,17 @@ func Exec(path string) Runner {
 			if errors.Is(err, exec.ErrNotFound) {
 				return nil, ErrNotInstalled
 			}
-			return out, fmt.Errorf("cm %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+			return out, fmt.Errorf("cm %s: %w: %s", firstArg(args), err, strings.TrimSpace(stderr.String()))
 		}
 		return out, nil
 	}
+}
+
+func firstArg(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // ErrNotInstalled: there is no cm binary.
@@ -95,41 +102,44 @@ func (c Client) call(ctx context.Context, out any, args ...string) error {
 	return nil
 }
 
+// Every value goes as --flag=value and every positional after "--": a
+// prompt or a rule id that starts with "-" is never read as a flag.
+
 // Context returns the rules for a task. workspace scopes them to a
 // project when it is not empty.
 func (c Client) Context(ctx context.Context, task, workspace string) (Context, error) {
-	args := []string{"context", task, "--json"}
+	args := []string{"context", "--json"}
 	if workspace != "" {
-		args = append(args, "--workspace", workspace)
+		args = append(args, "--workspace="+workspace)
 	}
 	var out Context
-	err := c.call(ctx, &out, args...)
+	err := c.call(ctx, &out, append(args, "--", task)...)
 	return out, err
 }
 
 // Mark tells CM that a rule was helpful or harmful in a session.
 // session is the transcript path, or empty.
 func (c Client) Mark(ctx context.Context, rule string, helpful bool, session string) error {
-	args := []string{"mark", rule, "--harmful", "--json"}
+	args := []string{"mark", "--json", "--harmful"}
 	if helpful {
 		args[2] = "--helpful"
 	}
 	if session != "" {
-		args = append(args, "--session", session)
+		args = append(args, "--session="+session)
 	}
-	return c.call(ctx, nil, args...)
+	return c.call(ctx, nil, append(args, "--", rule)...)
 }
 
 // Outcome records a session outcome for the rules it was shown.
 func (c Client) Outcome(ctx context.Context, status string, rules []string, session, text string) error {
-	args := []string{"outcome", status, strings.Join(rules, ","), "--json"}
+	args := []string{"outcome", "--json"}
 	if session != "" {
-		args = append(args, "--session", session)
+		args = append(args, "--session="+session)
 	}
 	if text != "" {
-		args = append(args, "--text", text)
+		args = append(args, "--text="+text)
 	}
-	return c.call(ctx, nil, args...)
+	return c.call(ctx, nil, append(args, "--", status, strings.Join(rules, ","))...)
 }
 
 // OutcomeApply applies the recorded outcomes of one session. CM keys a
@@ -137,7 +147,7 @@ func (c Client) Outcome(ctx context.Context, status string, rules []string, sess
 func (c Client) OutcomeApply(ctx context.Context, session string) error {
 	args := []string{"outcome-apply", "--json"}
 	if session != "" {
-		args = append(args, "--session", session)
+		args = append(args, "--session="+session)
 	}
 	return c.call(ctx, nil, args...)
 }

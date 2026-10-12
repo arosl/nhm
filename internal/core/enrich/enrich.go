@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/arosl/nhm/internal/integrations/cass"
 	"github.com/arosl/nhm/internal/integrations/cm"
+	"github.com/arosl/nhm/internal/redaction"
 )
 
 // Mode is how a source takes part in a send.
@@ -99,7 +101,9 @@ type Item struct {
 	Status string `json:"status,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Label  string `json:"label,omitempty"`
-	Text   string `json:"-"`
+	// Redacted counts the secrets replaced in the item.
+	Redacted int    `json:"redacted,omitempty"`
+	Text     string `json:"-"`
 }
 
 // Key is the item's dedup key.
@@ -268,15 +272,18 @@ func (r *Retriever) cass(ctx context.Context, req Request) ([]Item, error) {
 		if t := h.CreatedAt(); !t.IsZero() {
 			label += ", " + t.Format("2006-01-02")
 		}
-		items = append(items, r.item(SourceCASS, h.ID(), label, oneLine(text)))
+		items = append(items, r.item(SourceCASS, h.ID(), label, text))
 	}
 	return items, nil
 }
 
-// item makes an item: versioned by its full text, truncated to the item
-// budget.
+// item makes an item: its text, id and label cleaned, versioned by the
+// full cleaned text, truncated to the item budget.
 func (r *Retriever) item(source, id, label, text string) Item {
-	it := Item{Source: source, ID: id, Label: label, Version: digest(text)[:16]}
+	text, redacted := clean(text)
+	id, n := clean(id)
+	label, m := clean(label)
+	it := Item{Source: source, ID: id, Label: label, Version: digest(text)[:16], Redacted: redacted + n + m}
 	if len(text) > r.Budgets.ItemBytes {
 		text = truncate(text, r.Budgets.ItemBytes)
 		it.Reason = ReasonTruncated
@@ -285,6 +292,20 @@ func (r *Retriever) item(source, id, label, text string) Item {
 	it.SHA256, it.Bytes = digest(text), len(text)
 	return it
 }
+
+// delimiter is what could read as the frame's own open or close line.
+var delimiter = regexp.MustCompile(`(?i)\[(\s*(?:end\s+of\s+)?nhm\s+context)`)
+
+// clean makes text from CM or CASS safe to frame: secrets redacted (as
+// ACFS's Bash --with-cass does), one line, and no "[nhm context" or
+// "[end of nhm context" that could open or close the frame early. It
+// returns the text and the number of secrets replaced.
+func clean(s string) (string, int) {
+	s, n := redaction.Redact(s)
+	return neutralize(oneLine(s)), n
+}
+
+func neutralize(s string) string { return delimiter.ReplaceAllString(s, "($1") }
 
 func digest(s string) string {
 	sum := sha256.Sum256([]byte(s))

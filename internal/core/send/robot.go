@@ -108,7 +108,7 @@ func nhmExtras(res Result) map[string]any {
 func SendOutput(res Result, format string, now time.Time) robot.SendOutput {
 	p := project(res)
 	out := robot.SendOutput{RobotResponse: robot.NewResponse(true, format, now), Session: res.Session, SentAt: now.UTC(),
-		Redaction: robot.RedactionSummary{Mode: "off"}, Warnings: res.Warnings, Targets: p.targets,
+		Redaction: redactionInfo(res), Warnings: res.Warnings, Targets: p.targets,
 		Successful: p.successful, Failed: p.failed, MessagePreview: res.Preview, DryRun: res.DryRun,
 		CASSInjection:   cassInfo(res),
 		MemoryInjection: memoryInfo(res),

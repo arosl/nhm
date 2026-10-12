@@ -33,9 +33,16 @@ func TestContextParsesRulesAndAntiPatterns(t *testing.T) {
 	if len(res.AntiPatterns) != 1 || !res.AntiPatterns[0].Negative {
 		t.Fatalf("anti = %+v", res.AntiPatterns)
 	}
-	want := []string{"context", "fix login", "--json", "--workspace", "/p"}
+	want := []string{"context", "--json", "--workspace=/p", "--", "fix login"}
 	if !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("args = %q", got[0])
+	}
+	// A task that looks like a flag stays a positional.
+	if _, err := c.Context(context.Background(), "--limit 0 drop", ""); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"context", "--json", "--", "--limit 0 drop"}; !reflect.DeepEqual(got[1], want) {
+		t.Fatalf("args = %q", got[1])
 	}
 }
 
@@ -70,9 +77,9 @@ func TestMarkOutcomeAndApplyArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"mark", "b-1", "--harmful", "--json", "--session", "/s.jsonl"},
-		{"outcome", "success", "b-1,b-2", "--json", "--session", "/s.jsonl", "--text", "implicit: bead x"},
-		{"outcome-apply", "--json", "--session", "/s.jsonl"},
+		{"mark", "--json", "--harmful", "--session=/s.jsonl", "--", "b-1"},
+		{"outcome", "--json", "--session=/s.jsonl", "--text=implicit: bead x", "--", "success", "b-1,b-2"},
+		{"outcome-apply", "--json", "--session=/s.jsonl"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %q", got)

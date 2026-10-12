@@ -57,6 +57,8 @@ The same rules apply to code from pt and dcg.
 | `internal/core/templates/builtin_test.go` | `internal/templates/builtin_test.go` | provenance header |
 | `internal/core/snapshot/LICENSE` | `LICENSE` | none |
 | `internal/core/snapshot/robot.go` | `internal/robot/robot.go` (derived: `statusOverall`, `statusHealthScore`, the summary counting) | they read nhm's model and its attention severities instead of ntm's alert and state stores |
+| `internal/redaction/LICENSE` | `LICENSE` | none |
+| `internal/redaction/redaction.go` | `internal/redaction/patterns.go`, `types.go` (derived) | the built-in pattern table, its categories and the literal prefilter only; `Redact` writes `[REDACTED:<CATEGORY>]`, as ACFS's Bash does, without ntm's hash suffix, allowlist, extra patterns and line info |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 

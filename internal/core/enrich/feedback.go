@@ -143,6 +143,8 @@ var (
 	ErrNotReceived = errors.New("no submitted target of the operation received the rule")
 	ErrAmbiguous   = errors.New("more than one target received the rule; name one")
 	ErrMarkedOther = errors.New("the rule was marked the other way for this target")
+	// ErrInProgress: another run holds the key and is telling CM now.
+	ErrInProgress = errors.New("another run is telling CM this feedback now")
 )
 
 // Mark tells CM that a rule an operation gave was helpful or harmful, for
@@ -176,31 +178,39 @@ func Mark(ctx context.Context, env FeedbackEnv, opID, ruleID, mailName string, h
 	}
 	r := hits[0]
 	res.MailName = r.MailName
-	key := fmt.Sprintf("mark:%s:%s:%s", opID, r.BindingID, ruleID)
-	prev, applied, err := feedbackRow(ctx, env.DB, key)
-	if err != nil {
-		return res, err
-	}
-	if prev != "" && prev != outcome {
-		return res, fmt.Errorf("%w (%s)", ErrMarkedOther, prev)
-	}
-	if applied {
-		res.Repeat = true
-		return res, nil
+	if env.CM == nil {
+		return res, errors.New("cm is not installed")
 	}
 	if env.Transcripts != nil {
 		res.Session, _ = env.Transcripts(ctx, r.BindingID)
 	}
-	if prev == "" {
-		if err := insertFeedback(ctx, env.DB, key, opID, r.BindingID, outcome, []string{ruleID},
-			map[string]any{"session": res.Session}, env.now()); err != nil {
-			return res, err
-		}
+	key := fmt.Sprintf("mark:%s:%s:%s", opID, r.BindingID, ruleID)
+	if err := insertFeedback(ctx, env.DB, key, opID, r.BindingID, outcome, []string{ruleID},
+		map[string]any{"session": res.Session}, env.now()); err != nil {
+		return res, err
 	}
-	if env.CM == nil {
-		return res, errors.New("cm is not installed")
+	// The row is there now, maybe from another run: its outcome rules.
+	st, err := feedbackRow(ctx, env.DB, key)
+	if err != nil {
+		return res, err
+	}
+	if st.outcome != outcome {
+		return res, fmt.Errorf("%w (%s)", ErrMarkedOther, st.outcome)
+	}
+	if st.applied {
+		res.Repeat = true
+		return res, nil
+	}
+	// Only the run that claims the key calls CM.
+	won, err := claim(ctx, env.DB, key, env.now())
+	if err != nil {
+		return res, err
+	}
+	if !won {
+		return res, ErrInProgress
 	}
 	if err := env.CM.Mark(ctx, ruleID, helpful, res.Session); err != nil {
+		unclaim(ctx, env.DB, key)
 		return res, err
 	}
 	return res, setApplied(ctx, env.DB, key, env.now())
@@ -223,8 +233,8 @@ type OutcomeResult struct {
 	Rules      []string `json:"rules"`
 	Session    string   `json:"session,omitempty"`
 	// State: applied, repeat (applied before), waiting (the bead is open,
-	// or closed by or for someone else: no evidence), no_transcript, or
-	// failed.
+	// or closed by or for someone else: no evidence), no_transcript,
+	// in_progress (another run holds it), or failed.
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
 }
@@ -281,11 +291,11 @@ func outcome(ctx context.Context, env FeedbackEnv, beads BeadReader, key string,
 		res.State, res.Detail = "failed", err.Error()
 		return res
 	}
-	_, applied, err := feedbackRow(ctx, env.DB, key)
+	st, err := feedbackRow(ctx, env.DB, key)
 	if err != nil {
 		return fail(err)
 	}
-	if applied {
+	if st.applied {
 		res.State = "repeat"
 		return res
 	}
@@ -319,10 +329,36 @@ func outcome(ctx context.Context, env FeedbackEnv, beads BeadReader, key string,
 		map[string]any{"bead_id": r.BeadID, "generation": r.Generation, "session": res.Session}, env.now()); err != nil {
 		return fail(err)
 	}
-	if err := env.CM.Outcome(ctx, "success", res.Rules, res.Session, text); err != nil {
+	// Only the run that claims the key calls CM.
+	won, err := claim(ctx, env.DB, key, env.now())
+	if err != nil {
 		return fail(err)
 	}
+	if !won {
+		if st, err = feedbackRow(ctx, env.DB, key); err == nil && st.applied {
+			res.State = "repeat"
+			return res
+		}
+		res.State, res.Detail = "in_progress", ErrInProgress.Error()
+		return res
+	}
+	if st, err = feedbackRow(ctx, env.DB, key); err != nil {
+		unclaim(ctx, env.DB, key)
+		return fail(err)
+	}
+	// A retry after outcome-apply failed does not repeat cm outcome.
+	if st.stage != stageOutcome {
+		if err := env.CM.Outcome(ctx, "success", res.Rules, res.Session, text); err != nil {
+			unclaim(ctx, env.DB, key)
+			return fail(err)
+		}
+		if err := setStage(ctx, env.DB, key, stageOutcome); err != nil {
+			unclaim(ctx, env.DB, key)
+			return fail(err)
+		}
+	}
 	if err := env.CM.OutcomeApply(ctx, res.Session); err != nil {
+		unclaim(ctx, env.DB, key)
 		return fail(err)
 	}
 	if err := setApplied(ctx, env.DB, key, env.now()); err != nil {
@@ -332,23 +368,59 @@ func outcome(ctx context.Context, env FeedbackEnv, beads BeadReader, key string,
 	return res
 }
 
-// feedbackRow reads a key's outcome and whether CM has it.
-func feedbackRow(ctx context.Context, db *store.DB, key string) (string, bool, error) {
-	var outcome string
-	var applied sql.NullString
-	err := db.SQL().QueryRowContext(ctx, `SELECT outcome, applied_at FROM feedback WHERE feedback_key = ?`, key).
-		Scan(&outcome, &applied)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("enrich: feedback: %w", err)
-	}
-	return outcome, applied.Valid, nil
+// stageOutcome: `cm outcome` ran for the key; only outcome-apply is left.
+const stageOutcome = "outcome"
+
+// claimLease frees the claim of a run that died holding it.
+const claimLease = 5 * time.Minute
+
+type feedbackState struct {
+	outcome string
+	applied bool
+	stage   string
 }
 
-// insertFeedback claims a key before CM is called. A row left without
-// applied_at (CM failed) is retried by the next run.
+// feedbackRow reads a key's row; a missing row is the zero state.
+func feedbackRow(ctx context.Context, db *store.DB, key string) (feedbackState, error) {
+	var st feedbackState
+	var applied, stage sql.NullString
+	err := db.SQL().QueryRowContext(ctx, `SELECT outcome, applied_at, stage FROM feedback WHERE feedback_key = ?`, key).
+		Scan(&st.outcome, &applied, &stage)
+	if errors.Is(err, sql.ErrNoRows) {
+		return st, nil
+	}
+	if err != nil {
+		return st, fmt.Errorf("enrich: feedback: %w", err)
+	}
+	st.applied, st.stage = applied.Valid, stage.String
+	return st, nil
+}
+
+// claim takes a key for this run: an unapplied key whose claim is free,
+// or older than the lease. It reports whether this run won it.
+func claim(ctx context.Context, db *store.DB, key string, now time.Time) (bool, error) {
+	res, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET claimed_at = ? WHERE feedback_key = ? AND applied_at IS NULL
+		AND (claimed_at IS NULL OR CAST(claimed_at AS INTEGER) < ?)`,
+		now.UnixMilli(), key, now.Add(-claimLease).UnixMilli())
+	if err != nil {
+		return false, fmt.Errorf("enrich: feedback claim: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// unclaim frees a key after a failure, for the next run.
+func unclaim(ctx context.Context, db *store.DB, key string) {
+	_, _ = db.SQL().ExecContext(ctx, `UPDATE feedback SET claimed_at = NULL WHERE feedback_key = ?`, key)
+}
+
+func setStage(ctx context.Context, db *store.DB, key, stage string) error {
+	_, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET stage = ? WHERE feedback_key = ?`, stage, key)
+	return err
+}
+
+// insertFeedback creates a key's row once; a second run finds it there.
+// A row left without applied_at (CM failed) is retried by the next run.
 func insertFeedback(ctx context.Context, db *store.DB, key, opID, bindingID, outcome string, rules []string,
 	detail map[string]any, now time.Time) error {
 	data, _ := json.Marshal(detail)
@@ -362,6 +434,7 @@ func insertFeedback(ctx context.Context, db *store.DB, key, opID, bindingID, out
 }
 
 func setApplied(ctx context.Context, db *store.DB, key string, now time.Time) error {
-	_, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET applied_at = ? WHERE feedback_key = ?`, store.FormatTime(now), key)
+	_, err := db.SQL().ExecContext(ctx, `UPDATE feedback SET applied_at = ?, claimed_at = NULL WHERE feedback_key = ?`,
+		store.FormatTime(now), key)
 	return err
 }

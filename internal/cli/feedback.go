@@ -34,8 +34,8 @@ more than one got the rule. A repeat of the same mark is a no-op.
 outcomes runs the learning profile closed-assigned of config.toml
 ([learning] implicit_outcome): for a bead that closed while assigned to
 the agent that got rules for it, nhm runs cm outcome success and
-cm outcome-apply, once per bead, agent and generation. nhm maintain runs
-it too. nhm never runs cm reflect.
+cm outcome-apply, once per bead, agent and generation. Run it after beads
+close; nothing runs it on its own yet. nhm never runs cm reflect.
 `
 
 func runFeedback(args []string, stdout, stderr io.Writer) int {

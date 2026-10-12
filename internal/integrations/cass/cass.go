@@ -45,10 +45,17 @@ func Exec(path string) Runner {
 			if errors.Is(err, exec.ErrNotFound) {
 				return nil, ErrNotInstalled
 			}
-			return out, fmt.Errorf("cass %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+			return out, fmt.Errorf("cass %s: %w: %s", firstArg(args), err, strings.TrimSpace(stderr.String()))
 		}
 		return out, nil
 	}
+}
+
+func firstArg(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // Client runs cass commands.
@@ -97,29 +104,32 @@ type Search struct {
 	MaxContent int
 }
 
+// args adds --data-dir. Every value goes as --flag=value and every
+// positional after "--": a query or a path that starts with "-" is never
+// read as a flag.
 func (c Client) args(args ...string) []string {
 	if c.DataDir != "" {
-		args = append(args, "--data-dir", c.DataDir)
+		args = append(args, "--data-dir="+c.DataDir)
 	}
 	return args
 }
 
 // Search runs `cass search --robot`.
 func (c Client) Search(ctx context.Context, s Search) ([]Hit, error) {
-	args := []string{"search", s.Query, "--robot"}
+	args := []string{"search", "--robot"}
 	if s.Limit > 0 {
-		args = append(args, "--limit", strconv.Itoa(s.Limit))
+		args = append(args, "--limit="+strconv.Itoa(s.Limit))
 	}
 	if s.Workspace != "" {
-		args = append(args, "--workspace", s.Workspace)
+		args = append(args, "--workspace="+s.Workspace)
 	}
 	if s.Days > 0 {
-		args = append(args, "--days", strconv.Itoa(s.Days))
+		args = append(args, "--days="+strconv.Itoa(s.Days))
 	}
 	if s.MaxContent > 0 {
-		args = append(args, "--max-content-length", strconv.Itoa(s.MaxContent))
+		args = append(args, "--max-content-length="+strconv.Itoa(s.MaxContent))
 	}
-	data, err := c.Run(ctx, c.args(args...)...)
+	data, err := c.Run(ctx, append(c.args(args...), "--", s.Query)...)
 	if err != nil {
 		return nil, err
 	}
@@ -142,9 +152,9 @@ type Session struct {
 
 // Sessions lists indexed sessions, of one workspace when it is not empty.
 func (c Client) Sessions(ctx context.Context, workspace string, limit int) ([]Session, error) {
-	args := []string{"sessions", "--json", "--limit", strconv.Itoa(limit)}
+	args := []string{"sessions", "--json", "--limit=" + strconv.Itoa(limit)}
 	if workspace != "" {
-		args = append(args, "--workspace", workspace)
+		args = append(args, "--workspace="+workspace)
 	}
 	data, err := c.Run(ctx, c.args(args...)...)
 	if err != nil {
@@ -173,9 +183,9 @@ const confirmLimit = 200
 // session that cass does not list is "not found yet", never an error:
 // the transcript is not lost.
 func (c Client) IndexSession(ctx context.Context, path, workspace, key string) (string, error) {
-	args := []string{"index", "--watch-once", path, "--json"}
+	args := []string{"index", "--watch-once=" + path, "--json"}
 	if key != "" {
-		args = append(args, "--idempotency-key", key)
+		args = append(args, "--idempotency-key="+key)
 	}
 	data, err := c.Run(ctx, c.args(args...)...)
 	if err != nil {

@@ -77,8 +77,10 @@ func mark(items []Item, given map[string]bool) []Item {
 	return out
 }
 
-func cmHeader(q string) string   { return fmt.Sprintf("CM rules for %q:", q) }
-func cassHeader(q string) string { return fmt.Sprintf("CASS: earlier sessions that match %q:", q) }
+func cmHeader(q string) string { return fmt.Sprintf("CM rules for %q:", neutralize(oneLine(q))) }
+func cassHeader(q string) string {
+	return fmt.Sprintf("CASS: earlier sessions that match %q:", neutralize(oneLine(q)))
+}
 
 func itemLine(it Item) string {
 	if it.Label != "" {

@@ -144,6 +144,20 @@ func cassInfo(res Result) *robot.CASSInjectionInfo {
 		ItemsInjected: len(ids), TokensAdded: bytes / 4, SkippedReason: skipReason(res.CASSInjection)}
 }
 
+// redactionInfo is ntm's redaction summary: nhm redacts what it puts in
+// from CM and CASS, never the operator's own text. "off" when neither
+// source ran.
+func redactionInfo(res Result) robot.RedactionSummary {
+	if !res.MemoryInjection.Enabled && !res.CASSInjection.Enabled {
+		return robot.RedactionSummary{Mode: "off"}
+	}
+	n := 0
+	for _, it := range append(append([]enrich.Item{}, res.MemoryInjection.Items...), res.CASSInjection.Items...) {
+		n += it.Redacted
+	}
+	return robot.RedactionSummary{Mode: "redact", Findings: n}
+}
+
 // reportOf is the report kept with the operation, or nil for a source
 // that is off.
 func reportOf(r Injection) *Injection {

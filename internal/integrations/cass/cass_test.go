@@ -27,12 +27,13 @@ const searchAnswer = `{"query":"q","count":1,"hits":[{"title":"T","snippet":"s",
 func TestSearchArgsAndHits(t *testing.T) {
 	s := &script{outs: []string{searchAnswer}}
 	c := Client{Run: s.run, DataDir: "/d"}
-	hits, err := c.Search(context.Background(), Search{Query: "q", Workspace: "/p", Limit: 5, Days: 7, MaxContent: 1024})
+	hits, err := c.Search(context.Background(), Search{Query: "--help q", Workspace: "/p", Limit: 5, Days: 7, MaxContent: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"search", "q", "--robot", "--limit", "5", "--workspace", "/p", "--days", "7",
-		"--max-content-length", "1024", "--data-dir", "/d"}
+	// The query goes after "--": a prompt that starts with "--" is no flag.
+	want := []string{"search", "--robot", "--limit=5", "--workspace=/p", "--days=7",
+		"--max-content-length=1024", "--data-dir=/d", "--", "--help q"}
 	if !reflect.DeepEqual(s.got[0], want) {
 		t.Fatalf("args = %q", s.got[0])
 	}
@@ -53,7 +54,7 @@ func TestIndexSessionConfirmsByExactPath(t *testing.T) {
 	if err != nil || state != Indexed {
 		t.Fatalf("state = %q, %v", state, err)
 	}
-	if want := []string{"index", "--watch-once", path, "--json", "--idempotency-key", "b1-abc"}; !reflect.DeepEqual(s.got[0], want) {
+	if want := []string{"index", "--watch-once=" + path, "--json", "--idempotency-key=b1-abc"}; !reflect.DeepEqual(s.got[0], want) {
 		t.Fatalf("args = %q", s.got[0])
 	}
 	// cass answers success for a path it ignored (experiment 5): the

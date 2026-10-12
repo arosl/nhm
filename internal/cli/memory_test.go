@@ -127,7 +127,7 @@ func TestSendWithMemoryAndFeedback(t *testing.T) {
 		t.Fatalf("list = %d %s", code, out)
 	}
 	code, out, errOut = run("feedback", "mark", "op-m1", "b-login", "--helpful", sock)
-	if code != 0 || !strings.Contains(out, "b-login marked helpful for IcyKnoll") || f.count("cm mark b-login --helpful") != 1 {
+	if code != 0 || !strings.Contains(out, "b-login marked helpful for IcyKnoll") || f.count("cm mark --json --helpful -- b-login") != 1 {
 		t.Fatalf("mark = %d %s %s %q", code, out, errOut, f.calls)
 	}
 	if code, out, _ = run("feedback", "mark", "op-m1", "b-login", "--helpful", sock); code != 0 || !strings.Contains(out, "before") ||
@@ -139,6 +139,10 @@ func TestSendWithMemoryAndFeedback(t *testing.T) {
 	}
 	if code, out, _ = run("feedback", "outcomes", sock); code != 0 || !strings.Contains(out, "learning profile is off") {
 		t.Fatalf("outcomes = %d %s", code, out)
+	}
+	// The help says only what is true: nothing runs the outcomes on its own.
+	if _, _, help := run("feedback", "--help"); strings.Contains(help, "maintain runs") || !strings.Contains(help, "nothing runs it on its own") {
+		t.Fatalf("help = %s", help)
 	}
 	// Conflicting flags refuse before anything is sent.
 	if code, _, _ = run("send", "swarm", "x", "--with-cass", "--no-cass", sock); code != exitRefused || len(h.sent()) != 1 {

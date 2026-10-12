@@ -84,6 +84,9 @@ func TestSendWithMemoryFramesOncePerContext(t *testing.T) {
 	if out.MemoryInjection == nil || len(out.MemoryInjection.RulesInjected) != 2 || out.MemoryInjection.TokensAdded == 0 {
 		t.Fatalf("robot = %+v", out.MemoryInjection)
 	}
+	if out.Redaction.Mode != "redact" || out.Redaction.Findings != 0 {
+		t.Fatalf("redaction = %+v", out.Redaction)
+	}
 
 	// The same context has both rules: no block, an exposure all the same.
 	w.fake.add("w1:p1", "claude", "icyknoll", herdr.StatusIdle, 20)
@@ -109,6 +112,27 @@ func TestSendWithMemoryFramesOncePerContext(t *testing.T) {
 	}
 	if text := w.fake.prompts[2].text; !strings.Contains(text, "[b-1]") {
 		t.Fatalf("after compaction = %q", text)
+	}
+}
+
+func TestRobotReportsRedactions(t *testing.T) {
+	w := newWorld(t)
+	secret := "gh" + "p_" + strings.Repeat("Z9y8", 9)
+	w.env.CM = &memCM{rules: []cm.Rule{{ID: "b-9", Content: "Clone with " + secret}}}
+	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	res, err := Send(context.Background(), w.env, memoryReq("op-r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(w.fake.prompts[0].text, secret) || !strings.Contains(w.fake.prompts[0].text, "[REDACTED:GITHUB_TOKEN]") {
+		t.Fatalf("prompt = %q", w.fake.prompts[0].text)
+	}
+	if out := SendOutput(res, "json", time.Now()); out.Redaction.Mode != "redact" || out.Redaction.Findings != 1 {
+		t.Fatalf("redaction = %+v", out.Redaction)
+	}
+	plain := base(Request{Message: "hi", DryRun: true})
+	if res, _ := Send(context.Background(), w.env, plain); SendOutput(res, "json", time.Now()).Redaction.Mode != "off" {
+		t.Fatal("a send without enrichment reports redaction")
 	}
 }
 
