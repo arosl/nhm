@@ -13,6 +13,7 @@ package kinds
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -159,22 +160,68 @@ var EffortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // launch adds (spawn.LaunchArgv): the model, the effort ("" is the kind's
 // default) and the settings with the guard hooks, so a resumed agent runs
 // as guarded as the one that started (ntm's restart re-applies them too).
+// nhm's flags go right after the session id, before any tail of the
+// kind's own (checkResumeArgv refuses "--", so none becomes prompt text).
+// It also returns nil when the program on PATH is not the kind's CLI
+// (ProgramIsKind).
 func (a Adapter) Resume(session, model, effort, settings string) []string {
-	if a.ResumeArgv == nil || !SessionPattern.MatchString(session) {
+	if a.ResumeArgv == nil || !SessionPattern.MatchString(session) || !ProgramIsKind(a.ResumeArgv[0], a.Name) {
 		return nil
 	}
-	out := make([]string, 0, len(a.ResumeArgv)+6)
-	for _, s := range a.ResumeArgv {
-		out = append(out, strings.ReplaceAll(s, "{session}", session))
-	}
+	var ours []string
 	if model != "" && a.ModelFlag != "" {
-		out = append(out, a.ModelFlag, model)
+		ours = append(ours, a.ModelFlag, model)
 	}
-	out = append(out, a.Effort(effort)...)
+	ours = append(ours, a.Effort(effort)...)
 	if settings != "" && a.SettingsFlag != "" {
-		out = append(out, a.SettingsFlag, settings)
+		ours = append(ours, a.SettingsFlag, settings)
+	}
+	out := make([]string, 0, len(a.ResumeArgv)+len(ours))
+	for _, s := range a.ResumeArgv {
+		if s == "{session}" {
+			out = append(out, session)
+			out = append(out, ours...)
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
+}
+
+// ResolveProgram finds a program on PATH and follows its symlinks. A
+// variable so tests need no agent CLI installed.
+var ResolveProgram = func(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(path)
+}
+
+// notAgentCLIs are files an agent CLI's name must never resolve to: a
+// symlink from "claude" to one of these runs shell or script text.
+var notAgentCLIs = regexp.MustCompile(`^(?:[a-z]*sh|busybox|env|python[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|nodejs|bun|deno|php[0-9.]*|lua[0-9.]*|tclsh[0-9.]*|awk|gawk|mawk|nawk|sed|find|xargs|osascript|pwsh)$`)
+
+// ProgramIsKind reports whether the program nhm runs for a kind resolves,
+// through PATH and symlinks, to that kind's CLI: a path part named after
+// the kind or starting with "<kind>-" (claude installs as
+// .../claude/versions/2.1.296, grok as grok-linux-x86_64), and not a
+// shell or an interpreter. A program not on PATH cannot resume.
+func ProgramIsKind(program, kind string) bool {
+	resolved, err := ResolveProgram(program)
+	if err != nil {
+		return false
+	}
+	if notAgentCLIs.MatchString(filepath.Base(resolved)) {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(resolved), "/") {
+		part = strings.TrimSuffix(part, filepath.Ext(part))
+		if part == kind || strings.HasPrefix(part, kind+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // Effort returns the effort args for effort (the kind's default when

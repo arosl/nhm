@@ -8,6 +8,50 @@ import (
 	"testing"
 )
 
+// The tests need no agent CLI on PATH: each kind resolves to its own file.
+func init() {
+	ResolveProgram = func(name string) (string, error) { return "/opt/" + name + "/bin/" + name, nil }
+}
+
+func withResolved(t *testing.T, resolved string) {
+	t.Helper()
+	old := ResolveProgram
+	ResolveProgram = func(string) (string, error) { return resolved, nil }
+	t.Cleanup(func() { ResolveProgram = old })
+}
+
+// The program on PATH must resolve to the kind's CLI, not to a shell or
+// an interpreter behind a symlink (the review of 3643fe5).
+func TestProgramIsKind(t *testing.T) {
+	for resolved, want := range map[string]bool{
+		"/home/u/.local/share/claude/versions/2.1.296":     true,
+		"/home/u/.grok/downloads/grok-linux-x86_64":        true,
+		"/usr/lib/node_modules/@openai/codex/bin/codex.js": true,
+		"/home/u/.local/bin/codex":                         true,
+		"/usr/bin/bash":                                    false,
+		"/home/u/claude/bin/python3.12":                    false,
+		"/opt/claude/node":                                 false,
+		"/usr/local/bin/other":                             false,
+		"/home/u/claudette/bin/x":                          false,
+	} {
+		withResolved(t, resolved)
+		if got := ProgramIsKind("claude", "claude") || ProgramIsKind("grok", "grok") || ProgramIsKind("codex", "codex"); got != want {
+			t.Errorf("%s: %v, want %v", resolved, got, want)
+		}
+	}
+	c, _ := NewRegistry().Get("claude")
+	withResolved(t, "/usr/bin/dash")
+	if got := c.Resume("s-1", "", "", ""); got != nil {
+		t.Fatalf("claude as dash resumes: %v", got)
+	}
+	old := ResolveProgram
+	ResolveProgram = func(string) (string, error) { return "", os.ErrNotExist }
+	defer func() { ResolveProgram = old }()
+	if got := c.Resume("s-1", "", "", ""); got != nil {
+		t.Fatalf("claude not on PATH resumes: %v", got)
+	}
+}
+
 func TestBuiltins(t *testing.T) {
 	r := NewRegistry()
 	if got := strings.Join(r.Names(), ","); got != "claude,codex,agy,pi,omp,opencode,grok" {
@@ -75,7 +119,7 @@ func TestBuiltins(t *testing.T) {
 // The built-ins meet the rules that config kinds must meet.
 func TestBuiltinsMeetTheConfigRules(t *testing.T) {
 	for _, a := range NewRegistry().All() {
-		if err := checkResumeArgv(a.Name, a.ResumeArgv); err != nil {
+		if err := checkResumeArgv(a.Name, a.ResumeArgv, a.LaunchArgs); err != nil {
 			t.Errorf("%s resume_argv: %v", a.Name, err)
 		}
 		for _, k := range a.InterruptKeys {
@@ -225,6 +269,16 @@ session_start = true
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--\", \"{session}\", \"y\"]\n",
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--\", \"{session}\"]\n",
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"chat\", \"{session}\"]\n",
+		// {session} only as a resume flag's value: after another flag it
+		// could name a file the CLI loads (the review of 3643fe5).
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--settings\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--mcp-config\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"-e\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--extensions\", \"resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nlaunch_args = [\"--yolo\"]\nresume_argv = [\"gemini\", \"--yolo\", \"-e\", \"resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\", \"-r\", \"{session}\"]\n",
+		// No "--" anywhere: nhm's flags would become prompt text.
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\", \"--\"]\n",
 		"[kinds.x]\neffort_args = [\"--effort\"]\n",
 		"[kinds.x]\ndefault_effort = \"high\"\n",
 		"[kinds.x]\neffort_args = [\"--effort\", \"{effort}\"]\ndefault_effort = \"x y\"\n",
@@ -251,6 +305,7 @@ session_start = true
 	for _, good := range []string{
 		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\n",
 		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"-r\", \"{session}\", \"--quiet\"]\n",
 	} {
 		write(good)
 		r := NewRegistry()
@@ -258,7 +313,8 @@ session_start = true
 			t.Fatalf("refused:\n%s%v", good, err)
 		}
 		g, _ := r.Get("gemini")
-		if got := g.Resume("s-9", "flash", "", ""); len(got) != 5 || got[2] != "s-9" || got[3] != "-m" || got[4] != "flash" {
+		// nhm's flags follow the session id, before the kind's own tail.
+		if got := g.Resume("s-9", "flash", "", ""); len(got) < 5 || got[2] != "s-9" || got[3] != "-m" || got[4] != "flash" {
 			t.Fatalf("gemini resume = %v", got)
 		}
 	}

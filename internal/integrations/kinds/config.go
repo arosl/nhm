@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -126,7 +127,7 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 		}
 		a.Limit = re
 	}
-	if err := checkResumeArgv(name, a.ResumeArgv); err != nil {
+	if err := checkResumeArgv(name, a.ResumeArgv, a.LaunchArgs); err != nil {
 		return Adapter{}, fmt.Errorf("kinds.%s.resume_argv: %w", name, err)
 	}
 	if err := checkEffortArgs(a.EffortArgs, a.DefaultEffort); err != nil {
@@ -172,14 +173,21 @@ var herdrAgentKinds = map[string]bool{"pi": true, "claude": true, "codex": true,
 	"kimi": true, "kiro": true, "droid": true, "amp": true, "grok": true, "hermes": true, "kilo": true,
 	"qodercli": true, "qwen": true, "letta": true, "maki": true, "muse": true}
 
+// resumeFlags are the flags whose value an agent CLI reads as a session
+// to resume. {session} after any other flag could name a file the CLI
+// loads (--settings, --mcp-config, -e), and SessionPattern accepts
+// "evil.json".
+var resumeFlags = map[string]bool{"--resume": true, "-r": true}
+
 // checkResumeArgv: the program is the kind itself, by its bare name, and
 // one of the agent CLIs herdr starts; then arguments without control
-// characters. {session} is a whole argument at least once, and only as the
-// value of a named flag (--resume ID, -r ID) or right after the resume
-// subcommand (codex resume ID), never a bare positional elsewhere; "--"
-// is not a flag. The session id comes from a hook and must stay one
-// argument that the agent CLI reads as a session id.
-func checkResumeArgv(kind string, argv []string) error {
+// characters and without "--" (nhm's flags would become prompt text).
+// {session} is a whole argument exactly once: the value of a resume flag
+// (--resume ID, -r ID), or right after the resume subcommand, which only
+// the kind's own launch_args may come before (codex --no-daemon resume
+// ID). The session id comes from a hook and must stay one argument that
+// the agent CLI reads as a session id.
+func checkResumeArgv(kind string, argv, launchArgs []string) error {
 	if argv == nil {
 		return nil
 	}
@@ -201,18 +209,26 @@ func checkResumeArgv(kind string, argv []string) error {
 		switch {
 		case hasControl(a):
 			return fmt.Errorf("%q holds a control character", a)
+		case a == "--":
+			return fmt.Errorf(`"--" would make nhm's flags prompt text`)
 		case a == "{session}":
-			named := strings.HasPrefix(prev, "-") && prev != "--" && prev != "-"
-			if !named && prev != "resume" {
-				return fmt.Errorf("{session} must be a named flag's value (--resume {session}) or follow the resume subcommand")
+			// argv[i] is prev; argv[0] is the kind, never "resume".
+			sub := prev == "resume"
+			if sub {
+				for _, before := range argv[1:i] {
+					sub = sub && slices.Contains(launchArgs, before)
+				}
+			}
+			if !resumeFlags[prev] && !sub {
+				return fmt.Errorf("{session} must be the value of --resume or -r, or follow the resume subcommand after only the kind's launch_args")
 			}
 			whole++
 		case strings.Contains(a, "{session}"):
 			return fmt.Errorf("%q: {session} must be a whole argument", a)
 		}
 	}
-	if whole == 0 {
-		return fmt.Errorf("no {session} argument")
+	if whole != 1 {
+		return fmt.Errorf("{session} must appear exactly once")
 	}
 	return nil
 }

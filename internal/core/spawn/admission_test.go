@@ -70,6 +70,25 @@ func TestHookSettingsSkipsAGuardTheUserRuns(t *testing.T) {
 	if got := guardCommands(t, HookSettings(lookAll)); len(got) != 2 {
 		t.Fatalf("echo dcg: %v", got)
 	}
+	// Only a hook that runs on Bash calls counts, and only while hooks are
+	// on (the review of 3643fe5).
+	for _, settings := range []string{
+		`{"hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"dcg"}]}]}}`,
+		`{"hooks":{"PreToolUse":[{"matcher":"Edit|Write","hooks":[{"type":"command","command":"dcg"}]}]}}`,
+		`{"hooks":{"PreToolUse":[{"matcher":"Bash2","hooks":[{"type":"command","command":"dcg"}]}]}}`,
+		`{"disableAllHooks":true,"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"dcg"}]}]}}`,
+	} {
+		withClaudeSettings(t, settings)
+		if got := guardCommands(t, HookSettings(lookAll)); len(got) != 2 {
+			t.Fatalf("%s: %v", settings, got)
+		}
+	}
+	for _, matcher := range []string{"", "*", "Bash", "Bash|Edit", "Ba.*"} {
+		withClaudeSettings(t, `{"hooks":{"PreToolUse":[{"matcher":"`+matcher+`","hooks":[{"type":"command","command":"dcg"}]}]}}`)
+		if got := guardCommands(t, HookSettings(lookAll)); len(got) != 1 {
+			t.Fatalf("matcher %q: %v", matcher, got)
+		}
+	}
 	// Unreadable settings add both guards.
 	withClaudeSettings(t, `{not json`)
 	if got := guardCommands(t, HookSettings(lookAll)); len(got) != 2 {

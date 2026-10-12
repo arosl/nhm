@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -140,9 +141,21 @@ func HookSettings(lookPath func(string) (string, error)) string {
 	return string(data)
 }
 
+// matcherCoversBash reports whether a Claude hook matcher selects the
+// Bash tool: empty or "*" selects every tool, anything else is a tool
+// name or a regular expression over the whole name.
+func matcherCoversBash(m string) bool {
+	if m == "" || m == "*" {
+		return true
+	}
+	re, err := regexp.Compile(`^(?:` + m + `)$`)
+	return err == nil && re.MatchString("Bash")
+}
+
 // userPreToolUsePrograms returns the programs (by base name) that the
-// PreToolUse hooks of a Claude settings file run: the first word of each
-// command, unquoted. A missing or unreadable file runs nothing.
+// PreToolUse hooks of a Claude settings file run on Bash calls: the first
+// word of each command hook, unquoted. A missing or unreadable file, or
+// disableAllHooks, runs nothing.
 func userPreToolUsePrograms(path string) map[string]bool {
 	out := map[string]bool{}
 	if path == "" {
@@ -153,17 +166,21 @@ func userPreToolUsePrograms(path string) map[string]bool {
 		return out
 	}
 	var s struct {
-		Hooks struct {
+		DisableAllHooks bool `json:"disableAllHooks"`
+		Hooks           struct {
 			PreToolUse []hookEntry `json:"PreToolUse"`
 		} `json:"hooks"`
 	}
-	if json.Unmarshal(data, &s) != nil {
+	if json.Unmarshal(data, &s) != nil || s.DisableAllHooks {
 		return out
 	}
 	for _, e := range s.Hooks.PreToolUse {
+		if !matcherCoversBash(e.Matcher) {
+			continue
+		}
 		for _, h := range e.Hooks {
 			fields := strings.Fields(h.Command)
-			if len(fields) == 0 {
+			if h.Type != "command" || len(fields) == 0 {
 				continue
 			}
 			out[filepath.Base(strings.Trim(fields[0], `'"`))] = true
