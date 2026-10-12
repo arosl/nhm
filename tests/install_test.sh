@@ -263,12 +263,19 @@ else
 fi
 
 # Two installs at once: the lock lets one unpack and the other finds it
-# unpacked. Both exit 0, and one release is left.
+# unpacked. Both exit 0, and one release is left. A curl that takes a
+# second makes the two overlap, so only the lock gives one download and
+# one "already unpacked": without it, both download.
+slow="$work/slow-bin"
+mkdir -p "$slow"
+real_curl="$(command -v curl)"
+printf '#!/usr/bin/env bash\nsleep 1\nexec %q "$@"\n' "$real_curl" > "$slow/curl"
+chmod +x "$slow/curl"
 home="$work/home-race"
 mkdir -p "$home"
-pinned_install "$home" 2> "$work/log14a" &
+PATH="$slow:$PATH" pinned_install "$home" 2> "$work/log14a" &
 race_a=$!
-pinned_install "$home" 2> "$work/log14b" &
+PATH="$slow:$PATH" pinned_install "$home" 2> "$work/log14b" &
 race_b=$!
 rc_a=0
 wait "$race_a" || rc_a=$?
@@ -281,6 +288,36 @@ if ((rc_a == 0 && rc_b == 0)) && [[ ${#race_dirs[@]} -eq 1 && -d "${race_dirs[0]
   pass "two installs at once both succeed and leave one release"
 else
   fail "two installs at once: $rc_a $rc_b, ${race_dirs[*]}: $(cat "$work/log14a" "$work/log14b")"
+fi
+downloads="$(cat "$work/log14a" "$work/log14b" | grep -c 'downloading' || true)"
+unpacked="$(cat "$work/log14a" "$work/log14b" | grep -c 'already unpacked' || true)"
+if [[ "$downloads" == 1 && "$unpacked" == 1 ]]; then
+  pass "the lock serialises them: one downloads, the other finds the release unpacked"
+else
+  fail "serialisation: $downloads downloads, $unpacked already unpacked: $(cat "$work/log14a" "$work/log14b")"
+fi
+# The lock itself: while the test holds it, an install waits and unpacks
+# nothing; when the test lets go, the install finishes.
+home="$work/home-held"
+mkdir -p "$home/.local/share/nhm/releases"
+exec 8> "$home/.local/share/nhm/releases/.install.lock"
+flock 8
+pinned_install "$home" 2> "$work/log14c" &
+held=$!
+sleep 1
+if kill -0 "$held" 2> /dev/null && ! compgen -G "$home/.local/share/nhm/releases/$version@*" > /dev/null; then
+  waited=true
+else
+  waited=false
+fi
+flock -u 8
+exec 8>&-
+rc_held=0
+wait "$held" || rc_held=$?
+if [[ "$waited" == true && "$rc_held" == 0 ]] && "$home/.local/bin/nhm" version --json > /dev/null 2>&1; then
+  pass "an install waits while another holds the lock, and finishes after"
+else
+  fail "the held lock: waited=$waited rc=$rc_held: $(cat "$work/log14c")"
 fi
 
 # What a killed install left is removed by the next one; the live
@@ -322,6 +359,93 @@ if pinned_install "$home" 2> "$work/log17" &&
   pass "a release directory without an nhm binary is replaced"
 else
   fail "a release directory without an nhm binary: $(cat "$work/log17")"
+fi
+
+# A failed download changes nothing: the release that was there stays,
+# and nhm, nhm-hook and current still resolve. The pin makes the install
+# fetch again (the release has no record); the release dir has no archive.
+home="$work/home-faildl"
+mkdir -p "$home" "$work/empty-release"
+pinned_install "$home" 2> /dev/null || true
+rm -f "$home/.local/share/nhm/releases/$version/.archive-sha256"
+before="$(readlink "$home/.local/share/nhm/releases/$version" || true)"
+rm "$work/releases/v$version"
+ln -s "$work/empty-release" "$work/releases/v$version"
+if pinned_install "$home" --archive-sha256 "$pin" 2> "$work/log18"; then
+  fail "a failed download exits non-zero"
+elif grep -q 'download failed' "$work/log18" &&
+  [[ -n "$before" && "$(readlink "$home/.local/share/nhm/releases/$version")" == "$before" ]] &&
+  [[ "$(readlink "$home/.local/share/nhm/current")" == "releases/$version" ]] &&
+  "$home/.local/bin/nhm" version --json > /dev/null 2>&1 &&
+  "$home/.local/bin/nhm-hook" --help > /dev/null 2>&1; then
+  pass "a failed download keeps the old release, and nhm and nhm-hook still run"
+else
+  fail "a failed download: $(cat "$work/log18"); $(ls -l "$home/.local/share/nhm/releases")"
+fi
+rm "$work/releases/v$version"
+ln -s "$dist" "$work/releases/v$version"
+
+# A kill during the move from an older install.sh's release directory
+# (install.sh: current goes to the new release, the directory moves aside,
+# then releases/<version> becomes the link). The states after each step;
+# current resolves in each, and the next install finishes the move.
+legacy_state() {
+  local step="$2" data="$1/.local/share/nhm" newdir="$version@0123456789ab.4242"
+  mkdir -p "$data/releases" "$work/legacy-src-$step"
+  tar --zstd -xf "$dist/$newname.tar.zst" -C "$work/legacy-src-$step"
+  cp -a "$work/legacy-src-$step/$newname" "$data/releases/$version"
+  mv -T "$work/legacy-src-$step/$newname" "$data/releases/$newdir"
+  printf '%s\n' "$pin" > "$data/releases/$newdir/.archive-sha256"
+  ln -s "releases/$newdir" "$data/current"
+  if [[ "$step" != current ]]; then
+    mv -T "$data/releases/$version" "$data/releases/$version.old.4242"
+  fi
+  if [[ "$step" == link ]]; then
+    ln -s "$newdir" "$data/releases/$version.new.4242"
+  fi
+}
+for step in current aside link; do
+  home="$work/home-killed-$step"
+  data="$home/.local/share/nhm"
+  legacy_state "$home" "$step"
+  if [[ ! -x "$data/current/nhm" ]]; then
+    fail "killed after '$step': current does not resolve"
+    continue
+  fi
+  if pinned_install "$home" --archive-sha256 "$pin" 2> "$work/log19-$step" &&
+    [[ -L "$data/releases/$version" && "$(cat "$data/releases/$version/.archive-sha256")" == "$pin" ]] &&
+    [[ "$(readlink "$data/current")" == "releases/$version" ]] &&
+    ! compgen -G "$data/releases/$version.*" > /dev/null &&
+    "$home/.local/bin/nhm" version --json > /dev/null 2>&1; then
+    pass "an install killed after the '$step' step of the legacy move recovers on the next run"
+  else
+    fail "killed after '$step': $(cat "$work/log19-$step"); $(ls -l "$data/releases")"
+  fi
+  # The killed install's release was current while the next run started,
+  # so that run keeps it; the run after removes it.
+  pinned_install "$home" --archive-sha256 "$pin" 2> /dev/null || true
+  left=("$data/releases/$version@"*)
+  if [[ ${#left[@]} -eq 1 && "${left[0]}" -ef "$data/releases/$version" ]]; then
+    pass "the killed install's release dir is gone a run later (after '$step')"
+  else
+    fail "killed after '$step', one run later: ${left[*]}"
+  fi
+done
+
+# Without flock the install stops before it changes anything.
+nolock="$work/nolock-bin"
+mkdir -p "$nolock"
+for tool in bash curl tar zstd sha256sum; do
+  ln -s "$(command -v "$tool")" "$nolock/$tool"
+done
+home="$work/home-noflock"
+mkdir -p "$home"
+if PATH="$nolock" pinned_install "$home" 2> "$work/log20"; then
+  fail "an install without flock is refused"
+elif grep -q 'flock is required' "$work/log20" && [[ ! -e "$home/.local" ]]; then
+  pass "an install without flock stops before any change"
+else
+  fail "an install without flock: $(cat "$work/log20"); $(ls -A "$home")"
 fi
 
 if [[ $fails -eq 0 ]]; then
