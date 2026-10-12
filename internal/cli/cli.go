@@ -26,6 +26,10 @@ const usage = `nhm: the herdr wrapper of the ACFS flywheel (what ntm is to tmux)
 
 Usage:
   nhm version [--json]   print the version
+  nhm spawn <session> [--cc=N[:MODEL]] [--cod=N] … [--prompt T] [--dry-run] [--json]
+                         start agents: identity, pane, binding, kickoff
+  nhm add <session> …    the same, into an existing workspace
+  nhm new <session>      create the workspace only
   nhm status [session] [--watch] [--json]
                          one row per agent: slot, name, kind, state, mail
   nhm list [--project DIR] [--json]
@@ -106,6 +110,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runResolve(args[1:], stdout, stderr)
 	case "adopt":
 		return runAdopt(args[1:], stdout, stderr)
+	case "spawn":
+		return runSpawn(args[1:], stdout, stderr)
+	case "add":
+		return runAdd(args[1:], stdout, stderr)
+	case "new":
+		return runNew(args[1:], stdout, stderr)
 	case "admin":
 		return runAdmin(args[1:], stdout, stderr)
 	case "status":

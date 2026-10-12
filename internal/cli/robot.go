@@ -30,6 +30,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if robotDispatchFlag(args) != "" {
 		return runRobotDispatch(args, stdout, stderr)
 	}
+	if hasRobotSpawn(args) {
+		return runRobotSpawn(args, stdout, stderr)
+	}
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -123,7 +126,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 func unknownRobotFlag(args []string) string {
 	known := map[string]bool{"--robot-status": true, "--robot-snapshot": true, "--robot-capabilities": true,
 		"--robot-activity": true, "--robot-tail": true, "--robot-format": true,
-		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true}
+		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true, "--robot-spawn": true}
 	for _, a := range args {
 		name, _, _ := strings.Cut(a, "=")
 		if strings.HasPrefix(name, "--robot-") && !known[name] {

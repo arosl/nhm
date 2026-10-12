@@ -24,7 +24,7 @@ import (
 const PluginID = "nhm"
 
 // Popups are the popup panes the plugin declares, by entrypoint.
-var Popups = []string{"palette", "board", "menu"}
+var Popups = []string{"palette", "board", "menu", "spawn"}
 
 // ContextEnv is the variable that carries the captured context into a
 // popup.

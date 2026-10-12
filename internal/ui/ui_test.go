@@ -67,7 +67,7 @@ func TestOpenHandsTheContextOver(t *testing.T) {
 	if err != nil || !ok || back != c {
 		t.Fatalf("round trip = %+v %v %v", back, ok, err)
 	}
-	if err := Open(context.Background(), o, "spawn", c); err == nil {
+	if err := Open(context.Background(), o, "memory", c); err == nil {
 		t.Fatal("an undeclared popup opened")
 	}
 	o.fail = &herdr.Error{Code: herdr.CodeUIBusy, Message: "settings open"}

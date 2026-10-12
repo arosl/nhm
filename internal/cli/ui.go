@@ -17,8 +17,8 @@ import (
 	"github.com/arosl/nhm/internal/ui"
 )
 
-const uiUsage = `Usage: nhm ui palette|board|menu            (herdr's plugin actions run these)
-       nhm ui palette-popup|board-popup|menu-popup   (the popups run these)
+const uiUsage = `Usage: nhm ui palette|board|menu|spawn      (herdr's plugin actions run these)
+       nhm ui palette-popup|board-popup|menu-popup|spawn-popup   (the popups run these)
 
 An action captures the workspace and pane it was invoked in and opens
 the popup with them; the popup acts on those ids only. A server that is
@@ -33,8 +33,10 @@ func runUI(args []string, stdout, stderr io.Writer) int {
 		return exitRefused
 	}
 	switch name := args[0]; name {
-	case "palette", "board", "menu":
+	case "palette", "board", "menu", "spawn":
 		return openPopup(name, stderr)
+	case "spawn-popup":
+		return holdOnFailure(runSpawnPopup(stderr), stderr)
 	case "palette-popup":
 		return holdOnFailure(runPaletteBody(nil, stderr), stderr)
 	case "board-popup":

@@ -381,7 +381,7 @@ func TestRobotCapabilities(t *testing.T) {
 			unavailable[m["flag"].(string)] = true
 		}
 	}
-	if !unavailable["--robot-spawn"] || unavailable["--robot-status"] || unavailable["--robot-send"] {
+	if !unavailable["--robot-wait"] || unavailable["--robot-status"] || unavailable["--robot-send"] || unavailable["--robot-spawn"] {
 		t.Fatalf("unavailable = %v", unavailable)
 	}
 }
@@ -391,8 +391,8 @@ func TestRobotFormat(t *testing.T) {
 	if code != 1 || env.ErrorCode != "INVALID_FLAG" {
 		t.Fatalf("toon = %d %+v", code, env)
 	}
-	env, code = robotRun(t, "--robot-spawn=swarm", "--spawn-cc=1")
-	if code != 2 || env.ErrorCode != "NOT_IMPLEMENTED" || !strings.Contains(env.Hint, "nhm.spawn") {
+	env, code = robotRun(t, "--robot-wait=swarm")
+	if code != 2 || env.ErrorCode != "NOT_IMPLEMENTED" || !strings.Contains(env.Hint, "nhm.wait") {
 		t.Fatalf("send = %d %+v", code, env)
 	}
 	env, code = robotRun(t, "--robot-status", "--robot-snapshot")

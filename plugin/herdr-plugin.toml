@@ -1,5 +1,7 @@
 # nhm's herdr plugin (plan-v8 2.1). ACFS links it once per user:
-#   herdr plugin link ~/.local/share/nhm/current/plugin
+#   herdr plugin link ~/.local/share/nhm/plugin
+# herdr stores the resolved path, so it links install.sh's stable plugin
+# dir, not current/plugin (acfs-9hkh.14 review, checked on herdr 0.9.3).
 #
 # herdr runs every command below in this directory (ACFS bead
 # acfs-9hkh.14, checked on herdr 0.9.3), so "../nhm" is the nhm binary of
@@ -12,8 +14,9 @@
 # once and refuses the rest (ACFS evidence exp1), so a hook is a hint and
 # nhm's reconcile catches what a refused one missed.
 #
-# Later releases add the spawn and memory popups (nhm.spawn, nhm.memory)
-# and the startup hook `nhm admin restore` (nhm.lifecycle).
+# The spawn popup is nhm.spawn's gum wizard: it adds agents to the
+# workspace the action was invoked in. Later releases add the memory popup
+# (nhm.memory) and the startup hook `nhm admin restore` (nhm.lifecycle).
 
 id = "nhm"
 name = "nhm"
@@ -40,6 +43,12 @@ title = "nhm menu"
 contexts = ["workspace", "pane"]
 command = ["../nhm", "ui", "menu"]
 
+[[actions]]
+id = "spawn"
+title = "Spawn agents"
+contexts = ["workspace", "pane"]
+command = ["../nhm", "ui", "spawn"]
+
 [[panes]]
 id = "palette"
 title = "Palette"
@@ -63,6 +72,14 @@ placement = "popup"
 width = "60%"
 height = "60%"
 command = ["../nhm", "ui", "menu-popup"]
+
+[[panes]]
+id = "spawn"
+title = "Spawn agents"
+placement = "popup"
+width = "70%"
+height = "70%"
+command = ["../nhm", "ui", "spawn-popup"]
 
 [[events]]
 on = "pane.agent_detected"
