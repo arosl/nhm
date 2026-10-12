@@ -1,6 +1,13 @@
 package bindings
 
-import "context"
+import (
+	"context"
+	"os"
+	"path/filepath"
+
+	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/agentmail"
+)
 
 // The automatic import (ACFS acfs-9hkh.41): nhm keeps its bindings of
 // Bash-spawned agents current without a person running `nhm admin recover
@@ -20,7 +27,9 @@ import "context"
 //     changes, so evidence the Bash writes after the start is read then.
 //
 // A dry run comes first, so an operation row is claimed only when an
-// agent is importable.
+// agent is importable. For one pane (the hook path), a cheap check comes
+// before the dry run: herdr's agent events come for every agent, and most
+// panes without evidence would cost a full session snapshot each time.
 
 // AutoImportResult is what an automatic import did.
 type AutoImportResult struct {
@@ -32,6 +41,9 @@ type AutoImportResult struct {
 // import. The caller holds the owner lock shared.
 func AutoImport(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequest) (AutoImportResult, error) {
 	res := AutoImportResult{Warnings: []string{}}
+	if req.PaneID != "" && !mayHaveEvidence(ctx, env, projectOf, req) {
+		return res, nil
+	}
 	req.DryRun = true
 	dry, err := ImportOnly(ctx, env, projectOf, req)
 	if err != nil {
@@ -50,4 +62,55 @@ func AutoImport(ctx context.Context, env Env, projectOf ProjectOf, req ImportReq
 	res.Imported = rep.Imported
 	res.Warnings = append(res.Warnings, rep.Warnings...)
 	return res, err
+}
+
+// agentGetter is herdr's call for one agent, cheaper than a snapshot.
+type agentGetter interface {
+	AgentGet(ctx context.Context, target string) (herdr.AgentInfo, error)
+}
+
+// mayHaveEvidence reports whether the agent in req.PaneID can pass
+// importOne's evidence check, from one agent.get and a few file reads:
+// an Agent Mail identity file for the pane, or a Bash token whose name is
+// herdr's name for the agent. It accepts every pane that importOne could
+// import, so a pane it refuses would be skipped anyway. When it cannot
+// tell (no agent.get, a herdr error, no working directory), it accepts
+// and the full check decides.
+func mayHaveEvidence(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequest) bool {
+	g, ok := env.Herdr.(agentGetter)
+	if !ok {
+		return true
+	}
+	a, err := g.AgentGet(ctx, req.PaneID)
+	if err != nil {
+		return true
+	}
+	cwd := firstNonEmpty(a.ForegroundCwd, a.Cwd)
+	if a.Agent == "" || cwd == "" {
+		return a.Agent != ""
+	}
+	projectKey, _, err := projectOf(ctx, cwd)
+	if err != nil || (req.ProjectKey != "" && projectKey != req.ProjectKey) {
+		return false
+	}
+	if _, ok, err := agentmail.ReadIdentity(env.ConfigHome, projectKey, req.PaneID); ok || err != nil {
+		return true
+	}
+	if a.Name == "" {
+		return false
+	}
+	acfsHome := req.AcfsHome
+	if acfsHome == "" {
+		acfsHome = DefaultAcfsHome()
+	}
+	entries, err := os.ReadDir(filepath.Dir(BashTokenFile(acfsHome, projectKey, "_")))
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	for _, e := range entries {
+		if alias, err := Alias(e.Name()); err == nil && alias == a.Name {
+			return true
+		}
+	}
+	return false
 }

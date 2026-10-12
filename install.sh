@@ -5,7 +5,11 @@
 #
 # Downloads nhm-<version>-<platform>.tar.zst and SHA256SUMS from the same
 # tagged release of arosl/nhm, checks the archive against SHA256SUMS, and
-# unpacks it to ~/.local/share/nhm/releases/<version>/. With
+# unpacks it to ~/.local/share/nhm/releases/<version>@<id>/, with
+# releases/<version> a link to it. A release that replaces another goes in
+# beside it and takes the link in one rename, so nhm and nhm-hook resolve
+# at every moment. One install runs at a time (a lock in releases/); a
+# second waits, and finds the release unpacked. With
 # --archive-sha256, the archive must also have that SHA-256: a pin kept
 # outside the release (ACFS keeps one per platform beside its install.sh
 # pin), so a re-uploaded archive and SHA256SUMS are refused too. Give it
@@ -23,7 +27,7 @@
 #
 # Environment:
 #   NHM_VERSION       the version, when --version is not given
-#   NHM_ARCHIVE_SHA256 the pins, separated by spaces, when no --archive-sha256 is given
+#   NHM_ARCHIVE_SHA256 the pins, separated by white space, when no --archive-sha256 is given
 #   NHM_RELEASE_BASE  the release download base (tests use a file:// URL);
 #                     default https://github.com/arosl/nhm/releases/download
 #   XDG_DATA_HOME     default ~/.local/share
@@ -33,8 +37,9 @@ set -euo pipefail
 repo_url="https://github.com/arosl/nhm"
 base="${NHM_RELEASE_BASE:-$repo_url/releases/download}"
 version="${NHM_VERSION:-latest}"
-# NHM_ARCHIVE_SHA256 takes the same forms, separated by spaces.
-read -ra pins <<< "${NHM_ARCHIVE_SHA256:-}"
+# NHM_ARCHIVE_SHA256 takes the same forms, separated by white space
+# (newlines too: read stops at the end, not at the first line).
+read -r -d '' -a pins <<< "${NHM_ARCHIVE_SHA256:-}" || true
 pins_given=false
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 bin_dir="${NHM_BIN_DIR:-$HOME/.local/bin}"
@@ -79,7 +84,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for tool in curl tar zstd sha256sum; do
+for tool in curl tar zstd sha256sum flock; do
   command -v "$tool" > /dev/null 2>&1 || die "$tool is required"
 done
 
@@ -129,6 +134,20 @@ name="nhm-${version}-${platform}"
 releases="$data_home/nhm/releases"
 target="$releases/$version"
 
+mkdir -p "$releases"
+exec 9> "$releases/.install.lock"
+flock -w 300 9 || die "another nhm install holds $releases/.install.lock"
+# Leftovers of an install that was killed: unpacked releases that neither
+# releases/<version> nor current links to, and the names older install.sh
+# versions used while they replaced a release.
+live="$(readlink "$target" 2> /dev/null || true)"
+current="$(readlink "$data_home/nhm/current" 2> /dev/null || true)"
+for d in "$releases/$version@"* "$target".new.* "$target".partial.* "$target".old.*; do
+  if [[ (-e "$d" || -L "$d") && "${d##*/}" != "$live" && "releases/${d##*/}" != "$current" ]]; then
+    rm -rf -- "$d"
+  fi
+done
+
 installed=false
 if [[ -x "$target/nhm" ]]; then
   if [[ -z "$pin" || "$(cat "$target/.archive-sha256" 2> /dev/null)" == "$pin" ]]; then
@@ -155,22 +174,32 @@ if [[ "$installed" == false ]]; then
   [[ -n "$line" ]] || die "SHA256SUMS of v$version has no line for $name.tar.zst"
   (cd "$tmp" && printf '%s\n' "$line" | sha256sum -c --quiet - >&2) || die "checksum mismatch for $name.tar.zst"
   log "checksum ok"
-  mkdir -p "$releases"
   tar --zstd -xf "$tmp/$name.tar.zst" -C "$tmp"
   # nhm-hook came with the hooks; an older pinned release has none.
   [[ -x "$tmp/$name/nhm" ]] || die "archive has no $name/nhm"
   (cd "$tmp/$name" && sha256sum -c --quiet SHA256SUMS >&2) || die "archive contents do not match its SHA256SUMS"
   printf '%s\n' "$archive_sha" > "$tmp/$name/.archive-sha256"
-  # A rename inside one file system is atomic: target is complete or absent.
-  mv -T "$tmp/$name" "$target.partial.$$"
-  if [[ -e "$target" ]]; then
-    # An unpacked release not known to be the pinned one is replaced.
-    mv -T "$target" "$target.old.$$"
-    mv -T "$target.partial.$$" "$target"
-    rm -rf -- "$target.old.$$"
-  else
-    mv -T "$target.partial.$$" "$target" ||
-      die "$target exists but has no nhm binary; move it away and run again"
+  # The release goes in under a name of its own, beside any release it
+  # replaces (one not known to be the pinned one, or one without an nhm
+  # binary). Then releases/<version> links to it, by one rename of the
+  # link: current resolves at every moment.
+  dir="$version@${archive_sha:0:12}.$$"
+  mv -T "$tmp/$name" "$releases/$dir"
+  old=""
+  if [[ -L "$target" ]]; then
+    old="$(readlink "$target")"
+  elif [[ -e "$target" ]]; then
+    # A directory, from an install.sh before the link: current goes to
+    # the new release while the directory moves aside.
+    ln -sfn "releases/$dir" "$data_home/nhm/current.new.$$"
+    mv -T "$data_home/nhm/current.new.$$" "$data_home/nhm/current"
+    old="$version.old.$$"
+    mv -T "$target" "$releases/$old"
+  fi
+  ln -sfn "$dir" "$target.new.$$"
+  mv -T "$target.new.$$" "$target"
+  if [[ -n "$old" && "$old" != */* ]]; then
+    rm -rf -- "${releases:?}/$old"
   fi
 fi
 

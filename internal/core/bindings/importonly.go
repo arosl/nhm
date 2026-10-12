@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
@@ -106,6 +107,10 @@ func ImportOnly(ctx context.Context, env Env, projectOf ProjectOf, req ImportReq
 		if a.Agent == "" || (req.PaneID != "" && a.PaneID != req.PaneID) {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("stopped at %s: %v; the next run takes the rest", a.PaneID, err))
+			break
+		}
 		item, keep := importOne(ctx, env, projectOf, req, snap, a, rep.OperationID)
 		if !keep {
 			continue
@@ -116,7 +121,15 @@ func ImportOnly(ctx context.Context, env Env, projectOf ProjectOf, req ImportReq
 		rep.Items = append(rep.Items, item)
 	}
 	if rep.OperationID != "" {
-		if err := env.DB.SetOperationStatus(ctx, rep.OperationID, "done", true, env.now()); err != nil {
+		// The status is written even when the caller's deadline has passed:
+		// a run that claimed its operation must not stay 'claimed'.
+		status := "done"
+		if ctx.Err() != nil {
+			status = "partial"
+		}
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		if err := env.DB.SetOperationStatus(fctx, rep.OperationID, status, true, env.now()); err != nil {
 			rep.Warnings = append(rep.Warnings, err.Error())
 		}
 	}
@@ -136,6 +149,9 @@ func importOne(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequ
 			return item, false
 		}
 		item.Action, item.MailName, item.ProjectKey, item.BindingID = ActionBound, b.MailName, b.MailProjectKey, b.ID
+		if !req.DryRun {
+			item.Reason = repairIdentity(env, req.AcfsHome, snap, a, b)
+		}
 		return item, true
 	} else if !errors.Is(err, ErrNotFound) {
 		return skip(err.Error())
@@ -210,6 +226,36 @@ func importOne(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequ
 		}
 	}
 	return item, true
+}
+
+// repairIdentity writes Agent Mail's identity file for an imported
+// binding that has none, and returns what it did or what failed ("" for
+// nothing). The import writes the file right after it creates the
+// binding; a run cut off between the two leaves the binding without it,
+// and every later run sees the pane as bound. It writes only while the
+// Bash spawn evidence for the binding still holds: the Bash removes the
+// file when it retires the agent, and that must stay so. It never
+// replaces a file that exists.
+func repairIdentity(env Env, acfsHome string, snap herdr.SessionSnapshot, a herdr.AgentInfo, b Binding) string {
+	if b.Provenance != Imported || b.PaneID == "" {
+		return ""
+	}
+	if _, ok, err := agentmail.ReadIdentity(env.ConfigHome, b.MailProjectKey, b.PaneID); err != nil {
+		return "Agent Mail identity file: " + err.Error()
+	} else if ok {
+		return ""
+	}
+	pane, ok := findPane(snap, a.PaneID)
+	if !ok {
+		return ""
+	}
+	if name, _ := bashEvidence(acfsHome, b.MailProjectKey, snap, pane, a); !strings.EqualFold(name, b.MailName) {
+		return ""
+	}
+	if _, warn := writeIdentity(env, b); warn != "" {
+		return warn
+	}
+	return "wrote the missing Agent Mail identity file"
 }
 
 // bashEvidence returns the mail name the Bash spawn evidence proves for a
