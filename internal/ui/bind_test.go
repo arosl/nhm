@@ -18,6 +18,11 @@ func TestUsesKey(t *testing.T) {
 		{"# zoom = \"prefix+a\"\n", false},
 		{"[keys]\nzoom = \"prefix+ab\"\n", false},
 		{"[[keys.command]]\ncommand = \"echo prefix+a\"\n", false},
+		// Written another way that herdr reads as the same key.
+		{"[keys]\nnew_tab = \"prefix\\u002Ba\"\n", true},
+		{"[keys]\nnew_tab = \"Prefix + A\"\n", true},
+		// Inside a multi-line string it is text, not a key.
+		{"[x]\nnote = \"\"\"\nzoom = \"prefix+a\"\n\"\"\"\n", false},
 	} {
 		if got := usesKey(tc.config, "prefix+a") != ""; got != tc.want {
 			t.Errorf("usesKey(%q) = %v, want %v", tc.config, got, tc.want)
@@ -32,6 +37,26 @@ func TestBindRefusesWhatHerdrWouldIgnore(t *testing.T) {
 	}
 	if _, err := Bind("[keys]\nnew_tab = 'prefix+d'\n"); err == nil || !strings.Contains(err.Error(), "prefix+d") {
 		t.Fatalf("a single-quoted taken key: %v", err)
+	}
+}
+
+func TestMarkersInsideMultilineStringsAreText(t *testing.T) {
+	for _, quote := range []string{`"""`, `'''`} {
+		note := "[x]\nnote = " + quote + "\n" + BlockBegin + "\nkept\n" + BlockEnd + "\n" + quote + "\n"
+		got, err := Unbind(note)
+		if err != nil || got != note {
+			t.Errorf("Unbind changed a %s string: %q %v", quote, got, err)
+		}
+		bound, err := Bind(note)
+		if err != nil || !strings.HasPrefix(bound, note) {
+			t.Errorf("Bind changed a %s string: %q %v", quote, bound, err)
+		}
+		if again, err := Unbind(bound); err != nil || strings.TrimRight(again, "\n") != strings.TrimRight(note, "\n") {
+			t.Errorf("Unbind of the bound %s config = %q %v", quote, again, err)
+		}
+	}
+	if got := multiline("", `a = """one""" # """`); got != "" {
+		t.Errorf("a closed string and a comment left %q open", got)
 	}
 }
 

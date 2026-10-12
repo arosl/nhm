@@ -14,12 +14,19 @@ import (
 // fakeHerdr is a herdr whose `config check` reports "unknown config key
 // legacy" for a file with a `legacy =` line (an issue the user already
 // had), and, with FAKE_REJECT=1, "key conflict" for a file that binds
-// nhm.board (an issue the new block would add).
+// nhm.board (an issue the new block would add). FAKE_TOUCH=FILE makes the
+// check append to FILE (someone editing it during the bind);
+// FAKE_RELOAD_LOG=FILE records the socket each reload-config went to.
 func fakeHerdr(t *testing.T) {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "herdr")
 	script := `#!/bin/sh
-[ "$1 $2" = "config check" ] || { [ "$1 $2" = "server reload-config" ] && exit 0; exit 2; }
+if [ "$1 $2" = "server reload-config" ]; then
+  [ -z "$FAKE_RELOAD_LOG" ] || echo "$HERDR_SOCKET_PATH" >> "$FAKE_RELOAD_LOG"
+  exit 0
+fi
+[ "$1 $2" = "config check" ] || exit 2
+[ -z "$FAKE_TOUCH" ] || echo "# edited" >> "$FAKE_TOUCH"
 issues=""
 grep -q '^legacy =' "$HERDR_CONFIG_PATH" 2>/dev/null && issues="unknown config key legacy in $HERDR_CONFIG_PATH"
 if [ "$FAKE_REJECT" = 1 ] && grep -q 'nhm.board' "$HERDR_CONFIG_PATH"; then issues="$issues
@@ -34,14 +41,15 @@ echo "config: issues found"; printf '%s\n' "$issues" | sed '/^$/d'; exit 1
 }
 
 // ownedInstance is an enrolled instance that nhm owns, with its socket
-// in HERDR_SOCKET_PATH.
-func ownedInstance(t *testing.T) {
+// in HERDR_SOCKET_PATH; it returns the socket.
+func ownedInstance(t *testing.T) string {
 	t.Helper()
 	s, inst := cliInstance(t)
 	if _, err := core.SwitchOwner(context.Background(), inst.Dir, core.OwnerNhm, time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
+	return s.SocketPath
 }
 
 func TestBindNeedsNhmAsOwner(t *testing.T) {
@@ -202,5 +210,106 @@ func TestBindRefusals(t *testing.T) {
 	}
 	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOK {
 		t.Errorf("an old issue refused the bind: %d %s", code, errOut)
+	}
+}
+
+// The review of f3ca4fb: ~/.config/herdr -> dotfiles/herdr, and
+// config.toml there -> ../shared/config.toml. The kernel opens
+// dotfiles/shared/config.toml; so must nhm bind, existing or not.
+func TestBindFollowsALinkInsideALinkedDirectory(t *testing.T) {
+	fakeHerdr(t)
+	ownedInstance(t)
+	for _, exists := range []bool{true, false} {
+		root := t.TempDir()
+		for _, d := range []string{"dotfiles/herdr", "dotfiles/shared", "home/.config"} {
+			if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(filepath.Join(root, "dotfiles", "herdr"), filepath.Join(root, "home", ".config", "herdr")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("..", "shared", "config.toml"), filepath.Join(root, "dotfiles", "herdr", "config.toml")); err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(root, "dotfiles", "shared", "config.toml")
+		if exists {
+			if err := os.WriteFile(want, []byte("# shared\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg := filepath.Join(root, "home", ".config", "herdr", "config.toml")
+		if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOK {
+			t.Fatalf("exists=%v: bind = %d %s", exists, code, errOut)
+		}
+		if data, err := os.ReadFile(want); err != nil || !strings.Contains(string(data), "nhm.palette") {
+			t.Errorf("exists=%v: the file the kernel opens = %q, %v", exists, data, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, "home", ".config", "shared")); err == nil {
+			t.Errorf("exists=%v: bind wrote beside the unresolved directory", exists)
+		}
+	}
+}
+
+func TestBindUsesOneServer(t *testing.T) {
+	fakeHerdr(t)
+	socket := ownedInstance(t)
+	log := filepath.Join(t.TempDir(), "reloads")
+	t.Setenv("FAKE_RELOAD_LOG", log)
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--socket", socket); code != exitOK {
+		t.Fatalf("bind = %d %s", code, errOut)
+	}
+	if data, _ := os.ReadFile(log); strings.TrimSpace(string(data)) != socket {
+		t.Errorf("reload went to %q, want %q", data, socket)
+	}
+	// Without --config, an explicit --socket whose config cannot be told
+	// is refused, not written to another server's config.
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	if code, _, errOut := runVerb(runBind, "--socket", socket, "--no-reload"); code != exitRefused || !strings.Contains(errOut, "give --config") {
+		t.Errorf("bind --socket without a derivable config = %d %s", code, errOut)
+	}
+}
+
+func TestServerConfig(t *testing.T) {
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "xdg"))
+	for socket, want := range map[string]string{
+		filepath.Join(base, "a", "herdr", "herdr.sock"):                     filepath.Join(base, "a", "herdr", "config.toml"),
+		filepath.Join(base, "a", "herdr", "sessions", "plug", "herdr.sock"): filepath.Join(base, "a", "herdr", "config.toml"),
+		"": filepath.Join(base, "xdg", "herdr", "config.toml"),
+	} {
+		if got, err := serverConfig(socket, socket != ""); err != nil || got != want {
+			t.Errorf("serverConfig(%q) = %q, %v; want %q", socket, got, err, want)
+		}
+	}
+	if _, err := serverConfig(filepath.Join(base, "elsewhere.sock"), true); err == nil {
+		t.Error("an explicit socket outside a herdr dir gave a config")
+	}
+	if got, err := serverConfig(filepath.Join(base, "elsewhere.sock"), false); err != nil || got != filepath.Join(base, "xdg", "herdr", "config.toml") {
+		t.Errorf("the pane's socket outside a herdr dir = %q, %v", got, err)
+	}
+	t.Setenv("HERDR_CONFIG_PATH", filepath.Join(base, "mine.toml"))
+	if got, _ := serverConfig(filepath.Join(base, "a", "herdr", "herdr.sock"), true); got != filepath.Join(base, "mine.toml") {
+		t.Errorf("HERDR_CONFIG_PATH did not win: %q", got)
+	}
+}
+
+func TestBindRefusesAFileChangedDuringTheBind(t *testing.T) {
+	fakeHerdr(t)
+	ownedInstance(t)
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte("# mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_TOUCH", cfg)
+	code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload")
+	if code != exitRefused || !strings.Contains(errOut, "changed during bind; run again") {
+		t.Fatalf("bind = %d %s", code, errOut)
+	}
+	// The fake check edits the file each time it runs (old and new).
+	if data, _ := os.ReadFile(cfg); !strings.HasPrefix(string(data), "# mine\n# edited\n") || strings.Contains(string(data), "nhm") {
+		t.Errorf("the edit made during the bind was lost: %q", data)
 	}
 }

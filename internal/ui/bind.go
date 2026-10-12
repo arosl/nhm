@@ -64,12 +64,60 @@ func Block() string {
 	return b.String()
 }
 
-// withoutBlock removes a marked block (and the blank line after it).
+// multiline returns the delimiter of the multi-line string a TOML line
+// leaves open (three double or three single quotes), or "" for none,
+// given the one open before it.
+func multiline(open, line string) string {
+	for i := 0; i < len(line); {
+		rest := line[i:]
+		if open != "" {
+			j := strings.Index(rest, open)
+			if j < 0 {
+				return open
+			}
+			i, open = i+j+3, ""
+			continue
+		}
+		switch {
+		case rest[0] == '#':
+			return ""
+		case strings.HasPrefix(rest, `"""`), strings.HasPrefix(rest, `'''`):
+			open, i = rest[:3], i+3
+		case rest[0] == '"':
+			// A basic string on one line: skip to its unescaped end.
+			j := 1
+			for j < len(rest) && rest[j] != '"' {
+				if rest[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			i += j + 1
+		case rest[0] == '\'':
+			j := strings.IndexByte(rest[1:], '\'')
+			if j < 0 {
+				return ""
+			}
+			i += j + 2
+		default:
+			i++
+		}
+	}
+	return open
+}
+
+// withoutBlock removes a marked block (and the blank line after it). A
+// marker counts only at the top level, never inside a multi-line string.
 func withoutBlock(text, begin, end string) (string, error) {
 	var out []string
-	inside, skipBlank := false, false
+	inside, skipBlank, open := false, false, ""
 	for _, line := range strings.Split(text, "\n") {
+		inString := open != ""
+		open = multiline(open, line)
 		switch {
+		case inString && !inside:
+			skipBlank = false
+			out = append(out, line)
 		case !inside && strings.TrimSpace(line) == begin:
 			inside = true
 		case inside && strings.TrimSpace(line) == end:
@@ -100,12 +148,20 @@ var quoted = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"|'([^']*)'`)
 // usesKey returns the line of config that assigns key to anything: `key =
 // "prefix+a"` in a [[keys.command]], `zoom = 'prefix+a'`, or `zoom =
 // ["x", "prefix+a"]` in [keys], over one line or several, any quote
-// style, ignoring case: any quoted value that is exactly the key.
-// Comments do not count, nor do table headers.
+// style. Each quoted value is decoded as TOML decodes it (escapes such as
+// + too), then compared without spaces and ignoring case. Comments,
+// table headers and multi-line strings do not count.
+//
+// It is a fast check with a clear message for the common spellings; the
+// authority is `herdr config check`, which nhm bind runs on the result
+// and which refuses any key conflict this misses.
 func usesKey(config, key string) string {
+	open := ""
 	for _, line := range strings.Split(config, "\n") {
+		inString := open != ""
+		open = multiline(open, line)
 		t := strings.TrimSpace(line)
-		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "[") && !strings.Contains(t, "=") {
+		if inString || t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "[") && !strings.Contains(t, "=") {
 			continue
 		}
 		// The value side of `name = value`; an array's later lines have
@@ -113,8 +169,12 @@ func usesKey(config, key string) string {
 		if i := strings.Index(t, "="); i >= 0 && !strings.ContainsAny(t[:i], `"'`) {
 			t = t[i+1:]
 		}
-		for _, m := range quoted.FindAllStringSubmatch(t, -1) {
-			if strings.EqualFold(m[1]+m[2], key) {
+		for _, m := range quoted.FindAllString(t, -1) {
+			var v struct{ V string }
+			if _, err := toml.Decode("V = "+m, &v); err != nil {
+				continue
+			}
+			if strings.EqualFold(strings.Join(strings.Fields(v.V), ""), key) {
 				return strings.TrimSpace(line)
 			}
 		}

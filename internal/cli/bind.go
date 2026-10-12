@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -47,7 +48,7 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "print the new config, write nothing")
 	noReload := fs.Bool("no-reload", false, "do not ask herdr to reload its config")
 	config := fs.String("config", "", "herdr's config.toml (default: $HERDR_CONFIG_PATH, $XDG_CONFIG_HOME/herdr/config.toml)")
-	socket := fs.String("socket", "", "the herdr server nhm must own (default HERDR_SOCKET_PATH)")
+	socket := fs.String("socket", "", "the herdr server: nhm must own it, its config is written and it reloads (default HERDR_SOCKET_PATH)")
 	pos, err := parseInterleaved(fs, args)
 	if err != nil || len(pos) > 0 || (*printClient && *unbind) {
 		fmt.Fprint(stderr, bindUsage)
@@ -57,20 +58,25 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, ui.ClientNote+"\n"+ui.Block())
 		return exitOK
 	}
+	// One herdr server for the owner check, the config and the reload.
+	server := *socket
+	if server == "" {
+		server = os.Getenv("HERDR_SOCKET_PATH")
+	}
 	if !*unbind {
 		// While ACFS's Bash owns the instance, nhm's palette cannot send
 		// (nhm send refuses), and binding would also drop ACFS's own
 		// palette block: ACFS's palette stays on prefix+a until the
 		// takeover. --unbind only removes nhm's keys, so it may run any time.
-		if code := requireNhmOwner(*socket, stderr); code != exitOK {
+		if code := requireNhmOwner(server, stderr); code != exitOK {
 			return code
 		}
 	}
 	path := *config
 	if path == "" {
-		if path, err = ui.ConfigPath(os.Getenv); err != nil {
+		if path, err = serverConfig(server, *socket != ""); err != nil {
 			fmt.Fprintf(stderr, "nhm bind: %v\n", err)
-			return exitError
+			return exitRefused
 		}
 	}
 	// A dotfiles link (or a chain of them, even one whose target does not
@@ -85,6 +91,7 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm bind: %v\n", err)
 		return exitError
 	}
+	seen := fileState(path)
 	var next string
 	if *unbind {
 		next, err = ui.Unbind(string(old))
@@ -120,6 +127,12 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm bind: herdr would not accept the new config, so %s is unchanged: %s\n", path, strings.Join(added, "; "))
 		return exitRefused
 	}
+	// The user's editor, or another nhm bind, may have written the file
+	// while herdr checked it: never overwrite that.
+	if now := fileState(path); now != seen {
+		fmt.Fprintf(stderr, "nhm bind: %s changed during bind; run again\n", path)
+		return exitRefused
+	}
 	if err := store.WriteFileAtomic(path, []byte(next), mode); err != nil {
 		fmt.Fprintf(stderr, "nhm bind: %v\n", err)
 		return exitError
@@ -130,7 +143,7 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "nhm bind: %s %s\n", verb, path)
 	if !*noReload {
-		reloadHerdr(stderr)
+		reloadHerdr(server, stderr)
 	}
 	fmt.Fprintln(stderr, "nhm bind: a herdr client on another machine uses its own keys: see nhm bind --print-client")
 	return exitOK
@@ -172,12 +185,58 @@ func requireNhmOwner(socket string, stderr io.Writer) int {
 	return exitOK
 }
 
-// linkTarget follows path's symlinks to the file they name, which need
-// not exist. A path that is not a link is its own target.
+// serverConfig is the config.toml of the herdr server at socket:
+// $HERDR_CONFIG_PATH, else the herdr directory the socket lives in
+// (herdr/herdr.sock or herdr/sessions/<name>/herdr.sock), else the
+// default. A --socket whose config cannot be told is refused: nhm would
+// check one server and write another's keys.
+func serverConfig(socket string, explicit bool) (string, error) {
+	if p := os.Getenv("HERDR_CONFIG_PATH"); p != "" {
+		return p, nil
+	}
+	if socket != "" {
+		for dir := filepath.Dir(socket); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			if filepath.Base(dir) == "herdr" {
+				return filepath.Join(dir, "config.toml"), nil
+			}
+		}
+		if explicit {
+			return "", fmt.Errorf("cannot tell which config.toml the herdr server at %s reads; give --config", socket)
+		}
+	}
+	return ui.ConfigPath(os.Getenv)
+}
+
+// fileState is what a file looked like: its size, modification time and
+// content hash ("" when it does not exist).
+func fileState(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "unreadable"
+	}
+	return fmt.Sprintf("%d %d %x", info.Size(), info.ModTime().UnixNano(), sha256.Sum256(data))
+}
+
+// linkTarget is the file path names after its symlinks, as the kernel
+// opens it. When the last link dangles, the links are followed by hand,
+// each relative one from the real directory of the link that holds it.
+// A path that is not a link is its own target.
 func linkTarget(path string) (string, error) {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real, nil
+	}
 	for range 40 {
 		info, err := os.Lstat(path)
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			// The end of the chain, a file that does not exist yet; its
+			// directory may be a link too.
+			if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+				return filepath.Join(dir, filepath.Base(path)), nil
+			}
 			return path, nil
 		}
 		dest, err := os.Readlink(path)
@@ -185,7 +244,11 @@ func linkTarget(path string) (string, error) {
 			return "", err
 		}
 		if !filepath.IsAbs(dest) {
-			dest = filepath.Join(filepath.Dir(path), dest)
+			base := filepath.Dir(path)
+			if real, err := filepath.EvalSymlinks(base); err == nil {
+				base = real
+			}
+			dest = filepath.Join(base, dest)
 		}
 		path = dest
 	}
@@ -265,10 +328,14 @@ func newConfigIssues(old, next []byte, mode os.FileMode) ([]string, error) {
 	return added, nil
 }
 
-// reloadHerdr asks the herdr server (the calling pane's, or the default
-// one) to reload its config; a failure is only a note.
-func reloadHerdr(stderr io.Writer) {
-	out, err := exec.Command(herdrBin(), "server", "reload-config").CombinedOutput()
+// reloadHerdr asks the herdr server at socket (else the default one) to
+// reload its config; a failure is only a note.
+func reloadHerdr(socket string, stderr io.Writer) {
+	cmd := exec.Command(herdrBin(), "server", "reload-config")
+	if socket != "" {
+		cmd.Env = append(os.Environ(), "HERDR_SOCKET_PATH="+socket)
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm bind: herdr did not reload its config (%v); it reads it at its next start: %s\n", err, out)
 	}
