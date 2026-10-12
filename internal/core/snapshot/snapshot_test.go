@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/guards"
+	"github.com/arosl/nhm/internal/integrations/quota"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -260,6 +263,52 @@ func TestRobotProjections(t *testing.T) {
 	tail := TailFor(m, w, map[string]herdr.PaneRead{"w1:p1": {Text: "one\ntwo\n"}}, map[string]error{"w1:p2": errors.New("gone")}, "json", t0)
 	if got := tail.Panes["0.1"].Lines; len(got) != 2 || got[1] != "two" || tail.Panes["1.1"].CaptureProvenance != Unavailable || tail.Panes["w1:p3"].State != "active" {
 		t.Fatalf("tail = %+v", tail.Panes)
+	}
+}
+
+func TestGuardsAndLimits(t *testing.T) {
+	db, h := setup(t)
+	limits := filepath.Join(t.TempDir(), "limits-seen.json")
+	seen, err := quota.LoadSeen(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen.Update("w1:p1", "You've hit your session limit")
+	if err := seen.Save(); err != nil {
+		t.Fatal(err)
+	}
+	asked := map[string]int{}
+	check := func(kind, project string) []guards.Result {
+		asked[kind+"@"+project]++
+		st := guards.Configured
+		if kind == "codex" {
+			st = guards.Untrusted
+		}
+		return []guards.Result{{Kind: kind, Guard: guards.DCG, State: st}, {Kind: kind, Guard: guards.RCH, State: guards.Configured},
+			{Kind: kind, Guard: guards.AgentMailStop, State: guards.Configured}}
+	}
+	m := Build(context.Background(), Deps{Herdr: h, DB: db, Guards: check, LimitsFile: limits}, Options{})
+	// One check per kind and project: two bound claude agents share one.
+	if asked["claude@/p"] != 1 || asked["codex@"] != 1 || asked["agy@/p"] != 1 {
+		t.Fatalf("asked = %v", asked)
+	}
+	if m.Agents[0].Guards[guards.DCG] != guards.Configured || m.Agents[2].Guards[guards.DCG] != guards.Untrusted {
+		t.Fatalf("guards = %v / %v", m.Agents[0].Guards, m.Agents[2].Guards)
+	}
+	if m.Agents[0].Limit == "" || m.Agents[1].Limit != "" {
+		t.Fatalf("limits = %q %q", m.Agents[0].Limit, m.Agents[1].Limit)
+	}
+	kinds := map[string]string{}
+	for _, it := range Attention(m) {
+		kinds[it.Kind] += it.PaneID + " "
+	}
+	if kinds[AttnUnguarded] != "w1:p3 " || kinds[AttnAtLimit] != "w1:p1 " {
+		t.Fatalf("attention = %v", kinds)
+	}
+	// Without the two sources, nothing is said about either.
+	m = Build(context.Background(), Deps{Herdr: h, DB: db}, Options{})
+	if m.Agents[0].Guards != nil || m.Agents[0].Limit != "" {
+		t.Fatalf("unchecked = %+v", m.Agents[0])
 	}
 }
 

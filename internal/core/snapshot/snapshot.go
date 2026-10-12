@@ -26,6 +26,8 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/guards"
+	"github.com/arosl/nhm/internal/integrations/quota"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -72,6 +74,12 @@ type Deps struct {
 	DB    *store.DB
 	Mail  Mail
 	Now   func() time.Time
+	// Guards reports a kind's guards in a project (guards.Check); nil
+	// skips the guards.
+	Guards func(kind, projectRoot string) []guards.Result
+	// LimitsFile is the limits-seen.json that `nhm limits` keeps; "" or
+	// a missing file means no limit was seen.
+	LimitsFile string
 }
 
 // Options select and bound a build.
@@ -130,6 +138,11 @@ type Agent struct {
 
 	Binding *BindingRef `json:"binding,omitempty"`
 	Mail    *MailState  `json:"mail,omitempty"`
+	// Guards maps dcg, rch and agent_mail_stop to their states, when the
+	// guards were checked.
+	Guards map[string]guards.State `json:"guards,omitempty"`
+	// Limit is the limit line `nhm limits` last saw on the agent's screen.
+	Limit string `json:"limit,omitempty"`
 }
 
 // BindingRef is the binding of an agent's pane.
@@ -281,13 +294,55 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 	return m
 }
 
-// skipOrEnrich runs stage 3.
+// skipOrEnrich runs stage 3: the local files (guards, limits) and then
+// Agent Mail.
 func (m *Model) skipOrEnrich(ctx context.Context, deps Deps, now func() time.Time, opts Options) {
+	m.addGuards(deps.Guards)
+	m.addLimits(deps.LimitsFile)
 	if deps.Mail == nil {
 		m.Sources[SourceMail] = SourceHealth{Source: SourceMail, Status: Skipped, CollectedAt: now().UTC()}
 		return
 	}
 	m.enrichMail(ctx, deps.Mail, now, orDefault(opts.MailTimeout, defaultMailTimeout))
+}
+
+// addGuards checks each agent's guards once per kind and project: a
+// bound agent in its project, an unbound one with the user settings only.
+func (m *Model) addGuards(check func(kind, projectRoot string) []guards.Result) {
+	if check == nil {
+		return
+	}
+	cache := map[string]map[string]guards.State{}
+	for i := range m.Agents {
+		a := &m.Agents[i]
+		project := ""
+		if a.Binding != nil {
+			project = a.Binding.ProjectKey
+		}
+		key := a.Kind + "\x00" + project
+		if _, ok := cache[key]; !ok {
+			states := map[string]guards.State{}
+			for _, r := range check(a.Kind, project) {
+				states[r.Guard] = r.State
+			}
+			cache[key] = states
+		}
+		a.Guards = cache[key]
+	}
+}
+
+// addLimits marks the agents whose pane showed a limit line.
+func (m *Model) addLimits(path string) {
+	if path == "" {
+		return
+	}
+	seen, err := quota.LoadSeen(path)
+	if err != nil {
+		return
+	}
+	for i := range m.Agents {
+		m.Agents[i].Limit = seen.Lines[m.Agents[i].PaneID]
+	}
 }
 
 // ErrAmbiguousWorkspace means a label names more than one workspace.

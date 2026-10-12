@@ -3,9 +3,11 @@ package snapshot
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/guards"
 )
 
 // Attention severities.
@@ -31,6 +33,8 @@ const (
 	AttnQuotaStale        = "quota_stale"
 	AttnWakePending       = "wake_pending"
 	AttnSourceDegraded    = "source_degraded"
+	AttnUnguarded         = "agent_unguarded"
+	AttnAtLimit           = "agent_at_limit"
 )
 
 // openOperationGrace is how long an operation may run before attention
@@ -82,6 +86,24 @@ func Attention(m *Model) []Item {
 			it := base
 			it.Kind, it.Severity = AttnNameMismatch, SevWarning
 			it.Detail = fmt.Sprintf("herdr shows %q, the binding has %q", a.HerdrName, a.Binding.Alias)
+			add(it)
+		}
+		var unguarded []string
+		for _, g := range guards.Guards {
+			if st, ok := a.Guards[g]; ok && (st == guards.Missing || st == guards.Untrusted || st == guards.Stale) {
+				unguarded = append(unguarded, g+" "+string(st))
+			}
+		}
+		if len(unguarded) > 0 {
+			it := base
+			it.Kind, it.Severity = AttnUnguarded, SevWarning
+			it.Detail = fmt.Sprintf("%s runs without its guards: %s (nhm doctor says how to fix)", who, strings.Join(unguarded, ", "))
+			add(it)
+		}
+		if a.Limit != "" {
+			it := base
+			it.Kind, it.Severity = AttnAtLimit, SevWarning
+			it.Detail = fmt.Sprintf("%s stopped at a limit: %s", who, a.Limit)
 			add(it)
 		}
 		if a.Mail != nil && a.Mail.Status == Fresh {

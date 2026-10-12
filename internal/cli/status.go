@@ -17,6 +17,7 @@ import (
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/guards"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -74,7 +75,14 @@ func (r *reader) close() {
 }
 
 func (r *reader) model(ctx context.Context, projectKey string) *snapshot.Model {
-	return snapshot.Build(ctx, snapshot.Deps{Herdr: r.herdr, DB: r.db, Mail: r.mail}, snapshot.Options{ProjectKey: projectKey})
+	deps := snapshot.Deps{Herdr: r.herdr, DB: r.db, Mail: r.mail,
+		Guards: func(kind, projectRoot string) []guards.Result {
+			return guards.Check(kind, guards.Env{ProjectRoot: projectRoot})
+		}}
+	if path, err := limitsSeenPath(r.inst); err == nil {
+		deps.LimitsFile = path
+	}
+	return snapshot.Build(ctx, deps, snapshot.Options{ProjectKey: projectKey})
 }
 
 // selectWorkspace narrows the model to one session (a workspace label or
@@ -261,7 +269,7 @@ func wsLabel(m *snapshot.Model, id string) string {
 
 func printStatus(w io.Writer, m *snapshot.Model) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SESSION\tSLOT\tNAME\tKIND\tMODEL\tSTATE\tMAIL\tPANE")
+	fmt.Fprintln(tw, "SESSION\tSLOT\tNAME\tKIND\tMODEL\tSTATE\tMAIL\tGUARDS\tPANE")
 	for _, a := range m.Agents {
 		name, model := dash(a.HerdrName), "-"
 		if a.Binding != nil {
@@ -270,21 +278,45 @@ func printStatus(w io.Writer, m *snapshot.Model) {
 				name += " (herdr: " + dash(a.HerdrName) + ")"
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, a.WorkspaceID), dash(a.Slot), name, a.Kind, model,
-			a.State, mailCell(a.Mail, a.Binding != nil), a.PaneID)
+		state := string(a.State)
+		if a.Limit != "" {
+			state += " (at limit)"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, a.WorkspaceID), dash(a.Slot), name, a.Kind, model,
+			state, mailCell(a.Mail, a.Binding != nil), guardsCell(a.Guards), a.PaneID)
 	}
 	for _, b := range m.Absent {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
-			dash(b.Model), "absent", "-", dash(b.PaneID))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
+			dash(b.Model), "absent", "-", "-", dash(b.PaneID))
 	}
 	for _, b := range m.Displaced {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
-			dash(b.Model), "displaced", "-", dash(b.PaneID))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wsLabel(m, b.WorkspaceID), dash(b.Slot), b.MailName, b.Kind,
+			dash(b.Model), "displaced", "-", "-", dash(b.PaneID))
 	}
 	_ = tw.Flush()
 	if len(m.Agents)+len(m.Absent)+len(m.Displaced) == 0 {
 		fmt.Fprintln(w, "no agents")
 	}
+}
+
+// guardsCell shows "ok" when every guard the kind supports runs, else the
+// ones that do not, with their state; "-" when the guards were not checked.
+func guardsCell(states map[string]guards.State) string {
+	if states == nil {
+		return "-"
+	}
+	var bad []string
+	for _, g := range guards.Guards {
+		switch st := states[g]; st {
+		case guards.Configured, guards.VerifiedForLaunch, guards.Unsupported:
+		default:
+			bad = append(bad, g+":"+string(st))
+		}
+	}
+	if len(bad) == 0 {
+		return "ok"
+	}
+	return strings.Join(bad, ",")
 }
 
 // mailCell shows unread/pending acks, "?" when Agent Mail did not answer,

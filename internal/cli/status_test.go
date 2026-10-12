@@ -117,6 +117,44 @@ func TestStatusVerb(t *testing.T) {
 	}
 }
 
+func TestStatusShowsGuardsAndLimits(t *testing.T) {
+	s := swarmInstance(t)
+	// HOME is empty: no settings, so the guards are missing.
+	code, out, _ := run("status", "--no-mail", "--socket", s.SocketPath)
+	if code != 0 || !strings.Contains(out, "GUARDS") || !strings.Contains(out, "dcg:missing") {
+		t.Fatalf("no settings = %d\n%s", code, out)
+	}
+	home := os.Getenv("HOME")
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"hooks":{
+		"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/local/bin/dcg"},{"type":"command","command":"/usr/local/bin/rch"}]}],
+		"Stop":[{"hooks":[{"type":"command","command":"bash agent_mail_hook.sh stop"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// nhm limits saw a limit line on IcyKnoll's pane.
+	root, _ := store.StateRoot()
+	inst, err := store.Lookup(root, s.SocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inst.Dir, "limits-seen.json"), []byte(`{"lines":{"w1:p1":"usage limit reached"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = run("status", "--no-mail", "--socket", s.SocketPath)
+	icy := ""
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "IcyKnoll") {
+			icy = l
+		}
+	}
+	if code != 0 || !strings.Contains(icy, " ok ") || !strings.Contains(icy, "idle (at limit)") {
+		t.Fatalf("configured = %d\n%s", code, out)
+	}
+}
+
 func TestStatusWithMail(t *testing.T) {
 	s := swarmInstance(t)
 	mail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
