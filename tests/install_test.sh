@@ -100,7 +100,8 @@ rm "$work/releases/v$version"
 ln -s "$bad" "$work/releases/v$version"
 home="$work/home2"
 mkdir -p "$home"
-if HOME="$home" NHM_RELEASE_BASE="file://$work/releases" bash "$root/install.sh" --version "$version" 2> "$work/log3"; then
+if HOME="$home" XDG_DATA_HOME="" NHM_BIN_DIR="" NHM_RELEASE_BASE="file://$work/releases" \
+  bash "$root/install.sh" --version "$version" 2> "$work/log3"; then
   fail "tampered archive refused"
 elif grep -q 'checksum mismatch' "$work/log3" && [[ ! -e "$home/.local/share/nhm/releases/$version" ]]; then
   pass "tampered archive refused"
@@ -108,7 +109,8 @@ else
   fail "tampered archive refused: $(cat "$work/log3")"
 fi
 
-if HOME="$home" NHM_RELEASE_BASE="file://$work/releases" bash "$root/install.sh" --version "not-a-version" 2> /dev/null; then
+if HOME="$home" XDG_DATA_HOME="" NHM_BIN_DIR="" NHM_RELEASE_BASE="file://$work/releases" \
+  bash "$root/install.sh" --version "not-a-version" 2> /dev/null; then
   fail "a bad version is refused"
 else
   pass "a bad version is refused"
@@ -146,7 +148,8 @@ rm "$work/releases/v$version"
 ln -s "$dist" "$work/releases/v$version"
 pin="$(sha256sum "$dist/$newname.tar.zst" | cut -d' ' -f1)"
 pinned_install() {
-  HOME="$1" NHM_RELEASE_BASE="file://$work/releases" bash "$root/install.sh" --version "$version" "${@:2}"
+  HOME="$1" XDG_DATA_HOME="" NHM_BIN_DIR="" NHM_RELEASE_BASE="file://$work/releases" \
+    bash "$root/install.sh" --version "$version" "${@:2}"
 }
 
 home="$work/home-pin"
@@ -246,6 +249,79 @@ if pinned_install "$home" --archive-sha256 "$this=short" 2> /dev/null; then
   fail "a malformed platform pin is refused"
 else
   pass "a malformed platform pin is refused"
+fi
+
+# NHM_ARCHIVE_SHA256 with one pin per line: every line counts, not only
+# the first.
+home="$work/home-newline"
+mkdir -p "$home"
+if NHM_ARCHIVE_SHA256="$other=$wrong"$'\n'"$this=$pin" pinned_install "$home" 2> "$work/log13" &&
+  [[ "$(cat "$home/.local/share/nhm/releases/$version/.archive-sha256")" == "$pin" ]]; then
+  pass "NHM_ARCHIVE_SHA256 takes one pin per line"
+else
+  fail "NHM_ARCHIVE_SHA256 on several lines: $(cat "$work/log13")"
+fi
+
+# Two installs at once: the lock lets one unpack and the other finds it
+# unpacked. Both exit 0, and one release is left.
+home="$work/home-race"
+mkdir -p "$home"
+pinned_install "$home" 2> "$work/log14a" &
+race_a=$!
+pinned_install "$home" 2> "$work/log14b" &
+race_b=$!
+rc_a=0
+wait "$race_a" || rc_a=$?
+rc_b=0
+wait "$race_b" || rc_b=$?
+race_dirs=("$home/.local/share/nhm/releases/$version@"*)
+if ((rc_a == 0 && rc_b == 0)) && [[ ${#race_dirs[@]} -eq 1 && -d "${race_dirs[0]}" ]] &&
+  ! compgen -G "$home/.local/share/nhm/releases/$version.*" > /dev/null &&
+  "$home/.local/bin/nhm" version --json > /dev/null 2>&1; then
+  pass "two installs at once both succeed and leave one release"
+else
+  fail "two installs at once: $rc_a $rc_b, ${race_dirs[*]}: $(cat "$work/log14a" "$work/log14b")"
+fi
+
+# What a killed install left is removed by the next one; the live
+# release stays.
+mkdir -p "$home/.local/share/nhm/releases/$version@0123456789ab.1" "$home/.local/share/nhm/releases/$version.partial.1"
+if pinned_install "$home" --archive-sha256 "$pin" 2> "$work/log15" &&
+  [[ -d "${race_dirs[0]}" && ! -e "$home/.local/share/nhm/releases/$version@0123456789ab.1" ]] &&
+  [[ ! -e "$home/.local/share/nhm/releases/$version.partial.1" ]]; then
+  pass "leftovers of a killed install are removed, and the live release stays"
+else
+  fail "leftovers of a killed install: $(cat "$work/log15"); $(ls "$home/.local/share/nhm/releases")"
+fi
+
+# A release unpacked by an install.sh from before the link: a directory.
+# A pinned install puts the link in its place, current resolves, and the
+# directory goes.
+home="$work/home-legacy"
+legacy="$home/.local/share/nhm"
+mkdir -p "$legacy/releases" "$work/legacy-src"
+tar --zstd -xf "$dist/$newname.tar.zst" -C "$work/legacy-src"
+mv -T "$work/legacy-src/$newname" "$legacy/releases/$version"
+ln -s "releases/$version" "$legacy/current"
+if pinned_install "$home" --archive-sha256 "$pin" 2> "$work/log16" &&
+  [[ -L "$legacy/releases/$version" && "$(cat "$legacy/releases/$version/.archive-sha256")" == "$pin" ]] &&
+  [[ "$(readlink "$legacy/current")" == "releases/$version" ]] &&
+  ! compgen -G "$legacy/releases/$version.*" > /dev/null &&
+  "$home/.local/bin/nhm-hook" --help > /dev/null 2>&1; then
+  pass "a release directory from an older install.sh is replaced by the link"
+else
+  fail "the older layout: $(cat "$work/log16"); $(ls -l "$legacy/releases")"
+fi
+
+# A release directory without an nhm binary is replaced, pinned or not.
+home="$work/home-empty"
+mkdir -p "$home/.local/share/nhm/releases/$version"
+if pinned_install "$home" 2> "$work/log17" &&
+  [[ -L "$home/.local/share/nhm/releases/$version" ]] &&
+  "$home/.local/bin/nhm" version --json > /dev/null 2>&1; then
+  pass "a release directory without an nhm binary is replaced"
+else
+  fail "a release directory without an nhm binary: $(cat "$work/log17")"
 fi
 
 if [[ $fails -eq 0 ]]; then
