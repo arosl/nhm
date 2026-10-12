@@ -43,6 +43,10 @@ Usage:
                          send each agent its kind's interrupt key
   nhm send <session> [prompt] [selector] [-t KEY] [--op-id ID] [--wait] [--dry-run] [--json]
                          send one prompt, once, with a receipt per agent
+  nhm memory <query> [--project DIR] [--json]
+                         show the CM and CASS block a send would carry
+  nhm feedback list|mark|outcomes [--json]
+                         the rules each session got; tell CM how they did
   nhm activity <session> [--json]
                          each agent's activity in ntm's terms
   nhm health [session] [--json]
@@ -131,6 +135,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runInterrupt(args[1:], stdout, stderr)
 	case "send":
 		return runSend(args[1:], stdout, stderr)
+	case "memory":
+		return runMemory(args[1:], stdout, stderr)
+	case "feedback":
+		return runFeedback(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "--robot-") {
 			return runRobot(args, stdout, stderr)

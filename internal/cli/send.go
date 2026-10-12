@@ -12,6 +12,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
@@ -34,7 +35,8 @@ const sendUsage = `Usage: nhm send <session> [prompt] [--all | --cc | --cod | --
                 [--name N]… [--state idle|done|working|blocked]… [--limit N] [--include-self]
                 [--msg M | --msg-file F|-] [-t KEY | --template KEY] [--bead ID] [--var k=v]… [--file F|-]
                 [--when ready|any] [--force] [--wait [--until done|idle|complete] [--timeout D]]
-                [--with-memory=false] [--no-cass] [--no-cass-check]
+                [--with-memory[=false]] [--with-cass | --no-cass] [--memory-query Q]
+                [--cass-check | --no-cass-check]
                 [--op-id ID] [--dry-run] [--project DIR] [--socket PATH] [--json]
 
 Send one prompt to the selected agents of a session (a workspace id or
@@ -57,8 +59,17 @@ returns the stored receipt. nhm never resends on its own.
 Per target: submitted, possibly submitted (herdr did not confirm; never
 retried), refused or failed. --wait then waits for each target (nhm
 wait --after-op). --dry-run prints the targets and the prompt and writes
-nothing. Memory and CASS injection, --thread and --group come with later
-releases and are refused until then.
+nothing. --thread and --group come with later releases and are refused
+until then.
+
+--with-memory puts CM's rules for the prompt before it, --with-cass
+CASS's hits; both are best-effort, in a framed block of reference
+material. A rule that the agent's current context already got is left
+out. --memory-query sets the query (default: the prompt's start). The
+template's enrichment and ~/.config/nhm/config.toml give the defaults;
+flags win. The CASS duplicate check (on by default; --no-cass-check or
+--no-cass turns it off, --force skips it) warns when CASS finds the same
+work in the last 7 days. nhm memory shows the block without sending.
 
 Exit codes: 0 every target submitted; 1 an error or a partial result;
 2 refused before any dispatch; 3 the gate refused every target;
@@ -82,6 +93,9 @@ type sendFlags struct {
 	withMemory, withCASS, noCASS bool
 	cassCheck, noCassCheck       bool
 	opID, project, socket        string
+	memoryQuery                  string
+	// memorySet: --with-memory was given (true or false).
+	memorySet bool
 }
 
 func runSend(args []string, stdout, stderr io.Writer) int {
@@ -115,10 +129,11 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&f.until, "until", string(wait.UntilComplete), "with --wait: done, idle or complete")
 	fs.DurationVar(&f.timeout, "timeout", defaultWaitTimeout, "with --wait: the longest wait")
 	fs.DurationVar(&f.poll, "poll", wait.DefaultPoll, "with --wait: the longest sleep between reads")
-	fs.BoolVar(&f.withMemory, "with-memory", false, "inject CM memory (comes with nhm.memory)")
-	fs.BoolVar(&f.withCASS, "with-cass", false, "inject CASS context (comes with nhm.memory)")
-	fs.BoolVar(&f.noCASS, "no-cass", false, "no CASS context")
-	fs.BoolVar(&f.cassCheck, "cass-check", false, "the CASS duplicate check (comes with nhm.memory)")
+	fs.BoolVar(&f.withMemory, "with-memory", false, "put CM's rules before the prompt (best-effort)")
+	fs.BoolVar(&f.withCASS, "with-cass", false, "put CASS's hits before the prompt (best-effort)")
+	fs.BoolVar(&f.noCASS, "no-cass", false, "no CASS context and no duplicate check")
+	fs.StringVar(&f.memoryQuery, "memory-query", "", "the CM and CASS query (default: the prompt's start)")
+	fs.BoolVar(&f.cassCheck, "cass-check", false, "the CASS duplicate check (the default)")
 	fs.BoolVar(&f.noCassCheck, "no-cass-check", false, "no CASS duplicate check")
 	fs.StringVar(&f.thread, "thread", "", "an Agent Mail thread (comes with nhm.wake)")
 	fs.StringVar(&f.group, "group", "", "a spawn group (comes with nhm.spawn)")
@@ -142,6 +157,14 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	}
 	req, err := f.request(prompt)
 	if err != nil {
+		return refuse(err)
+	}
+	fs.Visit(func(fl *flag.Flag) { f.memorySet = f.memorySet || fl.Name == "with-memory" })
+	cfg, err := loadEnrichConfig()
+	if err != nil {
+		return refuse(err)
+	}
+	if req.Enrich, err = f.enrichment(cfg); err != nil {
 		return refuse(err)
 	}
 	until, err := wait.ParseUntil(f.until)
@@ -188,9 +211,6 @@ func laterFlags(fs *flag.FlagSet, f sendFlags) error {
 	var later []string
 	fs.Visit(func(fl *flag.Flag) {
 		switch {
-		case fl.Name == "with-memory" && f.withMemory, fl.Name == "with-cass" && f.withCASS,
-			fl.Name == "cass-check" && f.cassCheck:
-			later = append(later, "--"+fl.Name+" (nhm.memory, acfs-9hkh.21)")
 		case fl.Name == "thread":
 			later = append(later, "--thread (nhm.wake, acfs-9hkh.15)")
 		case fl.Name == "group":
@@ -322,8 +342,12 @@ func (ie *instanceEnv) fillScope(ctx context.Context, req *send.Request, session
 }
 
 func (ie *instanceEnv) sendEnv() send.Env {
-	return send.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, InstanceDir: ie.inst.Dir,
+	env := send.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, InstanceDir: ie.inst.Dir,
 		Inode: func() uint64 { return wait.SocketInode(ie.herdr.SocketPath) }, Bead: send.BrShow, History: history.Append}
+	// A config error refused the send before; here the defaults serve.
+	cfg, _ := loadEnrichConfig()
+	env.CM, env.CASS, env.Budgets = enrichClients(cfg)
+	return env
 }
 
 // runSendCore runs a send under the owner lock; a dry run reads only and
@@ -485,7 +509,6 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
 	}
-	_ = noCASS
 	switch *format {
 	case "auto", "json":
 		*format = "json"
@@ -493,9 +516,17 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
 			"use --robot-format=json", "json", robotError, now)
 	}
+	cfg, err := loadEnrichConfig()
+	if err != nil {
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, err.Error(), "fix ~/.config/nhm/config.toml", *format, robotError, now)
+	}
+	// Robot sends never run the duplicate check (plan-v8 2.13).
+	enrichment := send.Enrichment{DefaultCM: cfg.Memory.CM, DefaultCASS: cfg.CASS.Context}
 	if *withMemory {
-		return robotFail(stdout, "NOT_IMPLEMENTED", "--with-memory comes with nhm.memory (acfs-9hkh.21)",
-			"pass --with-memory=false", *format, robotUnavailable, now)
+		enrichment.CM = enrich.BestEffort
+	}
+	if *noCASS {
+		enrichment.CASS = enrich.Off
 	}
 	ie, err := openInstance(*socket)
 	if err != nil {
@@ -526,7 +557,7 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 		text = *msg
 	}
 	req := send.Request{Message: text, OperationID: *opID, DryRun: *dryRun, Source: history.SourceRobot,
-		Caller: os.Getenv("HERDR_PANE_ID"), Selector: send.Selector{All: *all, Panes: panes, Kinds: types}}
+		Caller: os.Getenv("HERDR_PANE_ID"), Selector: send.Selector{All: *all, Panes: panes, Kinds: types}, Enrich: enrichment}
 	if err := ie.fillScope(ctx, &req, *sendS, ""); err != nil {
 		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "list sessions: nhm --robot-status", *format, robotError, now)
 	}

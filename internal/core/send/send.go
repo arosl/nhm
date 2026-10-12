@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/templates"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
@@ -71,6 +72,10 @@ type Env struct {
 	Bead func(ctx context.Context, projectRoot, id string) (Bead, error)
 	// History appends a line to history.jsonl; nil skips it.
 	History func(*history.HistoryEntry) error
+	// CM and CASS serve the enrichment; nil is "not installed".
+	CM      enrich.CM
+	CASS    enrich.CASS
+	Budgets enrich.Budgets
 }
 
 func (e Env) now() time.Time {
@@ -107,14 +112,50 @@ type Request struct {
 	Source      history.Source
 	// Scope is recorded with the operation.
 	Scope any
+	// Enrich is the CM and CASS enrichment and the duplicate check.
+	// Internal prompts (wake, naming) leave it empty.
+	Enrich Enrichment
 }
 
-// Injection reports a memory or CASS injection. nhm.memory fills it;
-// until then nothing is injected.
-type Injection struct {
-	Enabled       bool   `json:"enabled"`
-	SkippedReason string `json:"skipped_reason,omitempty"`
+// Enrichment is a send's CM and CASS part (plan-v8 2.13).
+type Enrichment struct {
+	// CM and CASS are the explicit flags; empty is not given. Explicit
+	// flags win over the template's enrichment, which wins over the
+	// defaults (the user's config).
+	CM, CASS               enrich.Mode
+	DefaultCM, DefaultCASS enrich.Mode
+	// Query is the query for both sources; empty: the prompt's start.
+	Query string
+	// Check runs the CASS duplicate check over the last CheckDays; it
+	// only warns. --force skips it.
+	Check     bool
+	CheckDays int
 }
+
+// resolve applies the precedence: flag, template, default.
+func (e Enrichment) resolve(tmpl *templates.Template) (cmMode, cassMode enrich.Mode, err error) {
+	pick := func(flag, def enrich.Mode, source string) (enrich.Mode, error) {
+		if flag != "" {
+			return flag, nil
+		}
+		if tmpl != nil && tmpl.Enrichment[source] != "" {
+			m, err := enrich.ParseMode(tmpl.Enrichment[source])
+			if err != nil {
+				return enrich.Off, fmt.Errorf("template %s: enrichment %s: %w", tmpl.Name, source, err)
+			}
+			return m, nil
+		}
+		return enrich.ParseMode(string(def))
+	}
+	if cmMode, err = pick(e.CM, e.DefaultCM, enrich.SourceCM); err != nil {
+		return
+	}
+	cassMode, err = pick(e.CASS, e.DefaultCASS, enrich.SourceCASS)
+	return
+}
+
+// Injection reports what one source retrieved for the send.
+type Injection = enrich.Report
 
 // Result is a send's outcome: from this run, or the stored one of an
 // operation id claimed before.
@@ -133,16 +174,21 @@ type Result struct {
 	PayloadSHA256 string      `json:"payload_sha256"`
 	PayloadBytes  int64       `json:"payload_bytes"`
 	// Rendered holds each target's prompt, for a dry run only.
-	Rendered        []string   `json:"rendered,omitempty"`
-	MemoryInjection Injection  `json:"memory_injection"`
-	CASSInjection   Injection  `json:"cass_injection"`
-	CreatedAt       time.Time  `json:"created_at"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	Warnings        []string   `json:"warnings"`
+	Rendered        []string  `json:"rendered,omitempty"`
+	MemoryInjection Injection `json:"memory_injection"`
+	CASSInjection   Injection `json:"cass_injection"`
+	// Injections is each target's items: included, omitted (with the
+	// reason) or suppressed as already present in its context.
+	Injections []enrich.TargetInjection `json:"injections,omitempty"`
+	// Duplicates is what the CASS duplicate check found.
+	Duplicates  []enrich.Similar `json:"cass_check,omitempty"`
+	CreatedAt   time.Time        `json:"created_at"`
+	CompletedAt *time.Time       `json:"completed_at,omitempty"`
+	Warnings    []string         `json:"warnings"`
 }
 
-// notInjected is the injection report until nhm.memory.
-var notInjected = Injection{Enabled: false, SkippedReason: "memory and CASS injection come with nhm.memory"}
+// notInjected is the report of a source that is off.
+var notInjected = Injection{Enabled: false, Mode: enrich.Off, SkippedReason: "off"}
 
 // Counts sums up the receipts.
 func (r Result) Counts() map[string]int {
@@ -167,6 +213,9 @@ type opRecord struct {
 	BeadID        string            `json:"bead_id,omitempty"`
 	WhenAny       bool              `json:"when_any,omitempty"`
 	Force         bool              `json:"force,omitempty"`
+	CM            enrich.Mode       `json:"cm,omitempty"`
+	CASS          enrich.Mode       `json:"cass,omitempty"`
+	MemoryQuery   string            `json:"memory_query,omitempty"`
 }
 
 // opScope is the operation row's scope: the caller's scope, the session
@@ -178,6 +227,9 @@ type opScope struct {
 	PayloadSHA256 string `json:"payload_sha256"`
 	PayloadBytes  int64  `json:"payload_bytes"`
 	Preview       string `json:"message_preview"`
+	// The retrieval reports, without the items' text.
+	MemoryInjection *Injection `json:"memory_injection,omitempty"`
+	CASSInjection   *Injection `json:"cass_injection,omitempty"`
 }
 
 // Errors.
@@ -211,7 +263,8 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 	res := Result{Session: req.Session, WorkspaceID: req.WorkspaceID, Warnings: []string{},
 		MemoryInjection: notInjected, CASSInjection: notInjected}
 	record := opRecord{WorkspaceID: req.WorkspaceID, ProjectKey: req.ProjectKey, Selector: req.Selector,
-		Template: req.Template, Vars: req.Vars, BeadID: req.BeadID, WhenAny: req.WhenAny, Force: req.Force}
+		Template: req.Template, Vars: req.Vars, BeadID: req.BeadID, WhenAny: req.WhenAny, Force: req.Force,
+		CM: req.Enrich.CM, CASS: req.Enrich.CASS, MemoryQuery: req.Enrich.Query}
 	record.MessageSHA256, _ = Digest(req.Message)
 	if req.FileContent != "" {
 		record.FileSHA256, _ = Digest(req.FileContent)
@@ -252,6 +305,10 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 	if err != nil {
 		return res, err
 	}
+	ex, err := enrichTargets(ctx, env, req, tmpl, shared, targets, payloads, &res)
+	if err != nil {
+		return res, err
+	}
 	res.PayloadSHA256, res.PayloadBytes = Digest(shared)
 	if len(payloads) > 0 && allEqual(payloads) {
 		res.PayloadSHA256, res.PayloadBytes = Digest(payloads[0])
@@ -277,7 +334,8 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 	now := env.now()
 	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: Verb,
 		Scope: opScope{Scope: req.Scope, Session: req.Session, WorkspaceID: req.WorkspaceID,
-			PayloadSHA256: res.PayloadSHA256, PayloadBytes: res.PayloadBytes, Preview: res.Preview},
+			PayloadSHA256: res.PayloadSHA256, PayloadBytes: res.PayloadBytes, Preview: res.Preview,
+			MemoryInjection: reportOf(res.MemoryInjection), CASSInjection: reportOf(res.CASSInjection)},
 		Request: record}, now)
 	if err != nil {
 		return res, err
@@ -306,6 +364,14 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 	for _, rc := range receipts {
 		if err := rdb.insert(ctx, rc); err != nil {
+			return res, err
+		}
+	}
+	// An exposure for every target, before any prompt: the receipt's
+	// status later says whether the target got it.
+	for i := range ex {
+		ex[i].OperationID = res.OperationID
+		if err := enrich.Record(ctx, env.DB, ex[i], now); err != nil {
 			return res, err
 		}
 	}
@@ -346,6 +412,8 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 	out, err := Stored(ctx, env.DB, res.OperationID)
 	out.Replayed, out.Candidates = false, candidates
+	// This run's warnings and duplicate check; a replay has neither.
+	out.Warnings, out.Duplicates = res.Warnings, res.Duplicates
 	return out, err
 }
 
@@ -567,6 +635,15 @@ func Stored(ctx context.Context, db *store.DB, opID string) (Result, error) {
 		MemoryInjection: notInjected, CASSInjection: notInjected, CreatedAt: op.CreatedAt, CompletedAt: op.CompletedAt,
 		Warnings: []string{}}
 	res.InProgress = op.CompletedAt == nil
+	if sc.MemoryInjection != nil {
+		res.MemoryInjection = *sc.MemoryInjection
+	}
+	if sc.CASSInjection != nil {
+		res.CASSInjection = *sc.CASSInjection
+	}
+	if res.Injections, err = enrich.Exposures(ctx, db, opID); err != nil {
+		return res, err
+	}
 	if res.Targets, err = Receipts(ctx, db, opID); err != nil {
 		return res, err
 	}

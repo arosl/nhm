@@ -176,6 +176,23 @@ ALTER TABLE bindings ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE slots ADD COLUMN tab_id TEXT;
 CREATE INDEX slots_binding ON slots (binding_id);
 `,
+	// 3 (nhm.memory): an injection row per target and source. The target's
+	// receipt says whether it was submitted; context_generation says which
+	// context of the agent got it; items_json lists each item as included,
+	// omitted or suppressed. A feedback row has a durable key, so a repeated
+	// mark or implicit outcome is a no-op.
+	`
+ALTER TABLE injections ADD COLUMN target_index INTEGER;
+ALTER TABLE injections ADD COLUMN generation INTEGER;
+ALTER TABLE injections ADD COLUMN context_generation TEXT;
+ALTER TABLE injections ADD COLUMN mode TEXT;
+ALTER TABLE injections ADD COLUMN bead_id TEXT;
+CREATE INDEX injections_context ON injections (binding_id, context_generation);
+CREATE INDEX injections_operation ON injections (operation_id, target_index);
+ALTER TABLE feedback ADD COLUMN feedback_key TEXT;
+ALTER TABLE feedback ADD COLUMN rule_ids TEXT;
+CREATE UNIQUE INDEX feedback_key ON feedback (feedback_key) WHERE feedback_key IS NOT NULL;
+`,
 }
 
 // SchemaVersion is the user_version this build writes.

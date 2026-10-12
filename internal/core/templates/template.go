@@ -2,7 +2,7 @@
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
 // Local changes: this header; nhm's placeholders of plan-v8 2.3 in
 // ExecutionContext: agent (the Agent Mail name), herdr (the herdr name),
-// model, thread, project and group.
+// model, thread, project and group; Template.Enrichment (plan-v8 2.13).
 
 // Package templates provides prompt template loading, parsing, and variable substitution.
 package templates
@@ -19,9 +19,12 @@ type Template struct {
 	Description string         `yaml:"description"`
 	Variables   []VariableSpec `yaml:"variables"`
 	Tags        []string       `yaml:"tags,omitempty"`
-	Body        string         `yaml:"-"` // The template body (not in frontmatter)
-	Source      TemplateSource `yaml:"-"` // Where this template came from
-	SourcePath  string         `yaml:"-"` // File path if from file
+	// Enrichment is the template's CM and CASS modes, by source ("cm",
+	// "cass"): off, best-effort or required. Explicit send flags win.
+	Enrichment map[string]string `yaml:"enrichment,omitempty"`
+	Body       string            `yaml:"-"` // The template body (not in frontmatter)
+	Source     TemplateSource    `yaml:"-"` // Where this template came from
+	SourcePath string            `yaml:"-"` // File path if from file
 }
 
 // VariableSpec describes a template variable.

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -140,7 +141,7 @@ func TestSendVerb(t *testing.T) {
 		t.Fatalf("target = %v", tg)
 	}
 	for _, args := range [][]string{
-		{"send", "swarm", "x", "--with-memory", "--socket", sock},
+		{"send", "swarm", "x", "--with-cass", "--no-cass", "--socket", sock},
 		{"send", "swarm", "x", "--thread", "t1", "--socket", sock},
 		{"send", "swarm", "x", "--msg", "y", "--socket", sock},
 		{"send", "swarm", "--socket", sock},
@@ -240,8 +241,12 @@ func TestRobotSendContract(t *testing.T) {
 	if code != 1 || busy["success"] != false || len(busy["failed"].([]any)) != 1 {
 		t.Fatalf("busy = %d %v", code, busy)
 	}
-	if m, code := robotJSON(t, "--robot-send=swarm", "--msg=hi", "--with-memory", sock); code != 2 || m["error_code"] != "NOT_IMPLEMENTED" {
-		t.Fatalf("with memory = %d %v", code, m)
+	// --with-memory is best-effort: without cm the send goes on, and the
+	// injection says why it is empty.
+	m, _ := robotJSON(t, "--robot-send=swarm", "--msg=hi", "--with-memory", sock)
+	mi, _ := m["memory_injection"].(map[string]any)
+	if mi["enabled"] != true || !strings.Contains(fmt.Sprint(mi["skipped_reason"]), "cm is not installed") {
+		t.Fatalf("with memory = %v", m)
 	}
 }
 

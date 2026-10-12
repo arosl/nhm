@@ -110,8 +110,8 @@ func SendOutput(res Result, format string, now time.Time) robot.SendOutput {
 	out := robot.SendOutput{RobotResponse: robot.NewResponse(true, format, now), Session: res.Session, SentAt: now.UTC(),
 		Redaction: robot.RedactionSummary{Mode: "off"}, Warnings: res.Warnings, Targets: p.targets,
 		Successful: p.successful, Failed: p.failed, MessagePreview: res.Preview, DryRun: res.DryRun,
-		CASSInjection:   &robot.CASSInjectionInfo{Enabled: res.CASSInjection.Enabled, SkippedReason: res.CASSInjection.SkippedReason},
-		MemoryInjection: &robot.CMInjectionInfo{Enabled: res.MemoryInjection.Enabled, SkippedReason: res.MemoryInjection.SkippedReason},
+		CASSInjection:   cassInfo(res),
+		MemoryInjection: memoryInfo(res),
 		Operation:       operation(res, p), NHM: nhmExtras(res)}
 	if out.Warnings == nil {
 		out.Warnings = []string{}
