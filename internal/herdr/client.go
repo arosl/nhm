@@ -67,6 +67,7 @@ var methodResults = map[string][]string{
 	"pane.report_agent_session": {"ok"},
 	"pane.report_metadata":      {"ok"},
 	"pane.close":                {"ok"},
+	"workspace.close":           {"ok"},
 	"popup.close":               {"ok"},
 	"events.subscribe":          {"subscription_started"},
 	"events.wait":               {"wait_matched"},

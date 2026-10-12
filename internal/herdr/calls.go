@@ -212,6 +212,12 @@ func (c *Client) PaneClose(ctx context.Context, paneID string) error {
 	return c.call(ctx, "pane.close", paneParams{PaneID: paneID}, nil, 0)
 }
 
+// WorkspaceClose closes a workspace with its tabs and panes, and ends
+// their processes.
+func (c *Client) WorkspaceClose(ctx context.Context, workspaceID string) error {
+	return c.call(ctx, "workspace.close", workspaceCloseParams{WorkspaceID: workspaceID}, nil, 0)
+}
+
 // PopupClose closes the open popup; CodePopupNotOpen when there is none.
 func (c *Client) PopupClose(ctx context.Context) error {
 	return c.call(ctx, "popup.close", nil, nil, 0)

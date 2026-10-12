@@ -16,6 +16,14 @@ var ErrTargetBusy = errors.New("another nhm writer holds this agent")
 // lockPoll is how often a waiting lock tries again.
 const lockPoll = 50 * time.Millisecond
 
+// LockTarget takes a binding's mutation lock, the one send takes per
+// target: recycle holds it through its stages, so sends and wakes skip
+// the agent, and retire takes it to see that nothing else acts on it. ctx
+// bounds the wait; ErrTargetBusy when it ends.
+func LockTarget(ctx context.Context, instanceDir, bindingID string) (func(), error) {
+	return lockTarget(ctx, instanceDir, bindingID)
+}
+
 // lockTarget takes the target's mutation lock: an exclusive flock on
 // <instance>/locks/<binding_id>.lock. It coordinates nhm's own writers
 // only; a human typing or a direct herdr prompt is not excluded.

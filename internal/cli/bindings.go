@@ -305,6 +305,9 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 	if len(args) >= 2 && args[0] == "instance" && args[1] == "enroll" {
 		return runInstanceEnroll(args[2:], stdout, stderr)
 	}
+	if code, ok := runAdminLifecycle(args, stdout, stderr); ok {
+		return code
+	}
 	fmt.Fprint(stderr, enrollUsage+"\n"+recoverUsage)
 	return exitRefused
 }

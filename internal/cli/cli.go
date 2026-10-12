@@ -29,6 +29,16 @@ Usage:
   nhm spawn <session> [--cc=N[:MODEL]] [--cod=N] … [--prompt T] [--dry-run] [--json]
                          start agents: identity, pane, binding, kickoff
   nhm add <session> …    the same, into an existing workspace
+  nhm retire <Name> [--keep-identity] [--cleanup-worktrees] [--dry-run]
+                         close an agent's pane, keep its transcript, retire its identity
+  nhm recycle <Name> [-t KEY | --prompt T] [--no-handoff]
+                         a fresh session in the same pane, with a handoff
+  nhm reap [session] [--idle MIN] [--all-workspaces] [--dry-run]
+                         retire agents idle past the limit whose work is done
+  nhm kill <session> [--yes]
+                         retire every agent of a workspace, then close it
+  nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
+  nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm new <session>      create the workspace only
   nhm status [session] [--watch] [--json]
                          one row per agent: slot, name, kind, state, mail
@@ -119,6 +129,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runResolve(args[1:], stdout, stderr)
 	case "adopt":
 		return runAdopt(args[1:], stdout, stderr)
+	case "retire":
+		return runRetire(args[1:], stdout, stderr)
+	case "recycle":
+		return runRecycle(args[1:], stdout, stderr)
+	case "reap":
+		return runReap(args[1:], stdout, stderr)
+	case "kill":
+		return runKill(args[1:], stdout, stderr)
 	case "spawn":
 		return runSpawn(args[1:], stdout, stderr)
 	case "add":

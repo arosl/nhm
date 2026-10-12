@@ -42,6 +42,7 @@ var paramTypes = map[string]any{
 	"pane.report_agent_session": ReportAgentSessionParams{},
 	"pane.report_metadata":      ReportMetadataParams{},
 	"pane.close":                paneParams{},
+	"workspace.close":           workspaceCloseParams{},
 	"events.subscribe":          subscribeParams{},
 	"events.wait":               eventsWaitParams{},
 	"pane.wait_for_output":      WaitForOutputParams{},

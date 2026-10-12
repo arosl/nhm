@@ -167,6 +167,10 @@ type paneParams struct {
 	PaneID string `json:"pane_id"`
 }
 
+type workspaceCloseParams struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
 type sendKeysParams struct {
 	Target string   `json:"target"`
 	Keys   []string `json:"keys"`
