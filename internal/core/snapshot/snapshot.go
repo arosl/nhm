@@ -373,7 +373,7 @@ func (m *Model) addBeads(ctx context.Context, list func(context.Context, string)
 			}
 			if ids := beads[a.Binding.MailName]; len(ids) > 0 {
 				sorted := append([]string(nil), ids...)
-				sort.Strings(sorted)
+				sort.Slice(sorted, func(i, j int) bool { return beadLess(sorted[i], sorted[j]) })
 				a.Bead, a.Beads = &sorted[0], sorted
 			}
 		}
@@ -382,6 +382,40 @@ func (m *Model) addBeads(ctx context.Context, list func(context.Context, string)
 		}
 		return nil
 	})
+}
+
+// beadLess orders bead ids with their numbers as numbers: acfs-9 before
+// acfs-10, acfs-9hkh.9 before acfs-9hkh.84.
+func beadLess(a, b string) bool {
+	for a != "" && b != "" {
+		da, db := digitRun(a), digitRun(b)
+		if da > 0 && db > 0 {
+			na := strings.TrimLeft(a[:da], "0")
+			nb := strings.TrimLeft(b[:db], "0")
+			if len(na) != len(nb) {
+				return len(na) < len(nb)
+			}
+			if na != nb {
+				return na < nb
+			}
+			a, b = a[da:], b[db:]
+			continue
+		}
+		if a[0] != b[0] {
+			return a[0] < b[0]
+		}
+		a, b = a[1:], b[1:]
+	}
+	return len(a) < len(b)
+}
+
+// digitRun is the length of s's leading run of ASCII digits.
+func digitRun(s string) int {
+	n := 0
+	for n < len(s) && s[n] >= '0' && s[n] <= '9' {
+		n++
+	}
+	return n
 }
 
 // addLimits marks the agents whose pane showed a limit line.

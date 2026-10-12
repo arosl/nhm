@@ -89,10 +89,20 @@ var beadsInProgress = func(ctx context.Context, root string) (map[string][]strin
 }
 
 func (r *reader) model(ctx context.Context, projectKey string) *snapshot.Model {
-	deps := snapshot.Deps{Herdr: r.herdr, DB: r.db, Mail: r.mail, Beads: beadsInProgress,
+	return r.build(ctx, projectKey, false)
+}
+
+// build is model with each agent's bead read too (withBeads): only nhm
+// status shows beads, so the other readers never run br, and a host
+// without it does not degrade their health (acfs-9hkh.82).
+func (r *reader) build(ctx context.Context, projectKey string, withBeads bool) *snapshot.Model {
+	deps := snapshot.Deps{Herdr: r.herdr, DB: r.db, Mail: r.mail,
 		Guards: func(kind, projectRoot string) []guards.Result {
 			return guards.Check(kind, guards.Env{ProjectRoot: projectRoot})
 		}}
+	if withBeads {
+		deps.Beads = beadsInProgress
+	}
 	if path, err := limitsSeenPath(r.inst); err == nil {
 		deps.LimitsFile = path
 	}
@@ -161,6 +171,7 @@ type readVerb struct {
 	session  bool // takes an optional session argument
 	needSess bool // the session is required
 	withMail bool
+	withBead bool // read each agent's bead (nhm status only)
 	extra    func(fs *flag.FlagSet)
 	run      func(ctx context.Context, r *reader, m *snapshot.Model, ws *snapshot.Workspace, f readFlags) (any, func(io.Writer), error)
 }
@@ -200,7 +211,7 @@ func (v readVerb) main(args []string, stdout, stderr io.Writer) int {
 		return output(stdout, stderr, *f.asJSON, env, err, exitError, nil)
 	}
 	defer r.close()
-	m := r.model(ctx, project)
+	m := r.build(ctx, project, v.withBead)
 	m, ws, err := selectWorkspace(m, session)
 	env.Warnings = append(env.Warnings, r.warnings...)
 	if err != nil {
@@ -231,7 +242,7 @@ warning, never zeros. --watch redraws on herdr's events and every 30 s.
 func runStatus(args []string, stdout, stderr io.Writer) int {
 	var interval *time.Duration
 	var count *int
-	v := readVerb{name: "status", usage: statusUsage, session: true, withMail: true,
+	v := readVerb{name: "status", usage: statusUsage, session: true, withMail: true, withBead: true,
 		extra: func(fs *flag.FlagSet) {
 			fs.Bool("watch", false, "redraw on changes")
 			interval = fs.Duration("interval", 30*time.Second, "full refresh interval with --watch")

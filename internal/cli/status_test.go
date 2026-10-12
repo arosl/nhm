@@ -160,6 +160,23 @@ func TestStatusShowsEachAgentsBead(t *testing.T) {
 	if code != 0 || !strings.Contains(errOut, "beads is unavailable") || strings.Contains(out, "acfs-3") {
 		t.Fatalf("beads down = %d\n%s%s", code, out, errOut)
 	}
+	// Only status reads beads: the other readers never run br, so a host
+	// without it does not degrade their health.
+	calls := 0
+	beadsInProgress = func(context.Context, string) (map[string][]string, error) {
+		calls++
+		return nil, errors.New("br: not found")
+	}
+	for _, verb := range []string{"snapshot", "health", "attention", "--robot-status"} {
+		args := []string{verb, "swarm", "--no-mail", "--socket", s.SocketPath}
+		if verb == "--robot-status" {
+			args = []string{verb, "--socket", s.SocketPath}
+		}
+		code, out, errOut = run(args...)
+		if calls != 0 || strings.Contains(errOut+out, "beads is unavailable") {
+			t.Fatalf("%s read beads (%d calls) = %d\n%s%s", verb, calls, code, out, errOut)
+		}
+	}
 }
 
 func TestStatusShowsGuardsAndLimits(t *testing.T) {

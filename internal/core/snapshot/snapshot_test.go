@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -137,19 +138,29 @@ func TestBuildJoinsHerdrAndBindings(t *testing.T) {
 // read once per project; null when it has none, when the agent is
 // unbound, or when the project's beads cannot be read (then the source
 // is degraded and names the project).
+func TestBeadLess(t *testing.T) {
+	ids := []string{"acfs-9hkh.84", "b-1", "acfs-10", "acfs-9hkh.9", "acfs-9", "acfs-9hkh"}
+	sort.Slice(ids, func(i, j int) bool { return beadLess(ids[i], ids[j]) })
+	want := "acfs-9,acfs-9hkh,acfs-9hkh.9,acfs-9hkh.84,acfs-10,b-1"
+	if got := strings.Join(ids, ","); got != want {
+		t.Fatalf("order %s, want %s", got, want)
+	}
+}
+
 func TestBuildAddsEachAgentsBead(t *testing.T) {
 	db, h := setup(t)
 	calls := map[string]int{}
 	beads := func(_ context.Context, root string) (map[string][]string, error) {
 		calls[root]++
-		return map[string][]string{"IcyKnoll": {"acfs-2", "acfs-1"}, "Somebody": {"acfs-9"}}, nil
+		return map[string][]string{"IcyKnoll": {"acfs-10", "acfs-9"}, "Somebody": {"acfs-5"}}, nil
 	}
 	m := Build(context.Background(), Deps{Herdr: h, DB: db, Beads: beads}, Options{})
 	if calls["/p"] != 1 || len(calls) != 1 || m.Sources[SourceBeads].Status != Fresh {
 		t.Fatalf("calls %v, source %+v", calls, m.Sources[SourceBeads])
 	}
 	icy, blue, unbound := m.Agents[0], m.Agents[1], m.Agents[2]
-	if icy.Bead == nil || *icy.Bead != "acfs-1" || strings.Join(icy.Beads, ",") != "acfs-1,acfs-2" {
+	// By number: acfs-9 before acfs-10.
+	if icy.Bead == nil || *icy.Bead != "acfs-9" || strings.Join(icy.Beads, ",") != "acfs-9,acfs-10" {
 		t.Fatalf("IcyKnoll bead %v beads %v", icy.Bead, icy.Beads)
 	}
 	if blue.Bead != nil || unbound.Bead != nil || unbound.Beads != nil {
