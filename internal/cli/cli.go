@@ -57,6 +57,8 @@ Usage:
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
                          bind an identity to the agent in a pane, by hand
+  nhm admin instance enroll [--session NAME] [--socket PATH] [--json]
+                         enroll a herdr server (ACFS's install runs it)
   nhm admin recover reconcile --import-only [--dry-run] [--json]
                          read Bash-spawned agents into bindings
   nhm help               print this text

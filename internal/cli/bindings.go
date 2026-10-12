@@ -302,7 +302,10 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 	if len(args) >= 2 && args[0] == "recover" && args[1] == "reconcile" {
 		return runRecoverReconcile(args[2:], stdout, stderr)
 	}
-	fmt.Fprint(stderr, recoverUsage)
+	if len(args) >= 2 && args[0] == "instance" && args[1] == "enroll" {
+		return runInstanceEnroll(args[2:], stdout, stderr)
+	}
+	fmt.Fprint(stderr, enrollUsage+"\n"+recoverUsage)
 	return exitRefused
 }
 
