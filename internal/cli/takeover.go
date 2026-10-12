@@ -23,7 +23,7 @@ import (
 // mutators hold it shared through bounded steps only.
 const switchLockWait = 60 * time.Second
 
-const takeoverUsage = `Usage: nhm admin takeover (--dry-run | --yes) [--socket PATH] [--json]
+const takeoverUsage = `Usage: nhm admin takeover (--dry-run | --yes) [--exclude NAME]… [--socket PATH] [--json]
        nhm admin handback (--dry-run | --yes) [--socket PATH] [--json]
 
 takeover makes nhm the owner of this herdr server (the operator's step;
@@ -34,7 +34,10 @@ state and agents.toml's keep list; 'admin recover reconcile' reads the
 agents the Bash spawned into bindings. Mail the Bash already woke an
 agent for is marked announced, so nhm does not nudge for it again. nhm's
 keep list must cover the Bash's. Any entry that cannot be imported
-refuses, and the Bash stays the owner. It deletes nothing of the Bash's.
+refuses, and the Bash stays the owner: an agent the import skips, or a
+token that no binding takes. --exclude NAME (an Agent Mail name, a herdr
+name or a pane id; repeatable) leaves that agent behind on purpose, and
+the report lists it. It deletes nothing of the Bash's.
 
 handback gives the server back to the Bash: it hands the tokens, each
 agent's wake state and the keep list to 'acfs agents import', and refuses,
@@ -80,7 +83,13 @@ func runSwitch(verb string, args []string, stdout, stderr io.Writer) int {
 	yes := fs.Bool("yes", false, "do it")
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
+	var exclude listFlag
+	fs.Var(&exclude, "exclude", "takeover: an agent to leave behind (repeatable)")
 	pos, err := parseInterleaved(fs, args)
+	if err == nil && verb == "handback" && len(exclude) > 0 {
+		fmt.Fprintln(stderr, "nhm admin handback: --exclude is a takeover flag")
+		err = errors.New("--exclude")
+	}
 	if err != nil || len(pos) > 0 || *dryRun == *yes {
 		if err == nil {
 			fmt.Fprint(stderr, takeoverUsage)
@@ -97,6 +106,7 @@ func runSwitch(verb string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
+	oenv.Exclude = exclude
 	// SIGINT and SIGTERM cancel the run instead of killing the process,
 	// so a handback removes its token files on the way out; the owner
 	// stays as it was.
@@ -146,6 +156,9 @@ func printSwitch(w io.Writer, verb string, rep owner.Report) {
 	}
 	if len(rep.Keep) > 0 {
 		fmt.Fprintf(w, "keep: %s\n", strings.Join(rep.Keep, ", "))
+	}
+	if len(rep.Excluded) > 0 {
+		fmt.Fprintf(w, "left behind (--exclude): %s\n", strings.Join(rep.Excluded, ", "))
 	}
 	switch {
 	case rep.DryRun:

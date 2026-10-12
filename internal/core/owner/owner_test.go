@@ -115,6 +115,9 @@ func newWorld(t *testing.T) *world {
 		},
 		Keep: func() ([]string, error) { return w.keep, nil },
 		Now:  func() time.Time { return time.Date(2026, 10, 12, 7, 0, 0, 0, time.UTC) },
+		// export's GhostOwl token names no project, so no binding takes it;
+		// these tests leave it behind on purpose (acfs-9hkh.80).
+		Exclude: []string{"GhostOwl"},
 	}
 	w.env.Events = w.events
 	w.b, err = w.env.Bindings.Create(context.Background(), bindings.New{MailName: "IcyKnoll", MailProjectKey: "/p", ProjectID: "proj",
@@ -188,6 +191,9 @@ func TestTakeoverAndHandback(t *testing.T) {
 	}
 	if actions["IcyKnoll"] != ActionKept || actions["GhostOwl"] != ActionACFSOnly {
 		t.Fatalf("tokens = %+v", rep.Tokens)
+	}
+	if len(rep.Excluded) != 1 || rep.Excluded[0] != "GhostOwl" {
+		t.Fatalf("excluded = %v", rep.Excluded)
 	}
 	if tok, err := store.ReadSecret(w.env.InstanceDir, w.b.ID); err != nil || tok != "tok-icy" {
 		t.Fatalf("token = %q %v", tok, err)
@@ -359,6 +365,63 @@ func TestTakeoverRefusals(t *testing.T) {
 			}
 			if _, err := store.ReadSecret(w.env.InstanceDir, w.b.ID); err == nil {
 				t.Fatal("a refused takeover kept a token")
+			}
+		})
+	}
+}
+
+// acfs-9hkh.80: a takeover that would leave one of the Bash's agents
+// behind refuses, in the dry run and for real, and the Bash stays the
+// owner: a token no binding takes, or an agent the import skipped.
+// --exclude names an agent to leave behind (any of its names, any case).
+func TestTakeoverRefusesWhatItLeavesBehind(t *testing.T) {
+	ctx := context.Background()
+	skipped := bindings.ImportReport{Items: []bindings.ImportItem{{PaneID: "w1:p2", Kind: "claude", HerdrName: "rainybasin",
+		Action: bindings.ActionSkipped, Reason: "no project: give --project or run inside a git repository"}}}
+	// GhostOwl's own pane, skipped too: its token is in the export.
+	skippedGhost := bindings.ImportReport{Items: []bindings.ImportItem{{PaneID: "w1:p3", Kind: "codex", HerdrName: "ghostowl",
+		Action: bindings.ActionSkipped, Reason: "no verified evidence"}}}
+	for _, c := range []struct {
+		name     string
+		exclude  []string
+		imp      *bindings.ImportReport
+		want     string // the refusal names this; "" means the takeover passes
+		excluded []string
+	}{
+		{"a token without a binding", nil, nil, "the token of GhostOwl is not imported", nil},
+		{"a skipped agent", []string{"GhostOwl"}, &skipped, "agent rainybasin (pane w1:p2) is not imported", nil},
+		{"both, excluded by herdr name and mail name", []string{"RAINYBASIN", "ghostowl"}, &skipped, "", []string{"rainybasin", "GhostOwl"}},
+		{"excluded by pane id, reported by name", []string{"GhostOwl", "w1:p2"}, &skipped, "", []string{"rainybasin", "GhostOwl"}},
+		{"a skipped pane and its token: one agent, listed once", []string{"GhostOwl"}, &skippedGhost, "", []string{"ghostowl"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.export(t)
+			w.env.Exclude = c.exclude
+			if c.imp != nil {
+				imp := *c.imp
+				w.env.ImportBindings = func(context.Context, bool) (bindings.ImportReport, error) { return imp, nil }
+			}
+			for _, dry := range []bool{true, false} {
+				rep, err := Takeover(ctx, w.env, dry)
+				if c.want == "" {
+					if err != nil {
+						t.Fatalf("dry %v: %v", dry, err)
+					}
+					if strings.Join(rep.Excluded, ",") != strings.Join(c.excluded, ",") || len(rep.Notes) != len(c.excluded) {
+						t.Fatalf("dry %v: excluded %v, notes %v", dry, rep.Excluded, rep.Notes)
+					}
+					continue
+				}
+				if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "--exclude") {
+					t.Fatalf("dry %v: = %v", dry, err)
+				}
+				if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerBash || o.Generation != 0 {
+					t.Fatalf("dry %v: owner = %+v", dry, o)
+				}
+				if _, err := store.ReadSecret(w.env.InstanceDir, w.b.ID); err == nil {
+					t.Fatalf("dry %v: a refused takeover kept a token", dry)
+				}
 			}
 		})
 	}

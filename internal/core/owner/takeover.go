@@ -40,6 +40,10 @@ type Env struct {
 	// ResolveStale and ReadInbox). nil skips it.
 	RefreshWake func(ctx context.Context, b bindings.Binding) error
 	Now         func() time.Time
+	// Exclude names the agents a takeover may leave behind (takeover
+	// --exclude): an Agent Mail name, a herdr name or a pane id, any case.
+	// Every other agent nhm cannot import refuses the takeover.
+	Exclude []string
 }
 
 // ErrRefused marks a takeover or handback that a rule refused; the owner
@@ -95,11 +99,14 @@ type Report struct {
 	Tokens   []Item                 `json:"tokens"`
 	Wake     []Item                 `json:"wake"`
 	Keep     []string               `json:"keep"`
-	Notes    []string               `json:"notes"`
+	// Excluded lists the agents the takeover left behind because
+	// --exclude named them.
+	Excluded []string `json:"excluded"`
+	Notes    []string `json:"notes"`
 }
 
 func newReport(dry bool) Report {
-	return Report{DryRun: dry, Tokens: []Item{}, Wake: []Item{}, Keep: []string{}, Notes: []string{}}
+	return Report{DryRun: dry, Tokens: []Item{}, Wake: []Item{}, Keep: []string{}, Excluded: []string{}, Notes: []string{}}
 }
 
 // Takeover makes nhm the owner (plan-v8 section 5 step 6). Under the
@@ -204,7 +211,74 @@ func planTakeover(ctx context.Context, env Env, rep *Report) (*takeoverPlan, err
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
+	if err := leftBehind(env, rep, imp); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+// leftBehind refuses a takeover that would leave one of the Bash's agents
+// behind: an agent the import skipped, or a token no binding takes (it
+// stays in ACFS's state, and the agent with it). An agent --exclude names
+// is left behind on purpose and recorded in the report (acfs-9hkh.80).
+func leftBehind(env Env, rep *Report, imp bindings.ImportReport) error {
+	// excluded reports whether --exclude names the agent by any of its
+	// names, and the name the report uses for it.
+	excluded := func(names ...string) (string, bool) {
+		for _, n := range names {
+			for _, x := range env.Exclude {
+				if n != "" && strings.EqualFold(n, x) {
+					return firstOf(names...), true
+				}
+			}
+		}
+		return "", false
+	}
+	// A skipped pane and its token are one agent: listed once, any case.
+	seen := map[string]bool{}
+	note := func(name, why string) {
+		if !seen[strings.ToLower(name)] {
+			seen[strings.ToLower(name)] = true
+			rep.Excluded = append(rep.Excluded, name)
+			rep.Notes = append(rep.Notes, fmt.Sprintf("%s is left behind (--exclude): %s", name, why))
+		}
+	}
+	var problems []string
+	for _, it := range imp.Items {
+		if it.Action != bindings.ActionSkipped {
+			continue
+		}
+		if n, ok := excluded(it.MailName, it.HerdrName, it.PaneID); ok {
+			note(n, it.Reason)
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("agent %s (pane %s) is not imported: %s",
+			firstOf(it.MailName, it.HerdrName, it.PaneID), it.PaneID, it.Reason))
+	}
+	for _, t := range rep.Tokens {
+		if t.Action != ActionACFSOnly {
+			continue
+		}
+		if n, ok := excluded(t.Name); ok {
+			note(n, t.Reason)
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("the token of %s is not imported: %s", t.Name, t.Reason))
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return refused("%s; fix that first, or name each agent to leave behind with --exclude",
+		strings.Join(problems, "; "))
+}
+
+func firstOf(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // apply writes the tokens, then the wake rows in one transaction.

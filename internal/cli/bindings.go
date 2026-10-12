@@ -133,9 +133,16 @@ func projectScope(ctx context.Context, instanceID, project string) (core.Scope, 
 	return core.ResolveScope(ctx, core.ScopeRequest{InstanceID: instanceID, ProjectRoot: project, Cwd: cwd}, nil)
 }
 
-// projectOf maps a pane's cwd to its project for the import.
+// projectOf maps a pane's cwd to its project for the import: the git
+// work tree that holds it, or, outside git, the folder itself, as the
+// Bash keys an agent spawned there (acfs-9hkh.80). The import still binds
+// only on verified evidence under that key: Agent Mail's identity file or
+// the Bash's spawn token.
 func projectOf(ctx context.Context, cwd string) (string, string, error) {
 	s, err := core.ResolveScope(ctx, core.ScopeRequest{Cwd: cwd}, nil)
+	if errors.Is(err, core.ErrNoProject) && cwd != "" {
+		s, err = core.ResolveScope(ctx, core.ScopeRequest{ProjectRoot: cwd}, nil)
+	}
 	if err != nil {
 		return "", "", err
 	}
