@@ -24,6 +24,57 @@ func init() {
 // bun wrapper around a node script (as for codex); a shell script, a
 // python script, or a wrapper around anything else is not (the review of
 // ce21b11).
+// ACFS's bun wrapper holds two absolute paths, so a deep $HOME makes it
+// long. It counts while the whole file fits what nhm reads (the review of
+// 64a5abc: 512 bytes cut it off), and a longer one is refused as cut off.
+func TestProgramContentLongWrapper(t *testing.T) {
+	old := ProgramHead
+	ProgramHead = realProgramHead
+	t.Cleanup(func() { ProgramHead = old })
+	root, err := os.MkdirTemp("/tmp", "nhm-kinds-long")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	deep := func(n int) string { // n path components of 200 bytes each
+		parts := []string{root}
+		for i := 0; i < n; i++ {
+			parts = append(parts, strings.Repeat(string(rune('a'+i)), 200))
+		}
+		return filepath.Join(parts...)
+	}
+	write := func(path, content string) string {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for _, c := range []struct {
+		name  string
+		depth int
+		want  bool
+	}{
+		{"about 300-byte paths, over 512 bytes", 1, true},
+		{"about 2100-byte paths, over 4096 bytes", 10, false},
+	} {
+		home := deep(c.depth)
+		bunDir := filepath.Dir(write(filepath.Join(home, ".bun", "bin", "bun"), "\x7fELF\x02\x01\x01\x00"))
+		js := write(filepath.Join(home, ".bun", "install", "codex", "bin", "codex.js"), "#!/usr/bin/env node\n")
+		wrapper := "#!/bin/bash\nexec \"" + bunDir + "/bun\" \"" + js + "\" \"$@\"\n"
+		bin := write(filepath.Join(home, ".local", "codex", "bin", "codex"), wrapper)
+		if c.want && len(wrapper) <= 512 || !c.want && len(wrapper) <= programHeadLimit {
+			t.Fatalf("%s: the wrapper is only %d bytes", c.name, len(wrapper))
+		}
+		withResolved(t, bin)
+		if got := ProgramIsKind("codex", "codex"); got != c.want {
+			t.Errorf("%s (%d bytes): %v, want %v", c.name, len(wrapper), got, c.want)
+		}
+	}
+}
+
 func TestProgramContent(t *testing.T) {
 	old := ProgramHead
 	ProgramHead = realProgramHead

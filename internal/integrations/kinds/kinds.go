@@ -211,8 +211,14 @@ var ResolveProgram = func(name string) (string, error) {
 // ELF binaries, so the content check alone would let them through.
 var notAgentCLIs = regexp.MustCompile(`^(?:[a-z]*sh|busybox|env|python|pypy|perl|ruby|jruby|node|nodejs|bun|bunx|deno|npx|tsx|ts-node|php|lua|luajit|tclsh|wish|expect|awk|gawk|mawk|nawk|sed|find|xargs|osascript|pwsh|java|guile|racket|sbcl|gdb)[0-9._-]*$`)
 
-// ProgramHead returns the first bytes of a file. A variable so tests need
-// no agent CLI installed.
+// programHeadLimit bounds what ProgramHead reads. ACFS's bun wrapper holds
+// two absolute paths, so under a deep $HOME it passes 512 bytes; 4096 is
+// PATH_MAX, so a wrapper that fits two real paths fits here.
+const programHeadLimit = 4096
+
+// ProgramHead returns the first bytes of a file: up to programHeadLimit,
+// plus one byte that shows the file goes on. A variable so tests need no
+// agent CLI installed.
 var ProgramHead = func(path string) ([]byte, error) {
 	// O_NONBLOCK: opening a FIFO for reading would wait for a writer.
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
@@ -223,7 +229,7 @@ var ProgramHead = func(path string) ([]byte, error) {
 	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	buf := make([]byte, 512)
+	buf := make([]byte, programHeadLimit+1)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil, err
@@ -265,8 +271,14 @@ func isKindExecutable(resolved, kind string, wrapperAllowed bool) bool {
 	case nodeShebang(head):
 		return true
 	}
+	// The wrapper is matched whole, so a file longer than ProgramHead reads
+	// is cut off and never counts: a match on part of it would let
+	// whatever follows run.
+	if !wrapperAllowed || len(head) > programHeadLimit {
+		return false
+	}
 	m := bunWrapper.FindSubmatch(head)
-	if !wrapperAllowed || m == nil || !isBunBinary(string(m[1])+"/bun") || strings.ContainsAny(string(m[2]), "$`\\") {
+	if m == nil || !isBunBinary(string(m[1])+"/bun") || strings.ContainsAny(string(m[2]), "$`\\") {
 		return false
 	}
 	target, err := filepath.EvalSymlinks(string(m[2]))
