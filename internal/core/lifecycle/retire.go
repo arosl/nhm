@@ -422,6 +422,11 @@ func check(ctx context.Context, env Env, req RetireRequest, b bindings.Binding, 
 	}
 
 	beads, err := env.Facts.Assigned(ctx, project, b.MailName)
+	// With --no-beads, a project with no bead database (ru's repos often
+	// have none) holds no bead of the agent to check.
+	if req.NoBeads && errors.Is(err, ErrNoBeadDB) {
+		err = nil
+	}
 	if err != nil {
 		refuse("br cannot be read: %v", err)
 	}

@@ -107,8 +107,9 @@ or unmerged worktree, has a bead in progress with no handoff comment, has
 no bead at all in the bead databases searched (the project's own and
 [lifecycle] bead_dbs in nhm's config), or when Agent Mail, br or git
 cannot be read. --no-beads retires an agent that worked no beads, such
-as a reviewer. Worktrees are listed, and removed only with
---cleanup-worktrees (merged, clean, never forced).
+as a reviewer, also in a project with no bead database; a bead in
+progress with no handoff still refuses. Worktrees are listed, and
+removed only with --cleanup-worktrees (merged, clean, never forced).
 
 Exit codes: 0 retired (or the dry run passed); 1 an error; 2 refused.
 `
@@ -378,12 +379,13 @@ func keepPaths() []string {
 	return paths
 }
 
-const killUsage = `Usage: nhm kill <session> [--yes] [--no-beads] [--socket PATH] [--json]
+const killUsage = `Usage: nhm kill <session> [--yes | -f | --force] [--no-beads] [--socket PATH] [--json]
 
 Close a workspace. It runs the retire checks for every bound agent first
 and never bypasses them: one refusal refuses the kill and nothing closes.
 Then it retires each agent (its transcript preserved, its identity
-retired) and closes the workspace. Without --yes it only reports.
+retired) and closes the workspace. Without --yes it only reports. -f and
+--force are ntm's spelling of --yes: they skip no check.
 --no-beads is retire's, for every agent: the workspace's agents worked no
 beads (agents spawned with --role reviewer never need it).
 `
@@ -393,6 +395,10 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, killUsage) }
 	yes := fs.Bool("yes", false, "close it")
+	// ntm's kill -f and --force skip its confirmation, as --yes does here;
+	// ru calls both spellings.
+	fs.BoolVar(yes, "force", false, "ntm's spelling of --yes")
+	fs.BoolVar(yes, "f", false, "ntm's spelling of --yes")
 	noBeads := fs.Bool("no-beads", false, "the agents worked no beads; do not require any")
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")

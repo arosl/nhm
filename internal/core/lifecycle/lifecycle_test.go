@@ -156,9 +156,12 @@ type fakeFacts struct {
 	// unknown agents have no bead in the databases searched.
 	unknown  map[string]bool
 	assigned map[string][]Bead
-	closed   []string
-	fail     error
-	removed  []string
+	// beadErr is br's answer to every bead read (ErrNoBeadDB: no
+	// database to search).
+	beadErr error
+	closed  []string
+	fail    error
+	removed []string
 }
 
 func (f *fakeFacts) Reservations(context.Context, string) ([]Reservation, error) {
@@ -179,10 +182,16 @@ func (f *fakeFacts) RemoveWorktree(_ context.Context, _, wt string) error {
 	return nil
 }
 func (f *fakeFacts) Assigned(_ context.Context, _, agent string) ([]Bead, error) {
+	if f.beadErr != nil {
+		return nil, f.beadErr
+	}
 	return f.assigned[agent], nil
 }
 func (f *fakeFacts) Closed(context.Context, string, string) ([]string, error) { return f.closed, nil }
 func (f *fakeFacts) Known(_ context.Context, _, agent string) (bool, error) {
+	if f.beadErr != nil {
+		return false, f.beadErr
+	}
 	return !f.unknown[agent], nil
 }
 
@@ -386,6 +395,7 @@ func TestRetireRefusals(t *testing.T) {
 		{"no bead in any db searched", func(w *world) {
 			w.facts.unknown = map[string]bool{"IcyKnoll": true}
 		}, "cannot verify the handoff"},
+		{"no bead database", func(w *world) { w.facts.beadErr = ErrNoBeadDB }, "br cannot be read"},
 		{"agent mail server down", func(w *world) { w.mail.down = true }, "server cannot be reached"},
 		{"herdr lost a working agent", func(w *world) {
 			delete(w.h.agents, "w1:p1")
@@ -410,6 +420,25 @@ func TestRetireRefusals(t *testing.T) {
 	if _, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", NoBeads: true, DryRun: true}); err != nil {
 		t.Fatalf("--no-beads = %v", err)
 	}
+	// It also retires one in a project with no bead database (ru's
+	// repos), but a br that fails still refuses.
+	w.facts.beadErr = ErrNoBeadDB
+	if _, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", NoBeads: true, DryRun: true}); err != nil {
+		t.Fatalf("--no-beads without a bead database = %v", err)
+	}
+	w.facts.beadErr = errors.New("br: database is locked")
+	if res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", NoBeads: true, DryRun: true}); !errors.Is(err, ErrRefused) ||
+		!strings.Contains(strings.Join(res.Refusals, "|"), "br cannot be read") {
+		t.Fatalf("--no-beads with br failing = %v %v", res.Refusals, err)
+	}
+	w.facts.beadErr = nil
+	// --no-beads waives no handoff: a bead in progress still needs one.
+	w.facts.assigned["IcyKnoll"] = []Bead{{ID: "acfs-9"}}
+	if res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", NoBeads: true, DryRun: true}); !errors.Is(err, ErrRefused) ||
+		!strings.Contains(strings.Join(res.Refusals, "|"), "no handoff comment") {
+		t.Fatalf("--no-beads with a bead in progress = %v %v", res.Refusals, err)
+	}
+	w.facts.assigned["IcyKnoll"] = nil
 	// A dirty file another agent holds now is not the retiring agent's.
 	w = newWorld(t)
 	w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)

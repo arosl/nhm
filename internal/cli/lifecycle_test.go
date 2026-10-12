@@ -97,3 +97,43 @@ func TestLifecycleVerbs(t *testing.T) {
 		}
 	}
 }
+
+// ntm's kill -f and --force (ru calls both) are --yes: they close the
+// workspace after the same checks, and skip none.
+func TestKillForceIsYes(t *testing.T) {
+	for _, force := range []string{"-f", "--force"} {
+		t.Run(force, func(t *testing.T) {
+			blue := "working"
+			s, inst, _ := waitInstance(t, func(pane string) map[string]any {
+				if pane == "w1:p1" {
+					return agentMap(pane, "claude", "idle", 4, 4)
+				}
+				return agentMap(pane, "codex", blue, 7, 7)
+			})
+			t.Setenv("HOME", t.TempDir())
+			old := lifecycleFacts
+			lifecycleFacts = cliFacts{}
+			t.Cleanup(func() { lifecycleFacts = old })
+			var closed, wsClosed []string
+			s.Handle("pane.close", func(r herdrtest.Request) (any, *herdrtest.Error) {
+				closed = append(closed, string(r.Params))
+				return map[string]any{"type": "ok"}, nil
+			})
+			s.Handle("workspace.close", func(r herdrtest.Request) (any, *herdrtest.Error) {
+				wsClosed = append(wsClosed, string(r.Params))
+				return map[string]any{"type": "ok"}, nil
+			})
+			ownNhm(t, inst)
+			// BlueLake works: refused, exit 2, nothing closed.
+			code, _, errOut := run("kill", "swarm", force, "--socket", s.SocketPath)
+			if code != 2 || !strings.Contains(errOut, "BlueLake is working") || len(closed)+len(wsClosed) != 0 {
+				t.Fatalf("kill %s over a working agent = %d %s", force, code, errOut)
+			}
+			blue = "idle"
+			code, out, errOut := run("kill", "swarm", force, "--socket", s.SocketPath)
+			if code != 0 || len(closed) != 2 || len(wsClosed) != 1 || !strings.Contains(out, "closed workspace w1") {
+				t.Fatalf("kill %s = %d %s %s", force, code, out, errOut)
+			}
+		})
+	}
+}
