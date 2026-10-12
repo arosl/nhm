@@ -37,6 +37,13 @@ The same rules apply to code from pt and dcg.
 | `internal/robot/contract/replay.go` | `internal/robot/contract/replay.go` | provenance header |
 | `internal/robot/contract/replay_test.go` | `internal/robot/contract/replay_test.go` | provenance header |
 | `internal/robot/contract/testdata/replay_manifest.json` | `internal/robot/contract/testdata/replay_manifest.json` | none |
+| `internal/store/sqliteutil/LICENSE` | `LICENSE` | none |
+| `internal/store/sqliteutil/dsn.go` | `internal/sqliteutil/dsn.go` | provenance header; package comment |
+| `internal/store/sqliteutil/dsn_test.go` | `internal/sqliteutil/dsn_test.go` | provenance header |
+| `internal/store/history/LICENSE` | `LICENSE` | none |
+| `internal/store/history/entry.go` | `internal/history/entry.go` | provenance header; the `OperationID` field (`operation_id`, omitted when empty) |
+| `internal/store/history/lock_unix.go` | `internal/history/lock_unix.go` | provenance header |
+| `internal/store/history/storage.go` | `internal/history/storage.go` (derived) | the file is under `$XDG_DATA_HOME/nhm`; only `StoragePath`, `Append`, `ReadAll` and `ReadRecent` are kept, without ntm's privacy mode, encryption and redaction |
 
 ## Files from herdr
 
