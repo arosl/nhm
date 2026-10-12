@@ -41,10 +41,15 @@ func fold(s string) folded {
 		if r == utf8.RuneError {
 			_, size = utf8.DecodeRuneInString(s[i:])
 		}
-		if ignorable(r) {
+		var piece string
+		switch {
+		case blank(r):
+			piece = " "
+		case ignorable(r):
 			continue
+		default:
+			piece = bare(norm.NFKD.String(s[i : i+size]))
 		}
-		piece := bare(norm.NFKD.String(s[i : i+size]))
 		for range len(piece) {
 			f.start, f.end = append(f.start, i), append(f.end, i+size)
 		}
@@ -54,20 +59,29 @@ func fold(s string) folded {
 	return f
 }
 
-// bare removes what a rune's NFKD form carries that can hide a marker or
-// a secret without changing how it reads (review of 4424fa6): it drops
-// nonspacing marks (a combining dot under "h" or "F", or the mark of a
-// precomposed "ḥ"), and turns the blank braille pattern U+2800, which
-// renders as a space, into one. The fold works rune by rune, so NFKC
-// would never compose a mark into its letter; decomposing and dropping
-// the marks leaves the base letter.
+// blank reports the code points that render as an empty cell, so they
+// separate words as a space does (reviews of 4424fa6 and b53018e): the
+// blank braille pattern U+2800 and the Hangul fillers. Dropped, they
+// would join the words of a marker; as spaces, the marker check sees
+// them.
+func blank(r rune) bool {
+	switch r {
+	case 0x2800, 0x115F, 0x1160, 0x3164, 0xFFA0:
+		return true
+	}
+	return false
+}
+
+// bare drops the marks of a rune's NFKD form (reviews of 4424fa6 and
+// b53018e): nonspacing (a combining dot under "h" or "F", or the mark of
+// a precomposed "ḥ"), spacing (U+0903, U+1D165) and enclosing (U+20DD,
+// U+0488), none of which changes how the letters read. The fold works
+// rune by rune, so NFKC would never compose a mark into its letter;
+// decomposing and dropping the marks leaves the base letters.
 func bare(s string) string {
 	return strings.Map(func(r rune) rune {
-		switch {
-		case unicode.Is(unicode.Mn, r):
+		if unicode.Is(unicode.M, r) {
 			return -1
-		case r == 0x2800:
-			return ' '
 		}
 		return r
 	}, s)
@@ -106,8 +120,8 @@ func redact(s string) (string, int) {
 // skeleton is the folded text as runes for the marker check: ASCII
 // letters in lower case, spaces as ' ', any other letter as '*' (it
 // matches any letter: a Cyrillic "е" or a Greek "ο" can read as Latin),
-// the rest as it is; and for each rune the start of the original rune it
-// came from.
+// any opening bracket but "(" as '[', the rest as it is; and for each
+// rune the start of the original rune it came from.
 func skeleton(s string) ([]rune, []int) {
 	f := fold(s)
 	var sk []rune
@@ -120,6 +134,10 @@ func skeleton(s string) ([]rune, []int) {
 			r = ' '
 		case unicode.IsLetter(r):
 			r = '*'
+		case r != '(' && unicode.Is(unicode.Ps, r):
+			// Any opening bracket (⟦, ⁅, 【, {, …) can read as "[". Not
+			// "(": that is what neutralize writes in a marker's place.
+			r = '['
 		}
 		sk, at = append(sk, r), append(at, f.start[i])
 	}
