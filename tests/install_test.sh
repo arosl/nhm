@@ -53,6 +53,12 @@ if [[ "$out" == *"\"version\": \"$version\""* ]]; then
 else
   fail "installed nhm reports $version: $out"
 fi
+if [[ "$(readlink "$home/.local/bin/nhm-hook")" == "$home/.local/share/nhm/current/nhm-hook" ]] &&
+  "$home/.local/bin/nhm-hook" --help > /dev/null 2>&1; then
+  pass "nhm-hook is linked and runs"
+else
+  fail "nhm-hook is linked and runs: $(readlink "$home/.local/bin/nhm-hook")"
+fi
 if [[ "$(readlink "$home/.local/share/nhm/current")" == "releases/$version" ]]; then
   pass "current points at the release"
 else

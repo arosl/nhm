@@ -26,15 +26,17 @@ curl -fsSL https://raw.githubusercontent.com/arosl/nhm/main/install.sh | bash -s
 `install.sh` downloads the archive for your platform and `SHA256SUMS` from
 the same tagged release, checks the archive, and unpacks it to
 `~/.local/share/nhm/releases/<version>/`. It points
-`~/.local/share/nhm/current` at that release and `~/.local/bin/nhm` at
-`current/nhm`. Releases are for Linux on amd64 and arm64.
+`~/.local/share/nhm/current` at that release, and `~/.local/bin/nhm` and
+`~/.local/bin/nhm-hook` at `current/nhm` and `current/nhm-hook`.
+`nhm-hook` is the command that the agent CLIs' hooks and herdr's plugin
+events run. Releases are for Linux on amd64 and arm64.
 
 ## Build and test
 
 Go 1.26 or later.
 
 ```bash
-go build ./cmd/nhm
+go build ./cmd/nhm ./cmd/nhm-hook
 go vet ./...
 go test -race ./...
 gofmt -l .                    # prints nothing when the tree is formatted

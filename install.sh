@@ -6,8 +6,8 @@
 # Downloads nhm-<version>-<platform>.tar.zst and SHA256SUMS from the same
 # tagged release of arosl/nhm, checks the archive against SHA256SUMS, and
 # unpacks it to ~/.local/share/nhm/releases/<version>/. Then it points
-# ~/.local/share/nhm/current at that release and ~/.local/bin/nhm at
-# current/nhm. Running it again for the same version only re-points the
+# ~/.local/share/nhm/current at that release, and ~/.local/bin/nhm and
+# ~/.local/bin/nhm-hook at current/nhm and current/nhm-hook. Running it again for the same version only re-points the
 # links. Messages go to stderr.
 #
 # Environment:
@@ -94,7 +94,9 @@ else
   log "checksum ok"
   mkdir -p "$releases"
   tar --zstd -xf "$tmp/$name.tar.zst" -C "$tmp"
-  [[ -x "$tmp/$name/nhm" ]] || die "archive has no $name/nhm"
+  for cmd in nhm nhm-hook; do
+    [[ -x "$tmp/$name/$cmd" ]] || die "archive has no $name/$cmd"
+  done
   (cd "$tmp/$name" && sha256sum -c --quiet SHA256SUMS >&2) || die "archive contents do not match its SHA256SUMS"
   # A rename inside one file system is atomic: target is complete or absent.
   mv -T "$tmp/$name" "$target.partial.$$"
@@ -105,9 +107,12 @@ fi
 ln -sfn "releases/$version" "$data_home/nhm/current.new.$$"
 mv -T "$data_home/nhm/current.new.$$" "$data_home/nhm/current"
 mkdir -p "$bin_dir"
-ln -sfn "$data_home/nhm/current/nhm" "$bin_dir/nhm.new.$$"
-mv -T "$bin_dir/nhm.new.$$" "$bin_dir/nhm"
-log "installed nhm $version: $bin_dir/nhm -> $data_home/nhm/current/nhm"
+# nhm-hook is the stable command line of the agent and plugin hooks.
+for cmd in nhm nhm-hook; do
+  ln -sfn "$data_home/nhm/current/$cmd" "$bin_dir/$cmd.new.$$"
+  mv -T "$bin_dir/$cmd.new.$$" "$bin_dir/$cmd"
+done
+log "installed nhm $version: $bin_dir/nhm and $bin_dir/nhm-hook -> $data_home/nhm/current/"
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
   *) log "note: $bin_dir is not on PATH" ;;

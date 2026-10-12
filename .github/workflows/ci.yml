@@ -30,8 +30,10 @@ jobs:
         run: go test -race -count=1 ./...
       - name: cross-build the release platforms
         run: |
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/nhm
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/nhm
+          for cmd in nhm nhm-hook; do
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null "./cmd/$cmd"
+            GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null "./cmd/$cmd"
+          done
 
   shell:
     runs-on: ubuntu-24.04

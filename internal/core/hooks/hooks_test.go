@@ -1,0 +1,521 @@
+package hooks
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/arosl/nhm/internal/core"
+	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/herdr/herdrtest"
+	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/kinds/claude"
+	"github.com/arosl/nhm/internal/integrations/kinds/codex"
+	"github.com/arosl/nhm/internal/store"
+)
+
+var t0 = time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC)
+
+// pane is the stub's view of one pane's agent.
+type pane struct {
+	kind    string // "" when the pane holds no agent
+	name    string
+	session string
+	pid     int
+}
+
+// world is a herdr stub with mutable panes, and the calls nhm made.
+type world struct {
+	t     *testing.T
+	mu    sync.Mutex
+	panes map[string]*pane
+	calls []string
+}
+
+func newWorld(t *testing.T) (*world, *herdr.Client) {
+	w := &world{t: t, panes: map[string]*pane{}}
+	s := herdrtest.New(t)
+	s.Handle("agent.get", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct{ Target string }
+		_ = json.Unmarshal(r.Params, &p)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		pn, ok := w.panes[p.Target]
+		if !ok || pn.kind == "" {
+			return nil, &herdrtest.Error{Code: "agent_not_found", Message: "agent target " + p.Target + " not found"}
+		}
+		return map[string]any{"type": "agent_info", "agent": w.agentJSON(p.Target, pn)}, nil
+	})
+	s.Handle("agent.rename", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			Target string
+			Name   *string
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		pn := w.panes[p.Target]
+		name := ""
+		if p.Name != nil {
+			name = *p.Name
+		}
+		pn.name = name
+		w.calls = append(w.calls, "agent.rename "+p.Target+" "+name)
+		return map[string]any{"type": "agent_info", "agent": w.agentJSON(p.Target, pn)}, nil
+	})
+	s.Handle("pane.rename", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			PaneID string `json:"pane_id"`
+			Label  string
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.calls = append(w.calls, "pane.rename "+p.PaneID+" "+p.Label)
+		return map[string]any{"type": "pane_info", "pane": map[string]any{"pane_id": p.PaneID, "tab_id": "w1:t1",
+			"workspace_id": "w1", "terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1}}, nil
+	})
+	s.Handle("tab.rename", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			TabID string `json:"tab_id"`
+			Label string
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.calls = append(w.calls, "tab.rename "+p.TabID+" "+p.Label)
+		return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": p.TabID, "workspace_id": "w1",
+			"number": 1, "label": p.Label, "focused": false, "pane_count": 1, "agent_status": "idle"}}, nil
+	})
+	s.Handle("session.snapshot", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 22, "version": "0.9.3",
+			"workspaces": []any{}, "panes": []any{}, "agents": []any{},
+			"tabs": []any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1, "label": "1",
+				"focused": false, "pane_count": 1, "agent_status": "idle"}}}}, nil
+	})
+	s.Handle("pane.process_info", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			PaneID string `json:"pane_id"`
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		pn := w.panes[p.PaneID]
+		procs := []any{}
+		if pn != nil && pn.pid != 0 {
+			// A tool the agent runs shares the foreground; the agent's
+			// process comes second, so nhm must pick it by name.
+			// Claude Code's binary is named after its version.
+			procs = append(procs, map[string]any{"pid": pn.pid + 1000, "name": "bash", "argv": []string{"bash"}},
+				map[string]any{"pid": pn.pid, "name": "2.1.296", "argv": []string{pn.kind}})
+		}
+		return map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": p.PaneID,
+			"shell_pid": 10, "foreground_processes": procs}}, nil
+	})
+	return w, herdr.New(s.SocketPath)
+}
+
+func (w *world) agentJSON(id string, pn *pane) map[string]any {
+	a := map[string]any{"pane_id": id, "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "term_1",
+		"agent": pn.kind, "agent_status": "idle", "focused": false, "revision": 1}
+	if pn.name != "" {
+		a["name"] = pn.name
+	}
+	if pn.session != "" {
+		a["agent_session"] = map[string]any{"source": "herdr:" + pn.kind, "agent": pn.kind, "kind": "id", "value": pn.session}
+	}
+	return a
+}
+
+func (w *world) set(id string, p pane) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	cp := p
+	w.panes[id] = &cp
+}
+
+func (w *world) get(id string) pane {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return *w.panes[id]
+}
+
+func (w *world) called(prefix string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, c := range w.calls {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+type harness struct {
+	t     *testing.T
+	env   Env
+	world *world
+	vars  map[string]string
+	clock time.Time
+}
+
+// newHarness enrolls an instance owned by nhm, with a herdr stub.
+func newHarness(t *testing.T, owner string) *harness {
+	t.Helper()
+	w, client := newWorld(t)
+	inst, _, err := store.Enroll(t.TempDir(), "/run/herdr/herdr.sock", "default", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner == core.OwnerNhm {
+		if _, err := core.SwitchOwner(context.Background(), inst.Dir, core.OwnerNhm, t0, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := store.Open(inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	h := &harness{t: t, world: w, vars: map[string]string{"HERDR_PANE_ID": "w1:p1"}, clock: t0}
+	h.env = Env{DB: db, Bindings: bindings.NewStore(db), Herdr: client, InstanceDir: inst.Dir, ConfigHome: t.TempDir(),
+		Getenv: func(k string) string { return h.vars[k] }, Now: func() time.Time { return h.clock },
+		Settle: 50 * time.Millisecond}
+	old := bindings.ProcStart
+	bindings.ProcStart = func(pid int64) (int64, error) { return pid * 10, nil }
+	t.Cleanup(func() { bindings.ProcStart = old })
+	return h
+}
+
+func (h *harness) hook(payload map[string]any, id string) Result {
+	h.t.Helper()
+	data, _ := json.Marshal(payload)
+	p, err := ParseAgentPayload(data)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	res, err := RunAgentHook(context.Background(), h.env, AgentHook{Payload: p, EventID: id})
+	if err != nil {
+		h.t.Fatalf("hook: %v", err)
+	}
+	return res
+}
+
+func registration(session, name, project string) map[string]any {
+	return map[string]any{"hook_event_name": "PostToolUse", "session_id": session,
+		"tool_name":  "mcp__mcp-agent-mail__register_agent",
+		"tool_input": map[string]any{"project_key": project, "program": "claude-code"},
+		// Claude Code passes an MCP result as content blocks.
+		"tool_response": []any{map[string]any{"type": "text",
+			"text": `{"id":7,"name":"` + name + `","registration_token":"tok-secret-1"}`}}}
+}
+
+func sessionStart(session, source string) map[string]any {
+	return map[string]any{"hook_event_name": "SessionStart", "session_id": session, "source": source}
+}
+
+func (h *harness) binding(name string) bindings.Binding {
+	h.t.Helper()
+	list, err := h.env.Bindings.List(context.Background(), bindings.Filter{MailName: name})
+	if err != nil || len(list) == 0 {
+		h.t.Fatalf("binding %s: %v %d", name, err, len(list))
+	}
+	return list[0]
+}
+
+func TestRegistrationBindsAHandStartedAgent(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	project := t.TempDir()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	res := h.hook(registration("sess-a", "IcyKnoll", project), "e1")
+	b := h.binding("IcyKnoll")
+	if b.Status != bindings.Active || b.PaneID != "w1:p1" || b.Generation != 1 || b.Provenance != bindings.Adopted ||
+		b.NativeSession == nil || b.NativeSession.Value != "sess-a" || b.ForegroundPID != 500 || b.ForegroundStart != 5000 {
+		t.Fatalf("binding = %+v", b)
+	}
+	if h.world.get("w1:p1").name != "icyknoll" || !h.world.called("pane.rename w1:p1 IcyKnoll") || !h.world.called("tab.rename w1:t1 IcyKnoll") {
+		t.Fatalf("decoration: %v", h.world.calls)
+	}
+	tok, err := store.ReadSecret(h.env.InstanceDir, b.ID)
+	if err != nil || tok != "tok-secret-1" {
+		t.Fatalf("token = %q %v", tok, err)
+	}
+	if _, err := store.ReadSecret(h.env.InstanceDir, "cand-1"); err == nil {
+		t.Fatal("the candidate's token file stayed")
+	}
+	rec, ok, err := agentmail.ReadIdentity(h.env.ConfigHome, b.MailProjectKey, "w1:p1")
+	if err != nil || !ok || rec.Name != "IcyKnoll" {
+		t.Fatalf("identity file = %+v %v", rec, err)
+	}
+	// The candidate row keeps no token.
+	var facts string
+	if err := h.env.DB.SQL().QueryRow(`SELECT payload_json FROM hook_candidates WHERE candidate_id = ?`, res.Candidate).Scan(&facts); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(facts, "tok-secret") {
+		t.Fatalf("token in the candidate row: %s", facts)
+	}
+	// The same registration again changes nothing.
+	h.hook(registration("sess-a", "IcyKnoll", project), "e2")
+	if b2 := h.binding("IcyKnoll"); b2.Generation != 1 || b2.ID != b.ID {
+		t.Fatalf("second registration: %+v", b2)
+	}
+}
+
+func TestRegistrationFromANestedRunIsIgnored(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	res := h.hook(registration("sess-nested", "IcyKnoll", t.TempDir()), "e1")
+	// Fresh: herdr may still catch up, so the candidate waits.
+	if len(res.Report.Actions) != 0 {
+		t.Fatalf("actions = %v", res.Report.Actions)
+	}
+	h.clock = h.clock.Add(5 * time.Second)
+	if _, err := ReconcilePane(context.Background(), h.env, "w1:p1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := CandidateResults(context.Background(), h.env.DB, "w1:p1")
+	if len(got) != 1 || !got[0].Processed || !strings.HasPrefix(got[0].Result, "ignored: herdr reports session") {
+		t.Fatalf("candidates = %+v", got)
+	}
+	if list, _ := h.env.Bindings.List(context.Background(), bindings.Filter{}); len(list) != 0 {
+		t.Fatalf("bindings = %+v", list)
+	}
+	if _, err := store.ReadSecret(h.env.InstanceDir, "cand-1"); err == nil {
+		t.Fatal("the rejected candidate's token file stayed")
+	}
+}
+
+func TestCompactionContinuesAndRemindsTheAgent(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	h.clock = h.clock.Add(time.Minute)
+	res := h.hook(sessionStart("sess-a", "compact"), "e2")
+	b := h.binding("IcyKnoll")
+	if b.Status != bindings.Active || b.Generation != 1 || b.CompactedAt == nil || !b.CompactedAt.Equal(h.clock) {
+		t.Fatalf("binding = %+v", b)
+	}
+	if res.Reminder != "You are IcyKnoll (herdr icyknoll)." {
+		t.Fatalf("reminder = %q", res.Reminder)
+	}
+}
+
+func TestClearDisplacesAndTakesTheMarksOff(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	b := h.binding("IcyKnoll")
+	// herdr reports the new session; a name from agent.start would stay.
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-b", pid: 500, name: "icyknoll"})
+	res := h.hook(sessionStart("sess-b", "clear"), "e2")
+	got := h.binding("IcyKnoll")
+	if got.Status != bindings.Displaced || !strings.Contains(got.StatusReason, "cleared") || got.Generation != 1 {
+		t.Fatalf("binding = %+v", got)
+	}
+	if h.world.get("w1:p1").name != "" {
+		t.Fatal("the herdr name stayed on the displaced pane")
+	}
+	if _, ok, err := agentmail.ReadIdentity(h.env.ConfigHome, b.MailProjectKey, "w1:p1"); ok || err != nil {
+		t.Fatalf("the identity file stayed (%v)", err)
+	}
+	if res.Reminder != "" {
+		t.Fatalf("reminder after clear = %q", res.Reminder)
+	}
+}
+
+func TestRestartInPlaceGetsItsNameBack(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	// /exit, then `claude --continue`: the same session, a new process,
+	// and herdr dropped the name.
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 777})
+	rep, err := RunPluginEvent(context.Background(), h.env, PaneEvent{PaneID: "w1:p1", Agent: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := h.binding("IcyKnoll")
+	if b.ForegroundPID != 777 || b.Generation != 1 || h.world.get("w1:p1").name != "icyknoll" {
+		t.Fatalf("binding = %+v, name %q, report %+v", b, h.world.get("w1:p1").name, rep)
+	}
+	// A second event changes nothing more.
+	rep, _ = RunPluginEvent(context.Background(), h.env, PaneEvent{PaneID: "w1:p1"})
+	if len(rep.Actions) != 0 {
+		t.Fatalf("second event: %v", rep.Actions)
+	}
+}
+
+func TestAnotherKindDisplaces(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	h.world.set("w1:p1", pane{kind: "codex", session: "thr-1", pid: 600})
+	if _, err := RunPluginEvent(context.Background(), h.env, PaneEvent{PaneID: "w1:p1"}); err != nil {
+		t.Fatal(err)
+	}
+	if b := h.binding("IcyKnoll"); b.Status != bindings.Displaced {
+		t.Fatalf("binding = %+v", b)
+	}
+}
+
+func TestReleasedAgentLeavesTheBinding(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	h.world.set("w1:p1", pane{})
+	if _, err := RunPluginEvent(context.Background(), h.env, PaneEvent{PaneID: "w1:p1", Released: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b := h.binding("IcyKnoll"); b.Status != bindings.Active {
+		t.Fatalf("binding = %+v", b)
+	}
+}
+
+func TestSpawnedCodexTakesItsFirstSessionAndCompacts(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	h.world.set("w1:p1", pane{kind: "codex", pid: 600})
+	b, err := h.env.Bindings.Create(ctx, bindings.New{MailName: "BlueLake", MailProjectKey: "/p", ProjectID: "proj-p",
+		Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p1",
+			HerdrAlias: "bluelake", Kind: "codex", LaunchID: "launch-9", ForegroundPID: 600, ForegroundStart: 6000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Codex's SessionStart comes at the first turn (ACFS exp.3).
+	h.vars["NHM_LAUNCH_ID"] = "launch-9"
+	h.world.set("w1:p1", pane{kind: "codex", session: "thr-1", pid: 600, name: "bluelake"})
+	res := h.hook(sessionStart("thr-1", "startup"), "e1")
+	got, _ := h.env.Bindings.Get(ctx, b.ID)
+	if got.NativeSession == nil || got.NativeSession.Value != "thr-1" || got.Generation != 1 {
+		t.Fatalf("binding = %+v", got)
+	}
+	if res.Reminder != "" {
+		t.Fatalf("codex got a reminder: %q", res.Reminder)
+	}
+	h.hook(map[string]any{"hook_event_name": "PostCompact", "session_id": "thr-1", "trigger": "manual"}, "e2")
+	got, _ = h.env.Bindings.Get(ctx, b.ID)
+	if got.CompactedAt == nil || got.Status != bindings.Active {
+		t.Fatalf("after compaction = %+v", got)
+	}
+}
+
+func TestBashOwnerLeavesCandidatesPending(t *testing.T) {
+	h := newHarness(t, core.OwnerBash)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	res := h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	if res.Report.Ran || res.Report.Owner != core.OwnerBash {
+		t.Fatalf("report = %+v", res.Report)
+	}
+	got, _ := CandidateResults(context.Background(), h.env.DB, "w1:p1")
+	if len(got) != 1 || got[0].Processed {
+		t.Fatalf("candidates = %+v", got)
+	}
+	if h.world.called("agent.rename") {
+		t.Fatal("renamed under the Bash owner")
+	}
+}
+
+func TestFilteredHooksWriteNothing(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.vars["CLAUDE_CODE_ENTRYPOINT"] = "sdk-cli"
+	if res := h.hook(sessionStart("sess-n", "startup"), "e1"); !strings.HasPrefix(res.Skipped, "nested run") {
+		t.Fatalf("nested = %+v", res)
+	}
+	delete(h.vars, "CLAUDE_CODE_ENTRYPOINT")
+	other := registration("sess-a", "IcyKnoll", "/p")
+	other["tool_name"] = "mcp__mcp-agent-mail__send_message"
+	if res := h.hook(other, "e2"); res.Skipped == "" {
+		t.Fatalf("send_message = %+v", res)
+	}
+	delete(h.vars, "HERDR_PANE_ID")
+	if res := h.hook(sessionStart("sess-a", "startup"), "e3"); res.Skipped == "" {
+		t.Fatalf("no pane = %+v", res)
+	}
+	got, _ := CandidateResults(context.Background(), h.env.DB, "w1:p1")
+	if len(got) != 0 {
+		t.Fatalf("candidates = %+v", got)
+	}
+}
+
+func TestPruneExpiresAndBounds(t *testing.T) {
+	h := newHarness(t, core.OwnerBash)
+	ctx := context.Background()
+	db := h.env.DB.SQL()
+	if _, err := recordCandidate(ctx, db, Candidate{PaneID: "w1:p1", HookEvent: "SessionStart", HookEventID: "old",
+		Facts: CandidateFacts{HookEventName: "SessionStart", TokenRef: "cand-77"}, ReceivedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := prune(ctx, db, t0.Add(time.Hour))
+	if err != nil || len(refs) != 1 || refs[0] != "cand-77" {
+		t.Fatalf("prune = %v %v", refs, err)
+	}
+	got, _ := CandidateResults(ctx, h.env.DB, "w1:p1")
+	if len(got) != 1 || !got[0].Processed || !strings.HasPrefix(got[0].Result, "expired") {
+		t.Fatalf("candidates = %+v", got)
+	}
+	if _, err := prune(ctx, db, t0.Add(8*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := CandidateResults(ctx, h.env.DB, "w1:p1"); len(got) != 0 {
+		t.Fatalf("old rows stayed: %+v", got)
+	}
+}
+
+func TestParseRegistrationShapes(t *testing.T) {
+	in := json.RawMessage(`{"project_key":"/p"}`)
+	for name, resp := range map[string]string{
+		"object":        `{"name":"IcyKnoll","registration_token":"t"}`,
+		"string":        `"{\"name\":\"IcyKnoll\",\"registration_token\":\"t\"}"`,
+		"content":       `[{"type":"text","text":"{\"name\":\"IcyKnoll\",\"registration_token\":\"t\"}"}]`,
+		"wrapped":       `{"content":[{"type":"text","text":"{\"name\":\"IcyKnoll\",\"registration_token\":\"t\"}"}]}`,
+		"structured":    `{"structuredContent":{"name":"IcyKnoll","registration_token":"t"},"content":[]}`,
+		"macro session": `{"project":{"slug":"p"},"agent":{"name":"IcyKnoll","registration_token":"t"},"inbox":[{"name":"x"}]}`,
+	} {
+		r, err := ParseRegistration(AgentPayload{ToolInput: in, ToolResponse: json.RawMessage(resp)})
+		if err != nil || r.Name != "IcyKnoll" || r.Token != "t" || r.ProjectKey != "/p" {
+			t.Errorf("%s: %+v %v", name, r, err)
+		}
+	}
+	if _, err := ParseRegistration(AgentPayload{ToolResponse: json.RawMessage(`{"name":"IcyKnoll"}`)}); err == nil {
+		t.Error("no project accepted")
+	}
+	if got := RegistrationTool("mcp__agent_mail__macro_start_session"); got != "macro_start_session" {
+		t.Errorf("RegistrationTool = %q", got)
+	}
+}
+
+func TestRulesSpellVerdictsAlike(t *testing.T) {
+	if codex.Continue != claude.Continue || codex.Displace != claude.Displace || codex.Ignore != claude.Ignore {
+		t.Fatal("the claude and codex rules spell their verdicts differently")
+	}
+}
+
+func TestSessionlessHookProvesNothing(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("", "IcyKnoll", t.TempDir()), "e1")
+	got, _ := CandidateResults(context.Background(), h.env.DB, "w1:p1")
+	if len(got) != 1 || got[0].Result != "ignored: the hook sent no session id" {
+		t.Fatalf("candidates = %+v", got)
+	}
+}
+
+func TestParsePluginEventSpellings(t *testing.T) {
+	ev, err := ParsePluginEvent(`{"event":"pane_agent_detected","data":{"pane_id":"w1:p2","released":true,"final_status":"done"}}`)
+	if err != nil || ev.PaneID != "w1:p2" || !ev.Released || ev.FinalStatus != herdr.StatusDone {
+		t.Fatalf("detected = %+v %v", ev, err)
+	}
+	ev, err = ParsePluginEvent(`{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p3","agent_status":"idle","agent":"claude"}}`)
+	if err != nil || ev.PaneID != "w1:p3" || ev.AgentStatus != herdr.StatusIdle {
+		t.Fatalf("status = %+v %v", ev, err)
+	}
+	if ev, err := ParsePluginEvent(""); err != nil || ev.PaneID != "" {
+		t.Fatalf("empty = %+v %v", ev, err)
+	}
+}

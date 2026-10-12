@@ -40,14 +40,16 @@ for platform in "${platforms[@]}"; do
   name="nhm-${version}-${platform}"
   dir="$stage/$name"
   mkdir -p "$dir"
-  (
-    cd "$root" || exit 1
-    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
-      -ldflags "-s -w -X github.com/arosl/nhm/internal/cli.Version=${version} -X github.com/arosl/nhm/internal/cli.Commit=${commit}" \
-      -o "$dir/nhm" ./cmd/nhm
-  )
+  for cmd in nhm nhm-hook; do
+    (
+      cd "$root" || exit 1
+      CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+        -ldflags "-s -w -X github.com/arosl/nhm/internal/cli.Version=${version} -X github.com/arosl/nhm/internal/cli.Commit=${commit}" \
+        -o "$dir/$cmd" "./cmd/$cmd"
+    )
+  done
   cp "$root/LICENSE" "$root/PROVENANCE.md" "$dir/"
-  (cd "$dir" && sha256sum nhm LICENSE PROVENANCE.md > SHA256SUMS)
+  (cd "$dir" && sha256sum nhm nhm-hook LICENSE PROVENANCE.md > SHA256SUMS)
   tar --zstd -C "$stage" --owner=0 --group=0 --numeric-owner -cf "$out/$name.tar.zst" "$name"
   archives+=("$name.tar.zst")
   echo "package: $out/$name.tar.zst" >&2
