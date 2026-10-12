@@ -6,8 +6,10 @@ import (
 	"os"
 
 	"github.com/arosl/nhm/internal/cli"
+	"github.com/arosl/nhm/internal/ui"
 )
 
 func main() {
+	ui.FixPluginPath()
 	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 }

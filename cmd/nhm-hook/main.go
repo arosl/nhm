@@ -38,6 +38,7 @@ import (
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
+	"github.com/arosl/nhm/internal/ui"
 )
 
 // The hook's time (plan-v8 2.7: two seconds, fail open). budget is the
@@ -67,6 +68,7 @@ const busyWait = 200 * time.Millisecond
 func main() {
 	// The backstop: whatever blocks, the hook exits 0 inside two seconds.
 	time.AfterFunc(hardStop, func() { os.Exit(0) })
+	ui.FixPluginPath()
 	os.Exit(safeRun(run, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 }
 

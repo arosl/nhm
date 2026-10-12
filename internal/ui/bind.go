@@ -156,6 +156,14 @@ func codeOf(line string) string {
 	return line
 }
 
+// isMarker reports whether line is the begin marker, alone or followed by
+// a comment: ACFS writes "# >>> acfs palette >>> managed by `acfs palette
+// bind`; …" and, after `acfs palette unbind`, "… unbound by …".
+func isMarker(line, marker string) bool {
+	t := strings.TrimSpace(line)
+	return t == marker || strings.HasPrefix(t, marker+" ")
+}
+
 // withoutBlock removes a marked block (and the blank line after it). A
 // marker counts only at the top level, never inside a multi-line string.
 func withoutBlock(text, begin, end string) (string, error) {
@@ -168,7 +176,7 @@ func withoutBlock(text, begin, end string) (string, error) {
 		case inString && !inside:
 			skipBlank = false
 			out = append(out, line)
-		case !inside && strings.TrimSpace(line) == begin:
+		case !inside && isMarker(line, begin):
 			inside = true
 		case inside && strings.TrimSpace(line) == end:
 			inside, skipBlank = false, true

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/arosl/nhm/internal/herdr"
 )
@@ -138,6 +139,50 @@ func Beside(name string) string {
 		return ""
 	}
 	return p
+}
+
+// userBinDirs are where ACFS installs the tools nhm runs (cm, cass, br,
+// dcg, claude, codex), relative to HOME.
+var userBinDirs = []string{".local/bin", ".cargo/bin", ".bun/bin"}
+
+// PluginPath returns the PATH a process herdr's plugin started should
+// use, and whether it differs from PATH. herdr runs plugin actions,
+// popups and event hooks with the herdr server's environment, whose PATH
+// may lack the user's tool directories: then cm and cass are "not
+// installed" and a send loses its memory block (nhm-sbq). Outside a
+// plugin context, or when every directory is there, PATH stays. isDir is
+// a stat in production.
+func PluginPath(getenv func(string) string, isDir func(string) bool) (string, bool) {
+	path, home := getenv("PATH"), getenv("HOME")
+	if home == "" || getenv("HERDR_PLUGIN_CONTEXT_JSON") == "" && getenv("HERDR_PLUGIN_EVENT_JSON") == "" && getenv(ContextEnv) == "" {
+		return path, false
+	}
+	have := map[string]bool{}
+	for _, d := range filepath.SplitList(path) {
+		have[filepath.Clean(d)] = true
+	}
+	var add []string
+	for _, rel := range userBinDirs {
+		if d := filepath.Join(home, rel); !have[d] && isDir(d) {
+			add = append(add, d)
+		}
+	}
+	if len(add) == 0 {
+		return path, false
+	}
+	if path != "" {
+		add = append(add, path)
+	}
+	return strings.Join(add, string(filepath.ListSeparator)), true
+}
+
+// FixPluginPath sets PATH to PluginPath's result for this process and
+// its children.
+func FixPluginPath() {
+	isDir := func(d string) bool { st, err := os.Stat(d); return err == nil && st.IsDir() }
+	if p, changed := PluginPath(os.Getenv, isDir); changed {
+		_ = os.Setenv("PATH", p)
+	}
 }
 
 func firstNonEmpty(values ...string) string {

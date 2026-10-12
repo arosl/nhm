@@ -97,3 +97,21 @@ func TestUnbindKeepsACFSBlock(t *testing.T) {
 		t.Fatalf("Unbind = %q %v", got, err)
 	}
 }
+
+// ACFS writes its begin marker with a comment after it, and its block
+// binds prefix+a: Bind replaces it instead of refusing the key (nhm-t59).
+func TestBindReplacesACFSBlockWithComment(t *testing.T) {
+	for _, begin := range []string{
+		"# >>> acfs palette >>> managed by `acfs palette bind`; `acfs palette unbind` removes it",
+		"# >>> acfs palette >>> unbound by `acfs palette unbind`; `acfs palette bind` binds it again",
+	} {
+		acfs := begin + "\n[[keys.command]]\nkey = \"prefix+a\"\ntype = \"popup\"\ncommand = \"bash palette.sh\"\n# <<< acfs palette <<<\n"
+		bound, err := Bind(acfs)
+		if err != nil || strings.Contains(bound, "acfs palette") || strings.Contains(bound, "palette.sh") {
+			t.Fatalf("Bind(%q) = %q %v", begin, bound, err)
+		}
+	}
+	if isMarker("# >>> acfs palettex >>>", acfsBlockBegin) {
+		t.Fatal("isMarker matched a longer marker")
+	}
+}

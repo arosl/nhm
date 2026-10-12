@@ -130,3 +130,31 @@ func TestContextJSONKeys(t *testing.T) {
 		t.Fatalf("json = %s", data)
 	}
 }
+
+// herdr's server PATH lacks ~/.local/bin: a plugin process puts the
+// user's tool directories that exist in front, once (nhm-sbq).
+func TestPluginPath(t *testing.T) {
+	exists := map[string]bool{"/h/.local/bin": true, "/h/.cargo/bin": true}
+	isDir := func(d string) bool { return exists[d] }
+	server := "/h/.cargo/bin:/usr/bin:/bin"
+	cases := []struct {
+		name    string
+		vars    map[string]string
+		want    string
+		changed bool
+	}{
+		{"not a plugin", map[string]string{"HOME": "/h", "PATH": server}, server, false},
+		{"plugin action", map[string]string{"HOME": "/h", "PATH": server, "HERDR_PLUGIN_CONTEXT_JSON": "{}"}, "/h/.local/bin:" + server, true},
+		{"event hook", map[string]string{"HOME": "/h", "PATH": server, "HERDR_PLUGIN_EVENT_JSON": "{}"}, "/h/.local/bin:" + server, true},
+		{"popup child", map[string]string{"HOME": "/h", "PATH": server, ContextEnv: "{}"}, "/h/.local/bin:" + server, true},
+		{"already there", map[string]string{"HOME": "/h", "PATH": "/h/.local/bin/:" + server, ContextEnv: "{}"}, "/h/.local/bin/:" + server, false},
+		{"no HOME", map[string]string{"PATH": server, ContextEnv: "{}"}, server, false},
+		{"empty PATH", map[string]string{"HOME": "/h", ContextEnv: "{}"}, "/h/.local/bin:/h/.cargo/bin", true},
+	}
+	for _, tc := range cases {
+		got, changed := PluginPath(env(tc.vars), isDir)
+		if got != tc.want || changed != tc.changed {
+			t.Errorf("%s: PluginPath = %q, %v; want %q, %v", tc.name, got, changed, tc.want, tc.changed)
+		}
+	}
+}

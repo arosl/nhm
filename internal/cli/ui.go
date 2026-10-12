@@ -209,6 +209,11 @@ func page(text string) {
 func runChild(c ui.Context, args ...string) string {
 	cmd := exec.Command(self(), args...)
 	cmd.Env = nhmEnv(c)
+	if st, err := os.Stat(c.Cwd); c.Cwd != "" && err == nil && st.IsDir() {
+		// A verb finds its project from the pane the popup was opened
+		// over, not from the plugin's directory, where herdr runs it.
+		cmd.Dir = c.Cwd
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil && len(out) == 0 {
 		return err.Error() + "\n"
