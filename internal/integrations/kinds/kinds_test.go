@@ -28,7 +28,13 @@ func TestProgramContent(t *testing.T) {
 	old := ProgramHead
 	ProgramHead = realProgramHead
 	t.Cleanup(func() { ProgramHead = old })
-	root := t.TempDir()
+	// An absolute root whatever TMPDIR is: with a relative TMPDIR, t.TempDir
+	// is relative, and the bun wrapper (rightly) takes only absolute paths.
+	root, err := os.MkdirTemp("/tmp", "nhm-kinds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	file := func(rel, content string) string {
 		p := filepath.Join(root, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
