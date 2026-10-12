@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/arosl/nhm/internal/integrations/kinds"
 )
 
 // State is a guard's state for a kind.
@@ -80,29 +82,36 @@ func (e Env) withDefaults() Env {
 	return e
 }
 
-// Kinds lists the kinds Check knows, in report order.
-var Kinds = []string{"claude", "codex", "agy", "pi", "omp", "opencode", "grok"}
+// Kinds lists the kinds Check reports, in the kind registry's order.
+var Kinds = kinds.Names()
+
+// checkers read a settings format: the kind registry names the file
+// (Adapter.GuardSettings); each format needs its own reader.
+var checkers = map[string]func(Env) []Result{
+	"claude": checkClaude,
+	"codex":  checkCodex,
+	"agy":    checkAgy,
+}
 
 // Check reports every guard for a kind.
 func Check(kind string, env Env) []Result {
 	env = env.withDefaults()
-	switch kind {
-	case "claude":
-		return checkClaude(env)
-	case "codex":
-		return checkCodex(env)
-	case "agy":
-		return checkAgy(env)
-	case "pi":
+	a := kinds.Lookup(kind)
+	if !a.GuardSupported {
 		return each(kind, func(g string) Result {
-			return Result{State: Unsupported, Detail: "pi runs no hooks; every spawn warns (F.9)"}
-		})
-	default:
-		return each(kind, func(g string) Result {
-			return Result{State: Missing, Detail: "nhm cannot check this kind's settings yet (its adapter comes with nhm.kinds)",
-				Fix: "spawn it with --allow-unguarded, or wait for its adapter"}
+			return Result{State: Unsupported, Detail: kind + " runs no hooks; every spawn warns (F.9)"}
 		})
 	}
+	if check, ok := checkers[kind]; ok {
+		return check(env)
+	}
+	detail := "nhm has no reader for this kind's guard settings"
+	if a.GuardSettings != "" {
+		detail += " (" + a.GuardSettings + ")"
+	}
+	return each(kind, func(g string) Result {
+		return Result{State: Missing, Detail: detail, Fix: "spawn it with --allow-unguarded"}
+	})
 }
 
 func each(kind string, fn func(g string) Result) []Result {

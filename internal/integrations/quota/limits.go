@@ -12,29 +12,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
 
-// limitPatterns are what each kind prints when its plan's usage limit or
-// the API's rate limit stops it: whole phrases, never a bare "rate
-// limit", so an agent's own prose about limits rarely matches. They are
-// ACFS's (herdr_agents.sh herdr_agents_limit_pattern). A kind without its
-// own gets the generic ones.
-var limitPatterns = map[string]*regexp.Regexp{
-	"claude":  regexp.MustCompile(`(?i)usage limit reached|you('|’)ve (hit|reached) your ([a-z0-9-]+ )?limit|(5-hour|session|weekly|opus|sonnet) limit reached|rate_limit_error|api error: 429`),
-	"codex":   regexp.MustCompile(`(?i)you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit reached|429 too many requests`),
-	"agy":     regexp.MustCompile(`(?i)resource_exhausted|quota (exceeded|exhausted)|(reached|exhausted) (your|the) [a-z0-9. -]{0,30}quota|usage limit reached|429 too many requests`),
-	"generic": regexp.MustCompile(`(?i)usage limit reached|rate limit reached|quota exceeded|429 too many requests`),
-}
-
-func init() { limitPatterns["gemini"] = limitPatterns["agy"] }
-
-// LimitPattern is a kind's limit pattern.
+// LimitPattern is a kind's limit recogniser, from the kind registry: what
+// the kind prints when its plan's usage limit or the API's rate limit
+// stops it, as whole phrases, never a bare "rate limit", so an agent's own
+// prose about limits rarely matches. The patterns are ACFS's
+// (herdr_agents.sh herdr_agents_limit_pattern). A kind without its own
+// gets the generic one. herdr's "gemini" is the agy CLI's older name.
 func LimitPattern(kind string) *regexp.Regexp {
-	if re, ok := limitPatterns[kind]; ok {
-		return re
+	if kind == "gemini" {
+		kind = "agy"
 	}
-	return limitPatterns["generic"]
+	return kinds.Lookup(kind).LimitPattern()
 }
 
 // FindLimit returns the last line of text that shows the kind's limit

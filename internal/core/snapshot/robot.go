@@ -15,6 +15,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
 )
 
@@ -28,17 +29,9 @@ type BuildInfo struct {
 // staleAfterSec is the age at which nhm calls an observation stale.
 const staleAfterSec = 30
 
-// NTMType maps a herdr kind to ntm's agent type name.
-func NTMType(kind string) string {
-	switch kind {
-	case "agy":
-		return "antigravity"
-	case "":
-		return "unknown"
-	default:
-		return kind
-	}
-}
+// NTMType maps a herdr kind to ntm's agent type name, from the kind
+// registry.
+func NTMType(kind string) string { return kinds.Lookup(kind).NTMType }
 
 // Activity maps herdr's state to ntm's activity enum, whether a prompt
 // may go to the agent now, and the confidence of the observation. herdr

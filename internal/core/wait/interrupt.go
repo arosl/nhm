@@ -7,21 +7,14 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
 
-// interruptKeys is each kind's interrupt key (plan-v8 2.6). Esc stops
-// the turn of Claude, Codex and omp and keeps the session. The key of
-// agy and pi is not checked yet, so nhm refuses them instead of guessing.
-var interruptKeys = map[string][]string{
-	"claude": {"Escape"},
-	"codex":  {"Escape"},
-	"omp":    {"Escape"},
-}
-
-// InterruptKeys returns a kind's interrupt key, or nil when nhm has no
-// checked key for the kind.
-func InterruptKeys(kind string) []string { return interruptKeys[kind] }
+// InterruptKeys returns a kind's interrupt key from the kind registry
+// (plan-v8 2.6, 2.14), or nil when nhm has no checked key for the kind:
+// then nhm refuses instead of guessing.
+func InterruptKeys(kind string) []string { return kinds.Lookup(kind).InterruptKeys }
 
 // Interrupt statuses.
 const (

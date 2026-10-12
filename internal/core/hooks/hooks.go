@@ -29,8 +29,7 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
-	"github.com/arosl/nhm/internal/integrations/kinds/claude"
-	"github.com/arosl/nhm/internal/integrations/kinds/codex"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -146,7 +145,7 @@ func RunAgentHook(ctx context.Context, env Env, h AgentHook) (Result, error) {
 	case "SessionStart", "PreCompact", "PostCompact":
 		// A nested `claude -p` inherits the pane's environment; drop it
 		// before any work (ACFS exp.4).
-		if claude.Nested(claude.Event{Entrypoint: facts.Entrypoint}) {
+		if kinds.Nested(kinds.Event{Entrypoint: facts.Entrypoint}) {
 			return Result{Skipped: "nested run (entrypoint " + facts.Entrypoint + ")"}, nil
 		}
 	default:
@@ -198,13 +197,14 @@ func setTokenRef(ctx context.Context, env Env, id int64, ref string) error {
 	return err
 }
 
-// reminder is the line a Claude agent reads at SessionStart when its
-// pane holds an active binding for this session. It costs context
-// tokens; the pane name costs none. Codex gets no reminder: what Codex
-// does with a SessionStart hook's stdout is not proven.
+// reminder is the line an agent reads at SessionStart when its pane holds
+// an active binding for this session, for a kind whose SessionStart
+// output reaches its context (the registry's SessionStartContext: Claude;
+// for Codex it is not proven). It costs context tokens; the pane name
+// costs none.
 func reminder(ctx context.Context, env Env, pane, session string) string {
 	b, err := env.Bindings.ActiveByPane(ctx, pane)
-	if err != nil || b.Kind != "claude" {
+	if err != nil || !kinds.Lookup(b.Kind).SessionStartContext {
 		return ""
 	}
 	if b.NativeSession == nil || b.NativeSession.Value != session {
@@ -490,20 +490,14 @@ func applyContinuation(ctx context.Context, env Env, c Candidate, st paneState, 
 		bound = b.NativeSession.Value
 	}
 	launch := c.LaunchID != "" && c.LaunchID == b.LaunchID
-	var verdict, reason string
-	var compacted, resumed, take bool
-	switch b.Kind {
-	case "claude":
-		d := claude.Classify(claude.Event{HookEvent: c.HookEvent, Source: c.Facts.Source, SessionID: c.Session,
-			Entrypoint: c.Facts.Entrypoint}, bound, launch)
-		verdict, reason, compacted, resumed, take = d.Verdict, d.Reason, d.Compacted, d.Resumed, d.TakeSession
-	case "codex":
-		d := codex.Classify(codex.Event{HookEvent: c.HookEvent, Source: c.Facts.Source, SessionID: c.Session}, bound, launch)
-		verdict, reason, compacted, resumed, take = d.Verdict, d.Reason, d.Compacted, d.Resumed, d.TakeSession
-	default:
+	rule := kinds.Lookup(b.Kind).Continue
+	if rule == nil {
 		return "ignored: no continuation rule for kind " + b.Kind, nil
 	}
-	// Both rules spell their verdicts "continue", "displace", "ignore".
+	d := rule(kinds.Event{HookEvent: c.HookEvent, Source: c.Facts.Source, SessionID: c.Session,
+		Entrypoint: c.Facts.Entrypoint}, bound, launch)
+	verdict, reason, compacted, resumed, take := d.Verdict, d.Reason, d.Compacted, d.Resumed, d.TakeSession
+	// Every rule spells its verdicts "continue", "displace", "ignore".
 	switch verdict {
 	case verdictContinue:
 		cont := bindings.Continuation{Evidence: []bindings.Evidence{{Kind: strings.ToLower(c.HookEvent), Detail: reason}}}
@@ -536,11 +530,11 @@ func applyContinuation(ctx context.Context, env Env, c Candidate, st paneState, 
 	}
 }
 
-// The verdicts of both rules; TestRulesSpellVerdictsAlike keeps the two
-// packages in step.
+// The verdicts of every rule; TestRulesSpellVerdictsAlike keeps the kind
+// packages in step with the registry.
 const (
-	verdictContinue = claude.Continue
-	verdictDisplace = claude.Displace
+	verdictContinue = kinds.Continue
+	verdictDisplace = kinds.Displace
 )
 
 // keepTrue runs after the candidates: it displaces a binding whose pane

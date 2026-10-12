@@ -14,6 +14,7 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 )
 
 // Selector picks the targets (plan-v8 2.3, "Selection rules"). Names and
@@ -31,11 +32,6 @@ type Selector struct {
 	Limit       int                 `json:"limit,omitempty"`
 	IncludeSelf bool                `json:"include_self,omitempty"`
 }
-
-// codeReview is false for the kinds that a "--state done" selection
-// leaves out unless named: ACFS runs Codex for plan reviews only. The
-// kind registry (nhm.kinds) holds this policy later.
-var codeReview = map[string]bool{"codex": false}
 
 // Target is one selected agent: its binding, frozen at selection, and
 // herdr's agent in its pane (nil when the pane has none).
@@ -112,7 +108,9 @@ func Select(ctx context.Context, l Lister, agents []herdr.AgentInfo, workspaceID
 			continue
 		}
 		if wantDone && !named[b.ID] {
-			if review, ok := codeReview[b.Kind]; ok && !review {
+			// The registry's code_review: false leaves the kind out of a
+			// "--state done" selection unless named (Codex: plan reviews only).
+			if !kinds.Lookup(b.Kind).CodeReview {
 				continue
 			}
 		}
