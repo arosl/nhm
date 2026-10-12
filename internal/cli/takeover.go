@@ -34,10 +34,13 @@ state and agents.toml's keep list; 'admin recover reconcile' reads the
 agents the Bash spawned into bindings. Mail the Bash already woke an
 agent for is marked announced, so nhm does not nudge for it again. nhm's
 keep list must cover the Bash's. Any entry that cannot be imported
-refuses, and the Bash stays the owner: an agent the import skips, or a
-token that no binding takes. --exclude NAME (an Agent Mail name, a herdr
-name or a pane id; repeatable) leaves that agent behind on purpose, and
-the report lists it. It deletes nothing of the Bash's.
+refuses, the Bash stays the owner, and nothing is written: an agent the
+import skips, or a token that no binding takes. --yes checks everything
+as --dry-run does before it writes. --exclude leaves one agent behind on
+purpose, and the report lists it (repeatable): NAME (an Agent Mail or
+herdr name, when only one project has it), /project:NAME, or the pane id
+of a skipped agent (its token goes with it). It deletes nothing of the
+Bash's.
 
 handback gives the server back to the Bash: it hands the tokens, each
 agent's wake state and the keep list to 'acfs agents import', and refuses,
@@ -58,7 +61,7 @@ func (ie *instanceEnv) ownerEnv() (owner.Env, error) {
 	return owner.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), InstanceDir: ie.inst.Dir,
 		Bash: owner.BashCLI{Acfs: os.Getenv("ACFS_BIN")}, Events: owner.EventsCLI{}, Mail: mail,
 		ImportBindings: func(ctx context.Context, dry bool) (bindings.ImportReport, error) {
-			return bindings.ImportOnly(ctx, ie.env(), projectOf, bindings.ImportRequest{DryRun: dry})
+			return bindings.ImportOnly(ctx, ie.env(), projectOf, bindings.ImportRequest{DryRun: dry, ProjectAt: projectAt})
 		},
 		Keep: func() ([]string, error) { return lifecycle.LoadKeep(keepPaths()...) },
 		RefreshWake: func(ctx context.Context, b bindings.Binding) error {

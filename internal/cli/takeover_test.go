@@ -125,12 +125,23 @@ func TestTakeoverExcludeVerb(t *testing.T) {
 // spawned there; inside a work tree, the tree's root.
 func TestProjectOfOutsideGit(t *testing.T) {
 	ctx := context.Background()
-	plain := t.TempDir()
+	// Under /tmp, not t.TempDir(): a TMPDIR inside a git work tree would
+	// put "outside git" inside one.
+	tmpDir := func() string {
+		dir, err := os.MkdirTemp("/tmp", "nhm-projectof-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		return dir
+	}
+	plain := tmpDir()
 	key, id, err := projectOf(ctx, plain)
 	if real, _ := filepath.EvalSymlinks(plain); err != nil || key != real || id == "" {
 		t.Fatalf("outside git = %q %q %v", key, id, err)
 	}
-	repo := t.TempDir()
+	// projectAt takes the folder itself, also inside a work tree.
+	repo := tmpDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -141,5 +152,9 @@ func TestProjectOfOutsideGit(t *testing.T) {
 	key, _, err = projectOf(ctx, sub)
 	if real, _ := filepath.EvalSymlinks(repo); err != nil || key != real {
 		t.Fatalf("inside git = %q %v", key, err)
+	}
+	key, _, err = projectAt(ctx, sub)
+	if real, _ := filepath.EvalSymlinks(sub); err != nil || key != real {
+		t.Fatalf("projectAt in a work tree = %q %v", key, err)
 	}
 }

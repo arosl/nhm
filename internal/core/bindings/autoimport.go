@@ -90,10 +90,32 @@ func mayHaveEvidence(ctx context.Context, env Env, projectOf ProjectOf, req Impo
 		return a.Agent != ""
 	}
 	projectKey, _, err := projectOf(ctx, cwd)
-	if err != nil || (req.ProjectKey != "" && projectKey != req.ProjectKey) {
+	if err != nil {
 		return false
 	}
-	if _, ok, err := agentmail.ReadIdentity(env.ConfigHome, projectKey, req.PaneID); ok || err != nil {
+	// The import's candidate keys: the work tree's, and the folder's own
+	// (ImportRequest.ProjectAt).
+	keys := []string{projectKey}
+	if req.ProjectAt != nil {
+		if k, _, err := req.ProjectAt(ctx, cwd); err == nil && k != projectKey {
+			keys = append(keys, k)
+		}
+	}
+	for _, k := range keys {
+		if req.ProjectKey == "" || k == req.ProjectKey {
+			if keyHasEvidence(env, req, a, k) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// keyHasEvidence reports whether the identity file or a Bash token for
+// the pane's alias may exist under project key k (true when it cannot
+// tell).
+func keyHasEvidence(env Env, req ImportRequest, a herdr.AgentInfo, k string) bool {
+	if _, ok, err := agentmail.ReadIdentity(env.ConfigHome, k, req.PaneID); ok || err != nil {
 		return true
 	}
 	if a.Name == "" {
@@ -103,7 +125,7 @@ func mayHaveEvidence(ctx context.Context, env Env, projectOf ProjectOf, req Impo
 	if acfsHome == "" {
 		acfsHome = DefaultAcfsHome()
 	}
-	entries, err := os.ReadDir(filepath.Dir(BashTokenFile(acfsHome, projectKey, "_")))
+	entries, err := os.ReadDir(filepath.Dir(BashTokenFile(acfsHome, k, "_")))
 	if err != nil {
 		return !os.IsNotExist(err)
 	}

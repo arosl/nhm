@@ -46,6 +46,12 @@ type ImportRequest struct {
 	// DefaultAcfsHome()).
 	AcfsHome    string `json:"-"`
 	OperationID string `json:"-"`
+	// ProjectAt maps a folder to the project rooted exactly there
+	// (--project's rule). With it, a pane in a subfolder of a git work
+	// tree is also tried under that folder's own key: the Bash keys an
+	// agent spawned with --cwd there by the folder (acfs-9hkh.80). The key
+	// with verified evidence wins; the work tree's key is tried first.
+	ProjectAt ProjectOf `json:"-"`
 }
 
 // Import actions.
@@ -164,6 +170,10 @@ func importOne(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequ
 	if cwd == "" {
 		return skip("herdr reports no working directory for the pane")
 	}
+	// The candidate projects: the work tree's, then the folder's own
+	// (ProjectAt) when that differs; the first with verified evidence wins.
+	type candidate struct{ key, id string }
+	var cands []candidate
 	projectKey, projectID, err := projectOf(ctx, cwd)
 	if err != nil {
 		if req.ProjectKey != "" {
@@ -171,22 +181,49 @@ func importOne(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequ
 		}
 		return skip("no project: " + err.Error())
 	}
-	if req.ProjectKey != "" && projectKey != req.ProjectKey {
-		return item, false
+	cands = append(cands, candidate{projectKey, projectID})
+	if req.ProjectAt != nil {
+		if k, id, err := req.ProjectAt(ctx, cwd); err == nil && k != projectKey {
+			cands = append(cands, candidate{k, id})
+		}
+	}
+	if req.ProjectKey != "" {
+		var keep []candidate
+		for _, c := range cands {
+			if c.key == req.ProjectKey {
+				keep = append(keep, c)
+			}
+		}
+		if len(keep) == 0 {
+			return item, false
+		}
+		cands = keep
+	}
+
+	fromFile, fromBash, why := "", "", ""
+	var evidence []Evidence
+	for i, c := range cands {
+		file, bash, w := "", "", ""
+		var ev []Evidence
+		if rec, ok, err := agentmail.ReadIdentity(env.ConfigHome, c.key, a.PaneID); err != nil {
+			return skip("Agent Mail identity file: " + err.Error())
+		} else if ok {
+			file = rec.Name
+			ev = append(ev, Evidence{Kind: "identity_file", Detail: rec.Name + " for " + a.PaneID})
+		}
+		bash, w = bashEvidence(req.AcfsHome, c.key, snap, pane, a)
+		if bash != "" {
+			ev = append(ev, Evidence{Kind: "bash_spawn", Detail: w})
+		}
+		if i == 0 || file != "" || bash != "" {
+			projectKey, projectID, fromFile, fromBash, why, evidence = c.key, c.id, file, bash, w, ev
+		}
+		if file != "" || bash != "" {
+			break
+		}
 	}
 	item.ProjectKey = projectKey
-
-	fromFile := ""
-	if rec, ok, err := agentmail.ReadIdentity(env.ConfigHome, projectKey, a.PaneID); err != nil {
-		return skip("Agent Mail identity file: " + err.Error())
-	} else if ok {
-		fromFile = rec.Name
-		item.Evidence = append(item.Evidence, Evidence{Kind: "identity_file", Detail: rec.Name + " for " + a.PaneID})
-	}
-	fromBash, why := bashEvidence(req.AcfsHome, projectKey, snap, pane, a)
-	if fromBash != "" {
-		item.Evidence = append(item.Evidence, Evidence{Kind: "bash_spawn", Detail: why})
-	}
+	item.Evidence = append(item.Evidence, evidence...)
 	switch {
 	case fromFile != "" && fromBash != "" && !strings.EqualFold(fromFile, fromBash):
 		return skip(fmt.Sprintf("the identity file names %s, the Bash spawn names %s", fromFile, fromBash))

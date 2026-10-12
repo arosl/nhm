@@ -149,6 +149,17 @@ func projectOf(ctx context.Context, cwd string) (string, string, error) {
 	return s.MailProjectKey, s.ProjectID, nil
 }
 
+// projectAt is the project rooted exactly at dir, as --project takes it:
+// the import's second candidate for a pane in a subfolder of a work tree,
+// which the Bash keys by the folder (bindings.ImportRequest.ProjectAt).
+func projectAt(ctx context.Context, dir string) (string, string, error) {
+	s, err := core.ResolveScope(ctx, core.ScopeRequest{ProjectRoot: dir}, nil)
+	if err != nil {
+		return "", "", err
+	}
+	return s.MailProjectKey, s.ProjectID, nil
+}
+
 const resolveUsage = `Usage: nhm resolve <name|herdr-name|pane-id|--current> [--project DIR] [--socket PATH] [--json]
 
 Print the binding of an Agent Mail name, a herdr name or a pane, its
@@ -344,7 +355,7 @@ func runRecoverReconcile(args []string, stdout, stderr io.Writer) int {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
 	defer ie.db.Close()
-	req := bindings.ImportRequest{DryRun: *dryRun, OperationID: *opID}
+	req := bindings.ImportRequest{DryRun: *dryRun, OperationID: *opID, ProjectAt: projectAt}
 	if *project != "" {
 		s, err := projectScope(ctx, ie.inst.ID, *project)
 		if err != nil {

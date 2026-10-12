@@ -135,6 +135,16 @@ func Takeover(ctx context.Context, env Env, dry bool) (Report, error) {
 		return rep, err
 	}
 	o, err := core.SwitchOwner(ctx, env.InstanceDir, core.OwnerNhm, env.now(), func(core.Owner) error {
+		// Check everything as the dry run does first, which writes
+		// nothing: a refusal must leave no binding, operation row or
+		// identity-file repair behind (acfs-9hkh.80). The exclusive owner
+		// lock keeps the Bash's state as it is until the real pass.
+		check := newReport(true)
+		if _, err := planTakeover(ctx, env, &check); err != nil {
+			rep.Bindings, rep.Tokens, rep.Wake, rep.Keep, rep.Excluded, rep.Notes =
+				check.Bindings, check.Tokens, check.Wake, check.Keep, check.Excluded, check.Notes
+			return err
+		}
 		p, err := planTakeover(ctx, env, &rep)
 		if err != nil {
 			return err
@@ -222,53 +232,147 @@ func planTakeover(ctx context.Context, env Env, rep *Report) (*takeoverPlan, err
 // stays in ACFS's state, and the agent with it). An agent --exclude names
 // is left behind on purpose and recorded in the report (acfs-9hkh.80).
 func leftBehind(env Env, rep *Report, imp bindings.ImportReport) error {
-	// excluded reports whether --exclude names the agent by any of its
-	// names, and the name the report uses for it.
-	excluded := func(names ...string) (string, bool) {
-		for _, n := range names {
-			for _, x := range env.Exclude {
-				if n != "" && strings.EqualFold(n, x) {
-					return firstOf(names...), true
-				}
-			}
-		}
-		return "", false
+	// The agents left behind: each skipped pane and each token no binding
+	// takes. A skipped pane and its token are one agent.
+	type agent struct {
+		names   []string // the Agent Mail name, the herdr name
+		project string   // "" when the import found none
+		pane    string   // "" for a token
+		why     string
+		token   bool
 	}
-	// A skipped pane and its token are one agent: listed once, any case.
-	seen := map[string]bool{}
-	note := func(name, why string) {
-		if !seen[strings.ToLower(name)] {
-			seen[strings.ToLower(name)] = true
-			rep.Excluded = append(rep.Excluded, name)
-			rep.Notes = append(rep.Notes, fmt.Sprintf("%s is left behind (--exclude): %s", name, why))
-		}
-	}
-	var problems []string
+	var left []agent
 	for _, it := range imp.Items {
-		if it.Action != bindings.ActionSkipped {
-			continue
+		if it.Action == bindings.ActionSkipped {
+			left = append(left, agent{names: []string{it.MailName, it.HerdrName}, project: it.ProjectKey, pane: it.PaneID,
+				why: fmt.Sprintf("agent %s (pane %s) is not imported: %s", firstOf(it.MailName, it.HerdrName, it.PaneID), it.PaneID, it.Reason)})
 		}
-		if n, ok := excluded(it.MailName, it.HerdrName, it.PaneID); ok {
-			note(n, it.Reason)
-			continue
-		}
-		problems = append(problems, fmt.Sprintf("agent %s (pane %s) is not imported: %s",
-			firstOf(it.MailName, it.HerdrName, it.PaneID), it.PaneID, it.Reason))
 	}
 	for _, t := range rep.Tokens {
-		if t.Action != ActionACFSOnly {
+		if t.Action == ActionACFSOnly {
+			left = append(left, agent{names: []string{t.Name}, project: t.ProjectKey, token: true,
+				why: fmt.Sprintf("the token of %s is not imported: %s", t.Name, t.Reason)})
+		}
+	}
+	named := func(a agent, name string) bool {
+		for _, n := range a.names {
+			if n != "" && strings.EqualFold(n, name) {
+				return true
+			}
+		}
+		return false
+	}
+	// An exclusion names one agent: "/project:name" in that project, a
+	// pane id with that pane's token, or a bare name that only one project
+	// has (Agent Mail names are unique per project only).
+	out := make([]bool, len(left))
+	paired := map[int]bool{}
+	var problems []string
+	for _, x := range env.Exclude {
+		var hit []int
+		ambiguous := false
+		switch {
+		case strings.HasPrefix(x, "/") && strings.Contains(x, ":"):
+			i := strings.LastIndex(x, ":")
+			project, name := x[:i], x[i+1:]
+			for j, a := range left {
+				if a.project == project && named(a, name) {
+					hit = append(hit, j)
+				}
+			}
+		default:
+			pane := -1
+			for j, a := range left {
+				if a.pane != "" && a.pane == x {
+					pane = j
+				}
+			}
+			if pane >= 0 {
+				// The pane's agent and its token. A pane with no project
+				// takes the token by name only while one project has it.
+				p := left[pane]
+				hit = append(hit, pane)
+				projects := map[string]bool{}
+				for j, a := range left {
+					if a.token && (p.project == "" || a.project == p.project) && (named(a, p.names[0]) || named(a, p.names[1])) {
+						hit = append(hit, j)
+						projects[a.project] = true
+					}
+				}
+				if len(projects) > 1 {
+					// Not this pane's to choose: each token refuses on its
+					// own unless /project:NAME excludes it.
+					rep.Notes = append(rep.Notes, fmt.Sprintf("--exclude %s leaves its agent's tokens in place: they are in %d projects; exclude each by /project:NAME",
+						x, len(projects)))
+					hit = hit[:1]
+				}
+				break
+			}
+			projects := map[string]bool{}
+			for j, a := range left {
+				if named(a, x) {
+					hit = append(hit, j)
+					if a.project != "" {
+						projects[a.project] = true
+					}
+				}
+			}
+			if len(projects) > 1 {
+				list := make([]string, 0, len(projects))
+				for p := range projects {
+					list = append(list, p+":"+x)
+				}
+				sort.Strings(list)
+				problems = append(problems, fmt.Sprintf("--exclude %s names agents in %d projects: give one of %s",
+					x, len(projects), strings.Join(list, ", ")))
+				hit, ambiguous = nil, true
+			}
+		}
+		if len(hit) == 0 && !ambiguous {
+			rep.Notes = append(rep.Notes, fmt.Sprintf("--exclude %s names no agent the takeover would leave behind", x))
+		}
+		// A pane and the tokens one exclusion takes with it are one agent.
+		withPane := false
+		for _, j := range hit {
+			out[j] = true
+			withPane = withPane || !left[j].token
+		}
+		for _, j := range hit {
+			if withPane && left[j].token {
+				paired[j] = true
+			}
+		}
+	}
+	var listed []agent
+	for j, a := range left {
+		if !out[j] {
+			problems = append(problems, a.why)
 			continue
 		}
-		if n, ok := excluded(t.Name); ok {
-			note(n, t.Reason)
+		// That agent is listed once, by its pane (panes come first).
+		if paired[j] {
 			continue
 		}
-		problems = append(problems, fmt.Sprintf("the token of %s is not imported: %s", t.Name, t.Reason))
+		listed = append(listed, a)
+	}
+	// One name in two projects is listed as project:name, so the report
+	// tells them apart.
+	count := map[string]int{}
+	for _, a := range listed {
+		count[strings.ToLower(firstOf(a.names[0], a.names[len(a.names)-1], a.pane))]++
+	}
+	for _, a := range listed {
+		name := firstOf(a.names[0], a.names[len(a.names)-1], a.pane)
+		if count[strings.ToLower(name)] > 1 && a.project != "" {
+			name = a.project + ":" + name
+		}
+		rep.Excluded = append(rep.Excluded, name)
+		rep.Notes = append(rep.Notes, fmt.Sprintf("%s is left behind (--exclude): %s", name, a.why))
 	}
 	if len(problems) == 0 {
 		return nil
 	}
-	return refused("%s; fix that first, or name each agent to leave behind with --exclude",
+	return refused("%s; fix that first, or name each agent to leave behind with --exclude (NAME, /project:NAME or a pane id)",
 		strings.Join(problems, "; "))
 }
 

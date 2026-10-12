@@ -27,7 +27,7 @@ func autoImport(ctx context.Context, inst store.Instance, db *store.DB, h *herdr
 	var res bindings.AutoImportResult
 	err := core.WithOwnerShared(lctx, inst.Dir, func(core.Owner) error {
 		var ierr error
-		res, ierr = bindings.AutoImport(ctx, env, projectOf, bindings.ImportRequest{})
+		res, ierr = bindings.AutoImport(ctx, env, projectOf, bindings.ImportRequest{ProjectAt: projectAt})
 		return ierr
 	})
 	warnings := []string{}

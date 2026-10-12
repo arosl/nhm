@@ -10,6 +10,65 @@ import (
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 )
 
+// acfs-9hkh.80: the Bash keys an agent spawned with --cwd in a subfolder
+// of a work tree by the subfolder; nhm's project for the pane is the work
+// tree. With ImportRequest.ProjectAt the import also tries the folder's
+// own key and binds the agent there, where the evidence is. The work
+// tree's key still comes first when both have evidence.
+func TestImportTriesTheFoldersOwnKey(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	projectOf := func(context.Context, string) (string, string, error) { return root, "proj-root", nil }
+	projectAt := func(_ context.Context, dir string) (string, string, error) {
+		return dir, "proj-" + filepath.Base(dir), nil
+	}
+	keep := func(t *testing.T, acfs, key string) {
+		t.Helper()
+		token := BashTokenFile(acfs, key, "IcyKnoll")
+		if err := os.MkdirAll(filepath.Dir(token), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(token, []byte("tok"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pane := paneSpec{pane: "w1:p1", kind: "claude", alias: "icyknoll", tabLabel: "IcyKnoll", cwd: sub}
+
+	t.Run("without ProjectAt the agent is skipped", func(t *testing.T) {
+		env, _ := testEnv(t, session(pane))
+		acfs := t.TempDir()
+		keep(t, acfs, sub)
+		rep, err := ImportOnly(ctx, env, projectOf, ImportRequest{AcfsHome: acfs, DryRun: true})
+		if err != nil || len(rep.Items) != 1 || rep.Items[0].Action != ActionSkipped || rep.Items[0].ProjectKey != root {
+			t.Fatalf("= %+v %v", rep.Items, err)
+		}
+	})
+	t.Run("with ProjectAt it is imported under the folder's key", func(t *testing.T) {
+		env, _ := testEnv(t, session(pane))
+		acfs := t.TempDir()
+		keep(t, acfs, sub)
+		rep, err := ImportOnly(ctx, env, projectOf, ImportRequest{AcfsHome: acfs, ProjectAt: projectAt})
+		if err != nil || rep.Imported != 1 || rep.Items[0].ProjectKey != sub || rep.Items[0].MailName != "IcyKnoll" {
+			t.Fatalf("= %+v %v", rep.Items, err)
+		}
+		b, err := env.Bindings.ActiveByPane(ctx, "w1:p1")
+		if err != nil || b.MailProjectKey != sub || b.ProjectID != "proj-sub" {
+			t.Fatalf("binding = %+v %v", b, err)
+		}
+	})
+	t.Run("evidence under both keys: the work tree's wins", func(t *testing.T) {
+		env, _ := testEnv(t, session(pane))
+		acfs := t.TempDir()
+		keep(t, acfs, sub)
+		keep(t, acfs, root)
+		rep, err := ImportOnly(ctx, env, projectOf, ImportRequest{AcfsHome: acfs, DryRun: true, ProjectAt: projectAt})
+		if err != nil || rep.Items[0].Action != ActionWouldImport || rep.Items[0].ProjectKey != root {
+			t.Fatalf("= %+v %v", rep.Items, err)
+		}
+	})
+}
+
 // An import cut off after it created a binding leaves no identity file;
 // the next run writes it while the Bash spawn evidence holds, and not
 // after the Bash retired the agent (it removes the token and the file).

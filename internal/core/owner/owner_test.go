@@ -427,6 +427,98 @@ func TestTakeoverRefusesWhatItLeavesBehind(t *testing.T) {
 	}
 }
 
+// Review of c6f599a: a refused --yes writes nothing, not even the import's
+// bindings (the import runs dry first); --exclude by pane id covers that
+// agent's token; a bare name in two projects is ambiguous, and
+// /project:name names one of them.
+func TestTakeoverExcludeIsScopedAndRefusesBeforeWriting(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a refused --yes never runs the writing import", func(t *testing.T) {
+		w := newWorld(t)
+		w.export(t)
+		w.env.Exclude = nil // GhostOwl's token refuses
+		var calls []bool
+		w.env.ImportBindings = func(_ context.Context, dry bool) (bindings.ImportReport, error) {
+			calls = append(calls, dry)
+			return bindings.ImportReport{}, nil
+		}
+		if _, err := Takeover(ctx, w.env, false); !errors.Is(err, ErrRefused) {
+			t.Fatalf("= %v", err)
+		}
+		if len(calls) != 1 || !calls[0] {
+			t.Fatalf("import calls (dry?) = %v, want one dry run", calls)
+		}
+	})
+
+	t.Run("a pane id covers that agent's token", func(t *testing.T) {
+		w := newWorld(t)
+		w.export(t)
+		w.env.Exclude = []string{"w1:p3"}
+		w.env.ImportBindings = func(context.Context, bool) (bindings.ImportReport, error) {
+			return bindings.ImportReport{Items: []bindings.ImportItem{{PaneID: "w1:p3", Kind: "codex", HerdrName: "ghostowl",
+				Action: bindings.ActionSkipped, Reason: "no verified evidence"}}}, nil
+		}
+		rep, err := Takeover(ctx, w.env, false)
+		if err != nil || strings.Join(rep.Excluded, ",") != "ghostowl" {
+			t.Fatalf("= %v %v", rep.Excluded, err)
+		}
+	})
+
+	// Two GhostOwls, in /a and /b, neither bound.
+	twoProjects := func(t *testing.T, w *world) {
+		t.Helper()
+		var toks []TokenRef
+		for _, p := range []string{"/a", "/b"} {
+			p := p
+			f := filepath.Join(w.dir, "GhostOwl"+strings.TrimPrefix(p, "/"))
+			if err := os.WriteFile(f, []byte("tok\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			toks = append(toks, TokenRef{ProjectKey: &p, ProjectHash: ProjectHash(p), Name: "GhostOwl", File: f})
+		}
+		st := State{Format: StateFormat, Version: StateVersion, ExportedAt: "2026-10-12T07:00:00Z",
+			Tokens: toks, Wake: []WakeEntry{}, Keep: []string{}}
+		data, _ := json.Marshal(st)
+		w.bash.export = data
+	}
+	for _, c := range []struct {
+		exclude  []string
+		want     string
+		excluded string
+	}{
+		{[]string{"GhostOwl"}, "--exclude GhostOwl names agents in 2 projects: give one of /a:GhostOwl, /b:GhostOwl", ""},
+		{[]string{"/a:GhostOwl"}, "the token of GhostOwl is not imported", ""},
+		{[]string{"/a:GhostOwl", "/b:ghostowl"}, "", "/a:GhostOwl,/b:GhostOwl"},
+		// A skipped pane with no project takes its token by name only
+		// while one project has it.
+		{[]string{"w1:p3"}, "the token of GhostOwl is not imported", ""},
+		{[]string{"w1:p3", "/a:GhostOwl", "/b:GhostOwl"}, "", "ghostowl,/a:GhostOwl,/b:GhostOwl"},
+	} {
+		t.Run("two projects: "+strings.Join(c.exclude, " "), func(t *testing.T) {
+			w := newWorld(t)
+			twoProjects(t, w)
+			w.env.Exclude = c.exclude
+			if strings.Contains(strings.Join(c.exclude, " "), "w1:p3") {
+				w.env.ImportBindings = func(context.Context, bool) (bindings.ImportReport, error) {
+					return bindings.ImportReport{Items: []bindings.ImportItem{{PaneID: "w1:p3", Kind: "codex", HerdrName: "ghostowl",
+						Action: bindings.ActionSkipped, Reason: "no project"}}}, nil
+				}
+			}
+			rep, err := Takeover(ctx, w.env, true)
+			if c.want != "" {
+				if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("= %v", err)
+				}
+				return
+			}
+			if err != nil || strings.Join(rep.Excluded, ",") != c.excluded {
+				t.Fatalf("= %v %v", rep.Excluded, err)
+			}
+		})
+	}
+}
+
 // A takeover that fails on a later entry writes no token it planned for
 // an earlier one; a retry then imports the Bash's token, also over one
 // nhm kept before.
