@@ -8,28 +8,40 @@ import (
 	"testing"
 )
 
+// ntm's output (acfs-9hkh.58); `ensemble list` is ntm's alias of presets.
 func TestEnsemblePresets(t *testing.T) {
-	code, out, _ := run("ensemble", "presets")
-	if code != 0 || !strings.Contains(out, "project-diagnosis") || len(strings.Split(strings.TrimSpace(out), "\n")) != 9 {
-		t.Fatalf("presets = %d %q", code, out)
+	for _, verb := range []string{"presets", "list"} {
+		code, out, _ := run("ensemble", verb)
+		if code != 0 || !strings.HasPrefix(out, "NAME ") || !strings.Contains(out, "project-diagnosis") ||
+			!strings.Contains(out, "\nTotal: 9 presets\n") {
+			t.Fatalf("%s = %d %q", verb, code, out)
+		}
 	}
-	code, out, _ = run("ensemble", "presets", "--verbose")
-	if code != 0 || !strings.Contains(out, "modes: systems-thinking, worst-case") {
+	code, out, _ := run("ensemble", "presets", "--verbose")
+	if code != 0 || !strings.Contains(out, "  - systems-thinking") || !strings.Contains(out, "Source:      embedded") {
 		t.Fatalf("presets --verbose = %d %q", code, out)
 	}
-	code, out, _ = run("ensemble", "presets", "--format", "json")
-	var views []PresetView
-	if err := json.Unmarshal([]byte(out), &views); code != 0 || err != nil || len(views) != 9 {
-		t.Fatalf("presets --format json = %d %v %d", code, err, len(views))
+	code, out, _ = run("ensemble", "list", "--format", "json")
+	var res struct {
+		Count   int
+		Presets []struct {
+			Name      string
+			ModeCodes []string `json:"mode_codes"`
+			ModeCount int      `json:"mode_count"`
+			Source    string
+		}
 	}
-	for _, v := range views {
-		if len(v.ModeIDs) != len(v.Modes) || len(v.ModeIDs) == 0 {
-			t.Fatalf("%s: %d mode ids for %d modes", v.Name, len(v.ModeIDs), len(v.Modes))
+	if err := json.Unmarshal([]byte(out), &res); code != 0 || err != nil || res.Count != 9 || len(res.Presets) != 9 {
+		t.Fatalf("list --format json = %d %v %d", code, err, res.Count)
+	}
+	for _, p := range res.Presets {
+		if len(p.ModeCodes) != p.ModeCount || p.ModeCount == 0 || p.Source != "embedded" {
+			t.Fatalf("%s: %+v", p.Name, p)
 		}
 	}
 	code, out, _ = run("ensemble", "presets", "--tag", "health", "--format", "json")
-	if err := json.Unmarshal([]byte(out), &views); code != 0 || err != nil || len(views) != 1 || views[0].Name != "project-diagnosis" {
-		t.Fatalf("presets --tag health = %d %v %+v", code, err, views)
+	if err := json.Unmarshal([]byte(out), &res); code != 0 || err != nil || res.Count != 1 || res.Presets[0].Name != "project-diagnosis" {
+		t.Fatalf("presets --tag health = %d %v %+v", code, err, res)
 	}
 	if code, _, _ := run("ensemble", "spawn"); code != 2 {
 		t.Fatalf("spawn without a session = %d", code)
@@ -45,9 +57,9 @@ func TestEnsembleRunVerbs(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(project, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errOut := run("ensemble", "list", "--socket", s.SocketPath)
+	code, out, errOut := run("ensemble", "runs", "--socket", s.SocketPath)
 	if code != 0 || !strings.Contains(out, "0 run(s)") {
-		t.Fatalf("list = %d %q %q", code, out, errOut)
+		t.Fatalf("runs = %d %q %q", code, out, errOut)
 	}
 	if code, _, errOut := run("ensemble", "status", "ens-20261012T060000-abcdef", "--socket", s.SocketPath); code != 2 || !strings.Contains(errOut, "no such run") {
 		t.Fatalf("status of no run = %d %q", code, errOut)
@@ -60,13 +72,33 @@ func TestEnsembleRunVerbs(t *testing.T) {
 	if after := len(s.Requests()); after != before {
 		t.Fatalf("a refused run asked herdr %d things", after-before)
 	}
-	code, out, _ = run("ensemble", "list", "--socket", s.SocketPath, "--json")
+	code, out, _ = run("ensemble", "runs", "--socket", s.SocketPath, "--json")
 	var env struct {
-		Result []struct{ Status, Preset string }
+		Result []struct {
+			ID                      string `json:"run_id"`
+			Session, Status, Preset string
+		}
 	}
 	if err := json.Unmarshal([]byte(out), &env); code != 0 || err != nil || len(env.Result) != 1 || env.Result[0].Status != "failed" ||
 		env.Result[0].Preset != "project-diagnosis" {
-		t.Fatalf("list after the refused run = %d %v %+v", code, err, env.Result)
+		t.Fatalf("runs after the refused run = %d %v %+v", code, err, env.Result)
+	}
+	// ntm's argument is the session: it names the session's newest run.
+	r := env.Result[0]
+	if r.ID == "" || r.Session == "" {
+		t.Fatalf("the run has no id or session: %+v", r)
+	}
+	for _, ref := range []string{r.ID, r.Session} {
+		code, out, errOut := run("ensemble", "status", ref, "--format", "json", "--socket", s.SocketPath)
+		var st struct {
+			ID string `json:"run_id"`
+		}
+		if err := json.Unmarshal([]byte(out), &st); code != 0 || err != nil || st.ID != r.ID {
+			t.Fatalf("status %s --format json = %d %v %q %q", ref, code, err, out, errOut)
+		}
+	}
+	if code, _, _ := run("ensemble", "status", r.ID, "--format", "yaml", "--socket", s.SocketPath); code != 2 {
+		t.Fatalf("status --format yaml = %d", code)
 	}
 	if code, _, _ := run("ensemble", "nope", "q", "--socket", s.SocketPath); code != 2 {
 		t.Fatalf("an unknown preset = %d", code)

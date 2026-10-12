@@ -1,25 +1,27 @@
 package cli
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/arosl/nhm/internal/core/ensemble"
 )
 
 // nhm modes (plan-v8 2.11): ntm's reasoning-mode catalog, with ntm's
-// grammar. --json gives nhm's envelope; --format json gives the bare data,
-// as ntm prints it.
+// grammar and output (internal/core/ensemble/output_ntm.go). --json
+// gives nhm's envelope; --format json and yaml give ntm's types, and text
+// ntm's table and card.
 
-const modesUsage = `Usage: nhm modes list [--tier core|advanced|experimental] [--all] [--category NAME] [--format text|json] [--json]
-       nhm modes explain <mode> [--format text|json] [--json]
+const modesUsage = `Usage: nhm modes list [--tier core|advanced|experimental] [--all] [--category NAME] [--format text|json|yaml] [--json]
+       nhm modes explain <mode> [--format text|json|yaml] [--json]
 
 The reasoning modes of ensemble presets: ntm's catalog of 80 modes in
 twelve categories (A-L). list shows the core tier unless --tier or --all
-says otherwise. explain takes a mode id (deductive) or its code (A1).
+says otherwise. explain takes a mode id (deductive) or its code (A1) and
+prints ntm's explanation card.
 `
 
 func runModes(args []string, stdout, stderr io.Writer) int {
@@ -48,21 +50,41 @@ type formatFlags struct {
 }
 
 func addFormatFlags(fs *flag.FlagSet, def string) formatFlags {
-	f := formatFlags{format: fs.String("format", def, "output format: text or json")}
+	f := formatFlags{format: fs.String("format", def, "output format: text, json or yaml")}
 	fs.StringVar(f.format, "f", def, "output format (shorthand)")
 	f.asJSON = fs.Bool("json", false, "nhm's JSON envelope")
 	return f
 }
 
-// bareJSON reports whether --format json asks for the data alone.
-func (f formatFlags) bareJSON() bool { return !*f.asJSON && *f.format == "json" }
+// ntmFormat is the format ntm's renderers take, lower-case; "" when
+// --json asks for nhm's envelope instead.
+func (f formatFlags) ntmFormat() string {
+	if *f.asJSON {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(*f.format))
+}
 
 func (f formatFlags) check() error {
-	switch *f.format {
-	case "text", "table", "json":
+	switch strings.ToLower(strings.TrimSpace(*f.format)) {
+	case "", "text", "table", "json", "yaml", "yml":
 		return nil
 	}
-	return fmt.Errorf("--format %q: give text or json", *f.format)
+	return fmt.Errorf("--format %q: give text, json or yaml", *f.format)
+}
+
+// renderNTM prints a result with ntm's renderer, or as nhm's envelope
+// under --json.
+func renderNTM(stdout, stderr io.Writer, ff formatFlags, env envelope, result any, render func(io.Writer, string) error) int {
+	if *ff.asJSON {
+		env.Result = result
+		return output(stdout, stderr, true, env, nil, exitOK, nil)
+	}
+	if err := render(stdout, ff.ntmFormat()); err != nil {
+		fmt.Fprintf(stderr, "nhm %s: %v\n", env.Command, err)
+		return exitError
+	}
+	return exitOK
 }
 
 func runModesList(args []string, stdout, stderr io.Writer) int {
@@ -88,34 +110,14 @@ func runModesList(args []string, stdout, stderr io.Writer) int {
 	if err := ff.check(); err != nil {
 		return output(stdout, stderr, *ff.asJSON, env, err, exitRefused, nil)
 	}
-	t := ensemble.ModeTier(strings.ToLower(*tier))
-	switch {
-	case *all:
-		t = ""
-	case t == "":
-		t = ensemble.TierCore
-	case !t.IsValid():
-		return output(stdout, stderr, *ff.asJSON, env, fmt.Errorf("--tier %q: give core, advanced or experimental", *tier), exitRefused, nil)
-	}
 	c, err := ensemble.Builtin()
 	if err != nil {
 		return output(stdout, stderr, *ff.asJSON, env, err, exitError, nil)
 	}
-	modes := []ensemble.ReasoningMode{}
-	for _, m := range c.Modes(t) {
-		if *category == "" || strings.EqualFold(string(m.Category), *category) {
-			modes = append(modes, m)
-		}
-	}
-	if ff.bareJSON() {
-		return printJSON(stdout, stderr, "modes list", modes)
-	}
-	env.Result = modes
-	return output(stdout, stderr, *ff.asJSON, env, nil, exitOK, func(w io.Writer) {
-		for _, m := range modes {
-			fmt.Fprintf(w, "%-4s %-28s %-12s %-9s %s\n", m.Code, m.ID, m.Category, m.Tier, m.ShortDesc)
-		}
-		fmt.Fprintf(w, "%d mode(s)\n", len(modes))
+	// As ntm: an unknown tier or category lists no modes.
+	payload := ensemble.ModesList(c, *tier, *category, *all, time.Now())
+	return renderNTM(stdout, stderr, ff, env, payload, func(w io.Writer, format string) error {
+		return ensemble.RenderModesList(w, payload, format)
 	})
 }
 
@@ -140,42 +142,12 @@ func runModesExplain(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *ff.asJSON, env, err, exitError, nil)
 	}
-	m, err := c.Mode(pos[0])
+	card, err := c.ModeCard(pos[0])
 	if err != nil {
 		return output(stdout, stderr, *ff.asJSON, env, err, exitRefused, nil)
 	}
-	if ff.bareJSON() {
-		return printJSON(stdout, stderr, "modes explain", m)
-	}
-	env.Result = m
-	return output(stdout, stderr, *ff.asJSON, env, nil, exitOK, func(w io.Writer) { printModeCard(w, m) })
-}
-
-// printJSON writes v as indented JSON, without nhm's envelope: ntm's
-// --format json.
-func printJSON(stdout, stderr io.Writer, command string, v any) int {
-	enc := json.NewEncoder(stdout)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
-		fmt.Fprintf(stderr, "nhm %s: %v\n", command, err)
-		return exitError
-	}
-	return exitOK
-}
-
-func printModeCard(w io.Writer, m ensemble.ReasoningMode) {
-	fmt.Fprintf(w, "%s (%s) %s\n", m.Name, m.Code, m.ID)
-	fmt.Fprintf(w, "  category %s, tier %s\n", m.Category, m.Tier)
-	fmt.Fprintf(w, "  %s\n\n", m.ShortDesc)
-	fmt.Fprintf(w, "%s\n\n", m.Description)
-	fmt.Fprintf(w, "Outputs: %s\n", m.Outputs)
-	if len(m.BestFor) > 0 {
-		fmt.Fprintf(w, "Best for: %s\n", strings.Join(m.BestFor, "; "))
-	}
-	if len(m.FailureModes) > 0 {
-		fmt.Fprintf(w, "Failure modes: %s\n", strings.Join(m.FailureModes, "; "))
-	}
-	if m.Differentiator != "" {
-		fmt.Fprintf(w, "Differentiator: %s\n", m.Differentiator)
-	}
+	payload := ensemble.ModesExplainOutput{GeneratedAt: time.Now().UTC(), Card: card}
+	return renderNTM(stdout, stderr, ff, env, payload, func(w io.Writer, format string) error {
+		return ensemble.RenderModesExplain(w, payload, format)
+	})
 }

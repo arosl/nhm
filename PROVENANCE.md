@@ -34,6 +34,9 @@ The same rules apply to code from pt and dcg.
 | `internal/core/ensemble/LICENSE` | `LICENSE` | none |
 | `internal/core/ensemble/modes_ntm.go` | `internal/ensemble/modes.go` | provenance header |
 | `internal/core/ensemble/presets_ntm.go` | `internal/ensemble/ensembles.go` | provenance header |
+| `internal/core/ensemble/card_ntm.go` | `internal/ensemble/mode_card.go` | provenance header; `GetModeCard` is `(*Catalog).ModeCard` on nhm's catalog; complements in the catalog's fixed order |
+| `internal/core/ensemble/output_ntm.go` | `internal/cli/modes.go`, `internal/cli/ensemble_presets.go`, `internal/output/text.go` (in part) | provenance header; the modes and presets output types and renderers, and `Table`, exported and built from nhm's catalog with the clock passed in; widths in runes, not lipgloss's; built-in presets' source `embedded` |
+| `internal/core/ensemble/output_ntm_test.go` | `internal/cli/modes_test.go`, `internal/cli/ensemble_presets_test.go` (in part) | provenance header; nhm's names; plus nhm's tests of the catalog through these shapes |
 | `internal/core/ensemble/types.go` | `internal/ensemble/types.go` (in part) | only the types the catalog and presets use, with JSON tags only; ntm's UI fields (icon, color, preamble key), session, assignment, cache and output types and its TOML/YAML loading left out; `Catalog`, `Mode`, `Preset` and `Resolve` are nhm's |
 | `internal/robot/contract/LICENSE` | `LICENSE` | none |
 | `internal/robot/contract/assertions.go` | `internal/robot/contract/assertions.go` | provenance header |

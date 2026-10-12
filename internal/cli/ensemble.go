@@ -2,12 +2,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/ensemble"
@@ -20,23 +20,25 @@ import (
 
 const ensembleUsage = `Usage: nhm ensemble <preset> "<question>" [run flags]
        nhm ensemble spawn <session> --preset P --question Q [run flags]
-       nhm ensemble list [--json]
-       nhm ensemble status <run> [--json]
-       nhm ensemble synthesize <run> [--to NAME] [--partial] [--json]
-       nhm ensemble stop <run> [--json]
-       nhm ensemble presets [--tag TAG] [--verbose] [--format table|json] [--json]
+       nhm ensemble presets|list [--tag TAG] [--verbose] [--format table|json|yaml] [--json]
+       nhm ensemble status <session|run> [--format text|json] [--json]
+       nhm ensemble synthesize <session|run> [--to NAME] [--partial] [--format text|json] [--json]
+       nhm ensemble stop <session|run> [--format text|json] [--json]
+       nhm ensemble runs [--json]
 
 Run flags: [--kind KIND] [--model M] [--project DIR] [--socket PATH] [--json]
 
-A preset names angles, one reasoning mode each (nhm modes explain
-<mode>). A run starts one agent per angle in the group ens-<run> (nhm's
-spawn; the session is the run id unless spawn names one) and prompts each
-with its angle (nhm's send). Each angle writes its result to a file in
-the run's directory. synthesize checks that every result belongs to the
-run and angle, refuses when one is missing unless --partial (which
-records the omissions), and sends the synthesis prompt to one agent.
-stop keeps every result and retires no agent. Runs need nhm to own the
-herdr instance.
+presets (ntm's alias: list) prints ntm's preset table and types. A
+preset names angles, one reasoning mode each (nhm modes explain <mode>).
+A run starts one agent per angle in the group ens-<run> (nhm's spawn; the
+session is the run id unless spawn names one) and prompts each with its
+angle (nhm's send). Each angle writes its result to a file in the run's
+directory. status, synthesize and stop take the session (its newest run)
+or a run id. synthesize checks that every result belongs to the run and
+angle, refuses when one is missing unless --partial (which records the
+omissions), and sends the synthesis prompt to one agent. stop keeps
+every result and retires no agent. runs lists the runs. Runs need nhm to
+own the herdr instance.
 `
 
 func runEnsemble(args []string, stdout, stderr io.Writer) int {
@@ -45,11 +47,12 @@ func runEnsemble(args []string, stdout, stderr io.Writer) int {
 		return exitRefused
 	}
 	switch args[0] {
-	case "presets":
+	case "presets", "list":
+		// ntm's `ensemble list` is its alias of presets.
 		return runEnsemblePresets(args[1:], stdout, stderr)
 	case "spawn":
 		return runEnsembleStart(args[1:], true, stdout, stderr)
-	case "list", "ls":
+	case "runs":
 		return runEnsembleList(args[1:], stdout, stderr)
 	case "status":
 		return runEnsembleRun("status", args[1:], stdout, stderr)
@@ -142,7 +145,7 @@ func runEnsembleStart(args []string, spawnForm bool, stdout, stderr io.Writer) i
 }
 
 func runEnsembleList(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("ensemble list", flag.ContinueOnError)
+	fs := flag.NewFlagSet("ensemble runs", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
@@ -151,7 +154,7 @@ func runEnsembleList(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, ensembleUsage)
 		return exitRefused
 	}
-	env := envelope{Command: "ensemble list"}
+	env := envelope{Command: "ensemble runs"}
 	ie, err := openInstance(*socket)
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
@@ -165,6 +168,40 @@ func runEnsembleList(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(w, "%d run(s)\n", len(runs))
 	})
+}
+
+// resolveRun takes ntm's argument, a session, or nhm's run id: a run id
+// names that run; a session names its newest run.
+func resolveRun(runsDir, ref string) (string, error) {
+	runs, err := ensemble.List(runsDir)
+	if err != nil {
+		return "", err
+	}
+	newest := ""
+	var at time.Time
+	for _, r := range runs {
+		if r.ID == ref {
+			return ref, nil
+		}
+		if r.Session == ref && (newest == "" || r.CreatedAt.After(at)) {
+			newest, at = r.ID, r.CreatedAt
+		}
+	}
+	if newest == "" {
+		return "", fmt.Errorf("%w: no run and no session %q (nhm ensemble runs lists them)", ensemble.ErrNoRun, ref)
+	}
+	return newest, nil
+}
+
+// printJSON writes v as indented JSON, without nhm's envelope.
+func printJSON(stdout, stderr io.Writer, command string, v any) int {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fmt.Fprintf(stderr, "nhm %s: %v\n", command, err)
+		return exitError
+	}
+	return exitOK
 }
 
 // RunStatus is a run with the state of each angle's result.
@@ -181,6 +218,8 @@ func runEnsembleRun(verb string, args []string, stdout, stderr io.Writer) int {
 	partial := fs.Bool("partial", false, "synthesize without the angles that gave no result")
 	project := fs.String("project", "", "the project (default: the git work tree of the cwd)")
 	socket := fs.String("socket", "", "herdr API socket")
+	format := fs.String("format", "text", "text, or json: the run as JSON (ntm's run output is not reproduced)")
+	fs.StringVar(format, "f", "text", "format (shorthand)")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
@@ -191,6 +230,9 @@ func runEnsembleRun(verb string, args []string, stdout, stderr io.Writer) int {
 		return exitRefused
 	}
 	env := envelope{Command: "ensemble " + verb}
+	if *format != "text" && *format != "json" {
+		return output(stdout, stderr, *asJSON, env, fmt.Errorf("--format %q: give text or json", *format), exitRefused, nil)
+	}
 	ie, err := openInstance(*socket)
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
@@ -198,16 +240,22 @@ func runEnsembleRun(verb string, args []string, stdout, stderr io.Writer) int {
 	defer ie.db.Close()
 	renv := ie.runEnv(*project)
 	var r ensemble.Run
-	switch verb {
-	case "status":
-		r, err = ensemble.Load(renv.RunsDir, pos[0])
-	case "synthesize":
-		r, err = ensemble.Synthesize(context.Background(), renv, ensemble.SynthesizeRequest{RunID: pos[0], To: *to, Partial: *partial})
-	case "stop":
-		r, err = ensemble.Stop(renv, pos[0])
+	id, err := resolveRun(renv.RunsDir, pos[0])
+	if err == nil {
+		switch verb {
+		case "status":
+			r, err = ensemble.Load(renv.RunsDir, id)
+		case "synthesize":
+			r, err = ensemble.Synthesize(context.Background(), renv, ensemble.SynthesizeRequest{RunID: id, To: *to, Partial: *partial})
+		case "stop":
+			r, err = ensemble.Stop(renv, id)
+		}
 	}
 	st := RunStatus{Run: r, Artifacts: ensemble.Artifacts(r)}
 	env.Result = st
+	if *format == "json" && !*asJSON && err == nil {
+		return printJSON(stdout, stderr, env.Command, st)
+	}
 	code := exitOK
 	switch {
 	case errors.Is(err, ensemble.ErrNoRun), errors.Is(err, ensemble.ErrMissingAngles), errors.Is(err, ensemble.ErrRunStopped):
@@ -251,12 +299,6 @@ func printRunStatus(w io.Writer, st RunStatus) {
 	}
 }
 
-// PresetView is a preset with its modes resolved, as presets prints it.
-type PresetView struct {
-	ensemble.EnsemblePreset
-	ModeIDs []string `json:"mode_ids"`
-}
-
 func runEnsemblePresets(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ensemble presets", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -282,45 +324,8 @@ func runEnsemblePresets(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *ff.asJSON, env, err, exitError, nil)
 	}
-	views := []PresetView{}
-	for _, p := range c.Presets() {
-		if *tag != "" && !hasTag(p.Tags, *tag) {
-			continue
-		}
-		modes, err := c.Resolve(p)
-		if err != nil {
-			return output(stdout, stderr, *ff.asJSON, env, err, exitError, nil)
-		}
-		v := PresetView{EnsemblePreset: p}
-		for _, m := range modes {
-			v.ModeIDs = append(v.ModeIDs, m.ID)
-		}
-		views = append(views, v)
-	}
-	if ff.bareJSON() {
-		return printJSON(stdout, stderr, "ensemble presets", views)
-	}
-	env.Result = views
-	return output(stdout, stderr, *ff.asJSON, env, nil, exitOK, func(w io.Writer) {
-		for _, v := range views {
-			fmt.Fprintf(w, "%-24s %-2d modes  %-14s %s\n", v.Name, len(v.ModeIDs), v.Synthesis.Strategy, v.Description)
-			if *verbose {
-				fmt.Fprintf(w, "    modes: %s\n", strings.Join(v.ModeIDs, ", "))
-				fmt.Fprintf(w, "    budget: %d tokens per mode, %d in total, %s per mode, %s in total\n",
-					v.Budget.MaxTokensPerMode, v.Budget.MaxTotalTokens, v.Budget.TimeoutPerMode, v.Budget.TotalTimeout)
-				if len(v.Tags) > 0 {
-					fmt.Fprintf(w, "    tags: %s\n", strings.Join(v.Tags, ", "))
-				}
-			}
-		}
+	result := ensemble.PresetsList(c, *tag, *verbose, time.Now())
+	return renderNTM(stdout, stderr, ff, env, result, func(w io.Writer, format string) error {
+		return ensemble.RenderPresets(w, result, *verbose, format)
 	})
-}
-
-func hasTag(tags []string, want string) bool {
-	for _, t := range tags {
-		if strings.EqualFold(t, want) {
-			return true
-		}
-	}
-	return false
 }
