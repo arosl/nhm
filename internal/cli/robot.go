@@ -27,6 +27,9 @@ const (
 // 2.12). A robot flag nhm does not implement yet answers NOT_IMPLEMENTED
 // with the inventory's reason, never a guess.
 func runRobot(args []string, stdout, stderr io.Writer) int {
+	if robotDispatchFlag(args) != "" {
+		return runRobotDispatch(args, stdout, stderr)
+	}
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -119,7 +122,8 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 // parse.
 func unknownRobotFlag(args []string) string {
 	known := map[string]bool{"--robot-status": true, "--robot-snapshot": true, "--robot-capabilities": true,
-		"--robot-activity": true, "--robot-tail": true, "--robot-format": true}
+		"--robot-activity": true, "--robot-tail": true, "--robot-format": true,
+		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true}
 	for _, a := range args {
 		name, _, _ := strings.Cut(a, "=")
 		if strings.HasPrefix(name, "--robot-") && !known[name] {

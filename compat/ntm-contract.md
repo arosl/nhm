@@ -30,13 +30,13 @@ Rules:
 | `version`, `--version` | ACFS doctor, lessons | `nhm <version> (commit, herdr protocol, ntm commit)` | `internal/cli/cli.go` | `TestVersionJSON` | implemented |
 | `doctor [--json]` | ACFS doctor, lessons | checks with ok, warn or fail and a fix | `internal/cli/doctor.go` | `TestDoctor` | implemented |
 | `--robot-spawn=S …` | ACFS `swarm_launch.sh`, ru, brenner | ntm `SpawnOutput` | — | — | deferred: nhm.spawn (acfs-9hkh.19) |
-| `--robot-send=S …` | ACFS `swarm_packet.sh`, ru | ntm `SendOutput` | — | — | deferred: nhm.send (acfs-9hkh.13) |
-| `--robot-send-receipt=OP` | ACFS `swarm_launch.sh`, `swarm_packet.sh` | operation and outcome | — | — | deferred: nhm.send (acfs-9hkh.13) |
-| `--robot-ack=S` | robots | ntm's ack type | — | — | deferred: nhm.send (acfs-9hkh.13) |
+| `--robot-send=S --panes=P --type=K (--msg=M \| --msg-file=-) --op-id=ID` | ACFS `swarm_packet.sh`, ru | ntm `SendOutput`: `success, session, dry_run, blocked, targets, successful, failed, would_send_to, message_preview, cass_injection, memory_injection, operation{operation_id, payload_sha256, payload_bytes, status, admissions[]}`; the receipt's three facts under `_nhm`. `--with-memory` (true) is refused until nhm.memory | `internal/cli/send.go`, `internal/core/send/robot.go` | `TestRobotSendContract` | implemented |
+| `--robot-send-receipt=OP` | ACFS `swarm_launch.sh`, `swarm_packet.sh` | ntm `SendReceiptOutput`: `operation` and `outcome{success, targets, successful, failed}`; a possibly submitted target is `OPERATION_OUTCOME_UNKNOWN` | `internal/cli/send.go`, `internal/core/send/robot.go` | `TestRobotSendContract` | implemented |
+| `--robot-ack=S [--op-id=ID] [--timeout=D]` | robots | ntm `AckOutput`, from the receipts and the completion observation: `prompt_returned` at a completion, `output_started` at a seen start | `internal/cli/send.go`, `internal/core/send/robot.go` | `TestRobotAck` | implemented |
 | `--robot-wait …` | ru | ru's pinned driver contract | — | — | deferred: nhm.wait (acfs-9hkh.12) |
 | `spawn <session> --cc=N …`, `add <session> …` | lessons, brenner | spawn result | — | — | deferred: nhm.spawn (acfs-9hkh.19) |
-| `send <session> …` | lessons, brenner | send result | — | — | deferred: nhm.send (acfs-9hkh.13) |
-| `wait <session> --until …`, `interrupt <session>` | lessons, ru | wait result | — | — | deferred: nhm.wait (acfs-9hkh.12) |
+| `send <session> [prompt] (--all \| --cc \| --cod \| --agy \| --pane=N \| -t KEY [--bead ID] [--var k=v] [--file F]) [--dry-run] [--no-cass] [--with-memory=false]` | lessons, brenner | one line per target and the operation id; `--json` gives nhm's envelope with the receipts. `--with-memory`, `--with-cass` and `--cass-check` (true) are refused until nhm.memory (acfs-9hkh.21), `--thread` until nhm.wake | `internal/cli/send.go`, `internal/core/send` | `TestSendVerb` | implemented |
+| `wait <session> --until …`, `interrupt <session>` | lessons, ru | one line per agent; `--json` gives nhm's envelope. ntm's `--pane` takes the slot `N.M` | `internal/cli/wait.go`, `internal/cli/interrupt.go`, `internal/core/wait` | `TestWaitVerbStateAndSelection`, `TestInterruptVerb` | implemented |
 | `attach`, `new`, `kill`, `zoom`, `resume` | lessons | herdr calls | — | — | deferred: nhm.spawn and nhm.lifecycle (acfs-9hkh.19, .20) |
 | `palette`, `bind`, `template list|show` | lessons | the palette | — | — | deferred: nhm.plugin (acfs-9hkh.14) |
 | `mail inbox` | the palette | inbox | — | — | deferred: nhm.wake (acfs-9hkh.15) |

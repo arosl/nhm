@@ -41,6 +41,8 @@ Usage:
                          wait until agents reach a state, or a turn completes
   nhm interrupt [session] [selector] [--json]
                          send each agent its kind's interrupt key
+  nhm send <session> [prompt] [selector] [-t KEY] [--op-id ID] [--wait] [--dry-run] [--json]
+                         send one prompt, once, with a receipt per agent
   nhm activity <session> [--json]
                          each agent's activity in ntm's terms
   nhm health [session] [--json]
@@ -53,6 +55,9 @@ Usage:
   nhm --robot-status | --robot-snapshot | --robot-activity=S |
       --robot-tail=S [--lines N] | --robot-capabilities
                          ntm's robot read flags, ntm's types
+  nhm --robot-send=S --panes=P --type=K (--msg=M | --msg-file=-) --op-id=ID |
+      --robot-send-receipt=OP | --robot-ack=S [--op-id=ID] [--timeout=D]
+                         ntm's robot dispatch flags, ntm's types
   nhm resolve <name|herdr-name|pane-id|--current> [--json]
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
@@ -112,6 +117,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runWait(args[1:], stdout, stderr)
 	case "interrupt":
 		return runInterrupt(args[1:], stdout, stderr)
+	case "send":
+		return runSend(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "--robot-") {
 			return runRobot(args, stdout, stderr)
