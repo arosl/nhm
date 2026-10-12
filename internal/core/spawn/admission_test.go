@@ -83,7 +83,15 @@ func TestHookSettingsSkipsAGuardTheUserRuns(t *testing.T) {
 			t.Fatalf("%s: %v", settings, got)
 		}
 	}
-	for _, matcher := range []string{"", "*", "Bash", "Bash|Edit", "Ba.*"} {
+	// A matcher whose meaning to Claude's JavaScript RegExp is not sure
+	// counts as not covering: nhm keeps its guard (the review of ce21b11).
+	for _, matcher := range []string{`(?i)bash`, `(?i:Bash)`, `[B]ash`, `\\w+`, `Bash{1}`, `\\ABash\\z`, `[[:alpha:]]+`} {
+		withClaudeSettings(t, `{"hooks":{"PreToolUse":[{"matcher":"`+matcher+`","hooks":[{"type":"command","command":"dcg"}]}]}}`)
+		if got := guardCommands(t, HookSettings(lookAll)); len(got) != 2 {
+			t.Fatalf("matcher %q: %v", matcher, got)
+		}
+	}
+	for _, matcher := range []string{"", "*", "Bash", "Bash|Edit", "Ba.*", "(Bash|Edit)"} {
 		withClaudeSettings(t, `{"hooks":{"PreToolUse":[{"matcher":"`+matcher+`","hooks":[{"type":"command","command":"dcg"}]}]}}`)
 		if got := guardCommands(t, HookSettings(lookAll)); len(got) != 1 {
 			t.Fatalf("matcher %q: %v", matcher, got)

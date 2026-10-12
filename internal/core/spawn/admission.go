@@ -141,12 +141,23 @@ func HookSettings(lookPath func(string) (string, error)) string {
 	return string(data)
 }
 
+// portableMatcher is the regex syntax that Go's RE2 and Claude Code's
+// JavaScript RegExp read the same way: names, alternation, groups
+// without flags, and . * + ? ^ $. Anything else ((?i), \A, classes,
+// {n}) may mean something else to Claude, or be rejected by it.
+var portableMatcher = regexp.MustCompile(`^[A-Za-z0-9_|.*+?^$()]*$`)
+
 // matcherCoversBash reports whether a Claude hook matcher selects the
 // Bash tool: empty or "*" selects every tool, anything else is a tool
-// name or a regular expression over the whole name.
+// name or a regular expression over the whole name. A matcher outside
+// the portable syntax counts as not covering Bash, so nhm keeps its own
+// guard (a guard that runs twice is the safe side).
 func matcherCoversBash(m string) bool {
 	if m == "" || m == "*" {
 		return true
+	}
+	if !portableMatcher.MatchString(m) || strings.Contains(m, "(?") {
+		return false
 	}
 	re, err := regexp.Compile(`^(?:` + m + `)$`)
 	return err == nil && re.MatchString("Bash")

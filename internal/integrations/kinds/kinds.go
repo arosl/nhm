@@ -11,7 +11,10 @@
 package kinds
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,6 +93,9 @@ type Adapter struct {
 	// ResumeArgv resumes a native session; "{session}" is the id. nil:
 	// nhm cannot resume this kind.
 	ResumeArgv []string `json:"resume_argv,omitempty"`
+	// ResumeFlags are the CLI's own flags (or "resume", a subcommand)
+	// whose value it reads as the session to resume; {session} follows one.
+	ResumeFlags []string `json:"resume_flags,omitempty"`
 	// NewSession is the prompt that starts a fresh session in place
 	// (recycle).
 	NewSession string `json:"new_session,omitempty"`
@@ -200,25 +206,96 @@ var ResolveProgram = func(name string) (string, error) {
 
 // notAgentCLIs are files an agent CLI's name must never resolve to: a
 // symlink from "claude" to one of these runs shell or script text.
-var notAgentCLIs = regexp.MustCompile(`^(?:[a-z]*sh|busybox|env|python[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|nodejs|bun|deno|php[0-9.]*|lua[0-9.]*|tclsh[0-9.]*|awk|gawk|mawk|nawk|sed|find|xargs|osascript|pwsh)$`)
+// Any version suffix counts (bash5, ksh93, pypy3, python3.12): those are
+// ELF binaries, so the content check alone would let them through.
+var notAgentCLIs = regexp.MustCompile(`^(?:[a-z]*sh|busybox|env|python|pypy|perl|ruby|jruby|node|nodejs|bun|bunx|deno|npx|tsx|ts-node|php|lua|luajit|tclsh|wish|expect|awk|gawk|mawk|nawk|sed|find|xargs|osascript|pwsh|java|guile|racket|sbcl|gdb)[0-9._-]*$`)
+
+// ProgramHead returns the first bytes of a file. A variable so tests need
+// no agent CLI installed.
+var ProgramHead = func(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
+// bunWrapper is the two-line wrapper ACFS installs for bun-run CLIs
+// (codex, gemini: acfs.manifest.yaml): it execs bun on the package's own
+// script.
+var bunWrapper = regexp.MustCompile(`^#!/bin/(?:ba)?sh\nexec "(/[^"\n]+)/bun" "(/[^"\n]+)" "\$@"\n?$`)
 
 // ProgramIsKind reports whether the program nhm runs for a kind resolves,
 // through PATH and symlinks, to that kind's CLI: a path part named after
 // the kind or starting with "<kind>-" (claude installs as
-// .../claude/versions/2.1.296, grok as grok-linux-x86_64), and not a
-// shell or an interpreter. A program not on PATH cannot resume.
+// .../claude/versions/2.1.296, grok as grok-linux-x86_64), not a shell or
+// an interpreter by name, and by content an ELF binary, a script whose
+// interpreter is node, or ACFS's bun wrapper around such a script. A name
+// check alone lets claude/pypy3, bash5 or ksh93 through. A program not on
+// PATH cannot resume.
 func ProgramIsKind(program, kind string) bool {
 	resolved, err := ResolveProgram(program)
+	return err == nil && isKindExecutable(resolved, kind, true)
+}
+
+func isKindExecutable(resolved, kind string, wrapperAllowed bool) bool {
+	if notAgentCLIs.MatchString(filepath.Base(resolved)) || !pathNamesKind(resolved, kind) {
+		return false
+	}
+	head, err := ProgramHead(resolved)
 	if err != nil {
 		return false
 	}
-	if notAgentCLIs.MatchString(filepath.Base(resolved)) {
+	switch {
+	case bytes.HasPrefix(head, []byte("\x7fELF")):
+		return true
+	case !bytes.HasPrefix(head, []byte("#!")):
+		return false
+	case nodeShebang(head):
+		return true
+	}
+	m := bunWrapper.FindSubmatch(head)
+	if !wrapperAllowed || m == nil {
 		return false
 	}
-	for _, part := range strings.Split(filepath.ToSlash(resolved), "/") {
+	target, err := filepath.EvalSymlinks(string(m[2]))
+	return err == nil && isKindExecutable(target, kind, false)
+}
+
+// pathNamesKind: a part of the path is the kind, or starts with "<kind>-".
+func pathNamesKind(path, kind string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
 		part = strings.TrimSuffix(part, filepath.Ext(part))
 		if part == kind || strings.HasPrefix(part, kind+"-") {
 			return true
+		}
+	}
+	return false
+}
+
+// nodeShebang: the first line runs node, directly (#!/usr/bin/node) or
+// through env (#!/usr/bin/env node, #!/usr/bin/env -S node --flag).
+func nodeShebang(head []byte) bool {
+	line, _, _ := bytes.Cut(head[2:], []byte("\n"))
+	fields := strings.Fields(string(line))
+	if len(fields) == 0 {
+		return false
+	}
+	if filepath.Base(fields[0]) == "node" {
+		return true
+	}
+	if filepath.Base(fields[0]) != "env" {
+		return false
+	}
+	for _, f := range fields[1:] {
+		if !strings.HasPrefix(f, "-") {
+			return f == "node"
 		}
 	}
 	return false
@@ -295,7 +372,8 @@ func builtins() []Adapter {
 			Name: "claude", NTMType: "claude", Program: "claude-code", TrustKeys: claudeTrust, Flags: []string{"cc"},
 			LaunchArgs: []string{"--dangerously-skip-permissions"}, ModelFlag: "--model",
 			EffortArgs: []string{"--effort", "{effort}"}, DefaultEffort: "xhigh", SettingsFlag: "--settings",
-			ResumeArgv: []string{"claude", "--dangerously-skip-permissions", "--resume", "{session}"}, NewSession: "/clear", ExitCommand: "/exit",
+			ResumeArgv: []string{"claude", "--dangerously-skip-permissions", "--resume", "{session}"}, ResumeFlags: []string{"--resume", "-r"},
+			NewSession: "/clear", ExitCommand: "/exit",
 			InterruptKeys: []string{"esc"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true},
 			Limit:      regexp.MustCompile(`(?i)usage limit reached|you('|’)ve (hit|reached) your ([a-z0-9-]+ )?limit|(5-hour|session|weekly|opus|sonnet) limit reached|rate_limit_error|api error: 429`),
@@ -311,8 +389,9 @@ func builtins() []Adapter {
 			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Flags: []string{"cod"},
 			LaunchArgs: []string{"--no-daemon", "--dangerously-bypass-approvals-and-sandbox"}, ModelFlag: "--model",
 			EffortArgs: []string{"-c", "model_reasoning_effort={effort}"}, DefaultEffort: "xhigh",
-			ResumeArgv: []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "{session}"},
-			NewSession: "/new", ExitCommand: "/quit",
+			ResumeArgv:  []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "{session}"},
+			ResumeFlags: []string{"resume"},
+			NewSession:  "/new", ExitCommand: "/quit",
 			InterruptKeys: []string{"esc"}, QuotaPool: "codex", QuotaSource: "codex session logs",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true, Trust: true},
 			Limit:      regexp.MustCompile(`(?i)you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit reached|429 too many requests`),

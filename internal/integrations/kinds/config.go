@@ -21,7 +21,6 @@ import (
 //	flags = ["my"]
 //	launch_args = ["--quiet"]
 //	model_flag = "--model"
-//	resume_argv = ["mycli", "--resume", "{session}"]
 //	new_session = "/new"
 //	exit_command = "/quit"
 //	interrupt_keys = ["esc"]
@@ -37,6 +36,13 @@ import (
 //	dir = ".mycli/sessions"
 //	format = "jsonl"
 //
+// Only a kind named after an agent CLI that herdr starts can resume, with
+// the CLI's own resume flags declared:
+//
+//	[kinds.gemini]
+//	resume_argv = ["gemini", "--resume", "{session}"]
+//	resume_flags = ["--resume"]
+//
 // A config kind has no continuation rule: compaction and resume never
 // continue its bindings (that needs code). It cannot replace a built-in.
 type kindConfig struct {
@@ -47,6 +53,7 @@ type kindConfig struct {
 	EffortArgs     []string   `toml:"effort_args"`
 	DefaultEffort  string     `toml:"default_effort"`
 	ResumeArgv     []string   `toml:"resume_argv"`
+	ResumeFlags    []string   `toml:"resume_flags"`
 	NewSession     string     `toml:"new_session"`
 	ExitCommand    string     `toml:"exit_command"`
 	InterruptKeys  []string   `toml:"interrupt_keys"`
@@ -110,7 +117,7 @@ func (r *Registry) LoadConfig(path string) error {
 
 func (c kindConfig) adapter(name string) (Adapter, error) {
 	a := Adapter{Name: name, NTMType: c.NTMType, Flags: c.Flags, LaunchArgs: c.LaunchArgs, ModelFlag: c.ModelFlag,
-		ResumeArgv: c.ResumeArgv, NewSession: c.NewSession, ExitCommand: c.ExitCommand, InterruptKeys: c.InterruptKeys,
+		ResumeArgv: c.ResumeArgv, ResumeFlags: c.ResumeFlags, NewSession: c.NewSession, ExitCommand: c.ExitCommand, InterruptKeys: c.InterruptKeys,
 		QuotaPool: c.QuotaPool, QuotaSource: c.QuotaSource, Hooks: c.Hooks, Transcript: c.Transcript,
 		GuardSettings: c.GuardSettings, CodeReview: true, GuardSupported: true, Cannot: c.Cannot,
 		EffortArgs: c.EffortArgs, DefaultEffort: c.DefaultEffort}
@@ -127,7 +134,7 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 		}
 		a.Limit = re
 	}
-	if err := checkResumeArgv(name, a.ResumeArgv, a.LaunchArgs); err != nil {
+	if err := checkResumeArgv(name, a.ResumeArgv, a.LaunchArgs, a.ResumeFlags); err != nil {
 		return Adapter{}, fmt.Errorf("kinds.%s.resume_argv: %w", name, err)
 	}
 	if err := checkEffortArgs(a.EffortArgs, a.DefaultEffort); err != nil {
@@ -173,26 +180,35 @@ var herdrAgentKinds = map[string]bool{"pi": true, "claude": true, "codex": true,
 	"kimi": true, "kiro": true, "droid": true, "amp": true, "grok": true, "hermes": true, "kilo": true,
 	"qodercli": true, "qwen": true, "letta": true, "maki": true, "muse": true}
 
-// resumeFlags are the flags whose value an agent CLI reads as a session
-// to resume. {session} after any other flag could name a file the CLI
-// loads (--settings, --mcp-config, -e), and SessionPattern accepts
-// "evil.json".
-var resumeFlags = map[string]bool{"--resume": true, "-r": true}
+// resumeFlagName is a declared resume flag: the subcommand "resume", a
+// short flag, or a long flag that names a resume or a session. {session}
+// after any other flag could name a file the CLI loads (--settings,
+// --mcp-config), and SessionPattern accepts "evil.json".
+var resumeFlagName = regexp.MustCompile(`^(?:resume|-[a-zA-Z]|--[a-z0-9-]*(?:resume|session)[a-z0-9-]*)$`)
 
 // checkResumeArgv: the program is the kind itself, by its bare name, and
 // one of the agent CLIs herdr starts; then arguments without control
 // characters and without "--" (nhm's flags would become prompt text).
-// {session} is a whole argument exactly once: the value of a resume flag
-// (--resume ID, -r ID), or right after the resume subcommand, which only
-// the kind's own launch_args may come before (codex --no-daemon resume
+// {session} is a whole argument exactly once, right after one of the
+// kind's declared resume flags (--resume ID, codex's resume ID), and
+// only the kind's own launch_args come before that flag: an argument
+// between them could take the flag as its value (--mcp-config --resume
 // ID). The session id comes from a hook and must stay one argument that
 // the agent CLI reads as a session id.
-func checkResumeArgv(kind string, argv, launchArgs []string) error {
+func checkResumeArgv(kind string, argv, launchArgs, flags []string) error {
 	if argv == nil {
 		return nil
 	}
 	if len(argv) < 2 {
 		return fmt.Errorf("give the program and its arguments")
+	}
+	if len(flags) == 0 {
+		return fmt.Errorf("resume_flags: name the CLI's own resume flag")
+	}
+	for _, f := range flags {
+		if !resumeFlagName.MatchString(f) {
+			return fmt.Errorf("resume_flags: %q is not resume, a short flag, or a long flag naming a resume or a session", f)
+		}
 	}
 	prog := argv[0]
 	switch {
@@ -212,15 +228,14 @@ func checkResumeArgv(kind string, argv, launchArgs []string) error {
 		case a == "--":
 			return fmt.Errorf(`"--" would make nhm's flags prompt text`)
 		case a == "{session}":
-			// argv[i] is prev; argv[0] is the kind, never "resume".
-			sub := prev == "resume"
-			if sub {
-				for _, before := range argv[1:i] {
-					sub = sub && slices.Contains(launchArgs, before)
-				}
+			// argv[i] is prev, the flag; argv[1:i] come before it.
+			if i == 0 || !slices.Contains(flags, prev) {
+				return fmt.Errorf("{session} must follow one of resume_flags %v", flags)
 			}
-			if !resumeFlags[prev] && !sub {
-				return fmt.Errorf("{session} must be the value of --resume or -r, or follow the resume subcommand after only the kind's launch_args")
+			for _, before := range argv[1:i] {
+				if !slices.Contains(launchArgs, before) {
+					return fmt.Errorf("%q stands before the resume flag: only launch_args may", before)
+				}
 			}
 			whole++
 		case strings.Contains(a, "{session}"):

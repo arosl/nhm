@@ -8,9 +8,58 @@ import (
 	"testing"
 )
 
-// The tests need no agent CLI on PATH: each kind resolves to its own file.
+// realProgramHead reads real files, for the content tests.
+var realProgramHead = ProgramHead
+
+// The tests need no agent CLI on PATH: each kind resolves to its own
+// file, an ELF binary.
 func init() {
 	ResolveProgram = func(name string) (string, error) { return "/opt/" + name + "/bin/" + name, nil }
+	ProgramHead = func(string) ([]byte, error) { return []byte("\x7fELF\x02\x01\x01"), nil }
+}
+
+// By content, the kind's CLI is an ELF binary, a node script, or ACFS's
+// bun wrapper around a node script (as for codex); a shell script, a
+// python script, or a wrapper around anything else is not (the review of
+// ce21b11).
+func TestProgramContent(t *testing.T) {
+	old := ProgramHead
+	ProgramHead = realProgramHead
+	t.Cleanup(func() { ProgramHead = old })
+	root := t.TempDir()
+	file := func(rel, content string) string {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	codexJS := file("bun/node_modules/@openai/codex/bin/codex.js", "#!/usr/bin/env node\nimport x\n")
+	pyCodex := file("py/codex/bin/codex", "#!/usr/bin/env python3\nimport x\n")
+	for path, want := range map[string]bool{
+		file("a/claude/versions/2.1.296", "\x7fELF\x02\x01\x01\x00"): true,
+		codexJS: true,
+		file("b/codex/bin/codex", "#!/usr/bin/node --no-warnings\n"):                                         true,
+		file("c/codex/bin/codex", "#!/usr/bin/env -S node --flag\n"):                                         true,
+		file("d/codex/bin/codex", "#!/bin/bash\nexec \"/h/.bun/bin/bun\" \""+codexJS+"\" \"$@\"\n"):          true,
+		file("e/codex/bin/codex", "#!/bin/bash\nexec \"/h/.bun/bin/bun\" \""+pyCodex+"\" \"$@\"\n"):          false,
+		file("f/codex/bin/codex", "#!/bin/bash\nexec \"/h/.bun/bin/bun\" \""+codexJS+"\" \"$@\"\nrm -r ~\n"): false,
+		file("g/codex/bin/codex", "#!/bin/sh\necho hi\n"):                                                    false,
+		pyCodex: false,
+		file("h/codex/bin/codex", "#!/usr/bin/env bun\n"):              false,
+		file("i/codex/bin/codex", "MZ\x90\x00"):                        false,
+		file("j/codex/bin/ksh93", "\x7fELF\x02\x01\x01\x00"):           false,
+		file("k/codex/bin/pypy3", "\x7fELF\x02\x01\x01\x00"):           false,
+		file("l/codex/node_modules/.bin/tsx", "#!/usr/bin/env node\n"): false,
+	} {
+		withResolved(t, path)
+		if got := ProgramIsKind("codex", "codex") || ProgramIsKind("claude", "claude"); got != want {
+			t.Errorf("%s: %v, want %v", strings.TrimPrefix(path, root), got, want)
+		}
+	}
 }
 
 func withResolved(t *testing.T, resolved string) {
@@ -119,7 +168,7 @@ func TestBuiltins(t *testing.T) {
 // The built-ins meet the rules that config kinds must meet.
 func TestBuiltinsMeetTheConfigRules(t *testing.T) {
 	for _, a := range NewRegistry().All() {
-		if err := checkResumeArgv(a.Name, a.ResumeArgv, a.LaunchArgs); err != nil {
+		if err := checkResumeArgv(a.Name, a.ResumeArgv, a.LaunchArgs, a.ResumeFlags); err != nil {
 			t.Errorf("%s resume_argv: %v", a.Name, err)
 		}
 		for _, k := range a.InterruptKeys {
@@ -279,6 +328,16 @@ session_start = true
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\", \"-r\", \"{session}\"]\n",
 		// No "--" anywhere: nhm's flags would become prompt text.
 		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\", \"--\"]\n",
+		// The resume flag follows the kind or a launch_arg: an argument
+		// before it could take it as its value (the review of ce21b11).
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--mcp-config\", \"--resume\", \"{session}\"]\n",
+		"[kinds.gemini]\nlaunch_args = [\"--yolo\"]\nresume_argv = [\"gemini\", \"--yolo\", \"-x\", \"-r\", \"{session}\"]\n",
+		// resume_flags are per kind, declared, and name a resume or a
+		// session: without them, or with a file-loading flag, no resume.
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\nresume_flags = []\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--settings\", \"{session}\"]\nresume_flags = [\"--settings\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--mcp-config\", \"{session}\"]\nresume_flags = [\"--mcp-config\"]\n",
+		"[kinds.gemini]\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\nresume_flags = [\"-r\"]\n",
 		"[kinds.x]\neffort_args = [\"--effort\"]\n",
 		"[kinds.x]\ndefault_effort = \"high\"\n",
 		"[kinds.x]\neffort_args = [\"--effort\", \"{effort}\"]\ndefault_effort = \"x y\"\n",
@@ -295,6 +354,11 @@ session_start = true
 		"[kinds.force]\n",
 		"[kinds.x]\nflags = [\"dry-run\"]\n",
 	} {
+		// The placement cases declare every usual resume flag, so each
+		// fails on its own rule, not on missing resume_flags.
+		if strings.Contains(bad, "resume_argv") && !strings.Contains(bad, "resume_flags") {
+			bad += "resume_flags = [\"--resume\", \"-r\", \"resume\"]\n"
+		}
 		write(bad)
 		if err := NewRegistry().LoadConfig(path); err == nil {
 			t.Errorf("accepted:\n%s", bad)
@@ -303,9 +367,10 @@ session_start = true
 	// An agent CLI that herdr starts, with the session as a named flag's
 	// value, or after the resume subcommand.
 	for _, good := range []string{
-		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\n",
-		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"resume\", \"{session}\"]\n",
-		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"-r\", \"{session}\", \"--quiet\"]\n",
+		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--resume\", \"{session}\"]\nresume_flags = [\"--resume\"]\n",
+		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"resume\", \"{session}\"]\nresume_flags = [\"resume\"]\n",
+		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"-r\", \"{session}\", \"--quiet\"]\nresume_flags = [\"-r\"]\n",
+		"[kinds.gemini]\nmodel_flag = \"-m\"\nresume_argv = [\"gemini\", \"--session-id\", \"{session}\"]\nresume_flags = [\"--session-id\"]\n",
 	} {
 		write(good)
 		r := NewRegistry()
