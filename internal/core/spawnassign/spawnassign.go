@@ -45,6 +45,9 @@ type Plan struct {
 	Strategy   string
 	Policy     Policy
 	Triage     *bv.TriageResponse
+	// Context is --with-cass and --with-memory: the context of each fresh
+	// work prompt, prepared before its intent is recorded.
+	Context PromptContextOptions
 }
 
 // Preflight is ntm GetSpawn's assignment preflight, run before any
@@ -133,7 +136,7 @@ func Assign(ctx context.Context, out *SpawnOutput, plan Plan, instanceID, prompt
 	assignments, assignmentErr := assignWorkToAgentsWithError(
 		ctx, out, plan.ProjectDir, instanceID, out.AssignStrategy, &policy,
 		false, nil, deps, plan.Triage,
-		prompt, PromptContextOptions{}, nil,
+		prompt, plan.Context, nil,
 	)
 	out.Assignments = assignments
 	ensureSpawnAssignmentCoverage(out)

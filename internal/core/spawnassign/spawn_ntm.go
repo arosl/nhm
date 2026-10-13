@@ -16,8 +16,9 @@
 // of the tmux dispatch service and its redaction config; ntm's Agent Mail
 // reservation branch is not taken (a reservation request is refused before
 // the loop); the coverage key is the slot; replays compare the occupancy
-// key with the binding id; enrichSpawnWorkPrompt is nhm's stand-in until
-// step 3b.
+// key with the binding id; enrichSpawnWorkPrompt prepares the context
+// through nhm's enrichment for the occupant and the intent's key
+// (prepared.go).
 
 package spawnassign
 
@@ -310,7 +311,7 @@ func assignWorkToAgentsWithError(ctx context.Context, output *SpawnOutput, workD
 				if promptContext.Enabled() && !robotAtomicLiveKey(store, item.ID, idempotencyKey) {
 					// A fresh intent: enrich now, before Execute records it, so
 					// the ledger hashes and persists exactly what the agent gets.
-					prompt, baseIntentSHA256 = enrichSpawnWorkPrompt(ctx, deps.GetBeadDetails, workDir, session, item, agent.Type, prompt, promptContext, &spawnAssignment)
+					prompt, baseIntentSHA256 = enrichSpawnWorkPrompt(ctx, deps.GetBeadDetails, deps.Enrich, workDir, occupant, idempotencyKey, item, prompt, promptContext, &spawnAssignment)
 				}
 			}
 		}
@@ -447,18 +448,46 @@ func finalizeSpawnAssignmentOutput(output *SpawnOutput) {
 // enrichSpawnWorkPrompt enriches one fresh work prompt with CASS history and
 // CM rules (queried by the bead's title, labels and description), records
 // what happened on out, and returns the enriched prompt with the base
-// prompt's checksum for the ledger. nhm: not wired yet (step 3b); the
-// assignment loop never calls it while PromptContextOptions is off.
+// prompt's checksum for the ledger. nhm: the enrichment is the occupant's
+// (enricher, prepared.go), keyed by the intent's idempotency key; one that
+// cannot be prepared leaves the prompt as it is, as ntm's best-effort
+// sources do.
 func enrichSpawnWorkPrompt(
 	ctx context.Context,
 	readBead func(context.Context, string, string) (*bv.BeadAssignmentDetails, error),
-	workDir, session string,
+	enricher EnrichmentPort,
+	workDir string,
+	occupant Occupant, key string,
 	item workItem,
-	agentType, prompt string,
+	prompt string,
 	promptContext PromptContextOptions,
 	out *SpawnAssignment,
 ) (string, string) {
-	return prompt, ""
+	skipped := func(reason string) (string, string) {
+		if promptContext.WithCASS {
+			out.CASSInjection = &CASSInjectionInfo{Enabled: true, SkippedReason: reason}
+		}
+		if promptContext.WithMemory {
+			out.MemoryInjection = &CMInjectionInfo{Enabled: true, SkippedReason: reason}
+		}
+		return prompt, ""
+	}
+	if enricher == nil {
+		return skipped("no enrichment for this assignment")
+	}
+	var labels []string
+	var description string
+	if readBead != nil {
+		if details, err := readBead(ctx, workDir, item.ID); err == nil && details != nil {
+			labels, description = details.Labels, details.Description
+		}
+	}
+	prepared, err := enricher.Prepare(ctx, occupant, key, item.ID, retrievalQuery(item.Title, labels, description), prompt, promptContext)
+	if err != nil {
+		return skipped("work prompt context not prepared: " + err.Error())
+	}
+	out.CASSInjection, out.MemoryInjection = prepared.CASS, prepared.Memory
+	return prepared.Prompt, assignment.PromptSHA256(prompt)
 }
 
 func spawnAtomicRequest(item workItem, target, occupancy string, pane int, agentType, agentName, prompt, key string, requireReservation bool, reservationPaths []string) assignment.AtomicRequest {

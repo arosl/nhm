@@ -2,6 +2,8 @@ package send
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/arosl/nhm/internal/core/enrich"
@@ -21,6 +23,12 @@ func enrichTargets(ctx context.Context, env Env, req Request, tmpl *templates.Te
 		return nil, err
 	}
 	on := cmMode != enrich.Off || cassMode != enrich.Off
+	if req.Prepared != nil {
+		if on || req.Enrich.Check {
+			return nil, errors.New("a send with a prepared enrichment runs no enrichment of its own")
+		}
+		return preparedExposure(*req.Prepared, targets, res)
+	}
 	check := req.Enrich.Check && !req.Force
 	if !on && !check {
 		return nil, nil
@@ -98,6 +106,30 @@ func enrichTargets(ctx context.Context, env Env, req Request, tmpl *templates.Te
 		}
 	}
 	return ex, nil
+}
+
+// preparedExposure checks a prepared enrichment against the send's one
+// target and reports it as the send's injection. The context generation is
+// the target's now: what the receipt says the agent got is in the context
+// it holds at delivery.
+func preparedExposure(p enrich.Exposure, targets []Target, res *Result) ([]enrich.Exposure, error) {
+	if len(targets) != 1 {
+		return nil, fmt.Errorf("a prepared enrichment is for one target, not %d", len(targets))
+	}
+	b := targets[0].Binding
+	if b.ID != p.BindingID || b.Generation != p.Generation {
+		return nil, fmt.Errorf("the enrichment was prepared for %s@%d, not %s@%d", p.BindingID, p.Generation, b.ID, b.Generation)
+	}
+	p.TargetIndex, p.ContextGeneration = 0, enrich.ContextGeneration(b)
+	if p.Retrieval.CM.Enabled {
+		res.MemoryInjection = p.Retrieval.CM
+		res.Injections = append(res.Injections, enrich.TargetInjection{TargetIndex: 0, Source: enrich.SourceCM, Items: p.Plan.CM})
+	}
+	if p.Retrieval.CASS.Enabled {
+		res.CASSInjection = p.Retrieval.CASS
+		res.Injections = append(res.Injections, enrich.TargetInjection{TargetIndex: 0, Source: enrich.SourceCASS, Items: p.Plan.CASS})
+	}
+	return []enrich.Exposure{p}, nil
 }
 
 // skipReason is a report's reason for ntm's skipped_reason.

@@ -23,9 +23,11 @@ import (
 
 // ntm's robot types, nhm's robot package.
 type (
-	SpawnOutput     = robot.SpawnOutput
-	SpawnedAgent    = robot.SpawnedAgent
-	SpawnAssignment = robot.SpawnAssignment
+	SpawnOutput       = robot.SpawnOutput
+	SpawnedAgent      = robot.SpawnedAgent
+	SpawnAssignment   = robot.SpawnAssignment
+	CASSInjectionInfo = robot.CASSInjectionInfo
+	CMInjectionInfo   = robot.CMInjectionInfo
 )
 
 // ErrorCodeAssignmentFailed is ntm's error code of a spawn whose work
@@ -118,6 +120,9 @@ type SpawnAssignmentDependencies struct {
 	// observation.
 	ObserveOccupant func(context.Context, Occupant) (bool, error)
 	Dispatch        DispatchPort
+	// Enrich prepares a fresh work prompt's context (--with-cass,
+	// --with-memory); nil prepares none.
+	Enrich EnrichmentPort
 }
 
 // spawnAssignmentDeps fills the Beads and ledger ports with production and
@@ -157,16 +162,9 @@ func spawnAssignmentDeps(custom *SpawnAssignmentDependencies) SpawnAssignmentDep
 		deps.NewIdempotencyKey = custom.NewIdempotencyKey
 	}
 	deps.ListOccupants, deps.ObserveOccupant, deps.Dispatch = custom.ListOccupants, custom.ObserveOccupant, custom.Dispatch
+	deps.Enrich = custom.Enrich
 	return deps
 }
-
-// PromptContextOptions is ntm's switch for the CASS and CM enrichment of a
-// fresh work prompt. nhm's enrichment goes with the send (internal/core/send)
-// and is not wired into assignment yet (nhm-i85 step 3b): it is off.
-type PromptContextOptions struct{}
-
-// Enabled reports whether any enrichment was requested.
-func (o PromptContextOptions) Enabled() bool { return false }
 
 // spawnStaggerPacer is ntm's delivery pacer (spawn_pacing.go). nhm paces
 // the agents' starts in internal/core/spawn and gives the assignment loop no

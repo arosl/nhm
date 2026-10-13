@@ -13,9 +13,11 @@ import (
 
 	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/bv"
+	"github.com/arosl/nhm/internal/integrations/cass"
 	"github.com/arosl/nhm/internal/integrations/worksource"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
@@ -95,6 +97,9 @@ type fakeTracker struct {
 	owner    map[string]string
 	claims   int
 	statuses map[string]string
+	// labels and description are every bead's.
+	labels      []string
+	description string
 }
 
 func (f *fakeTracker) claim(_ context.Context, _, beadID, actor string, _ []string) (bv.BeadClaimResult, error) {
@@ -115,7 +120,8 @@ func (f *fakeTracker) details(_ context.Context, _, beadID string) (*bv.BeadAssi
 	if f.owner[beadID] != "" {
 		status = "in_progress"
 	}
-	return &bv.BeadAssignmentDetails{ID: beadID, Title: "Task " + beadID, IssueType: "task", Status: status, Assignee: f.owner[beadID]}, nil
+	return &bv.BeadAssignmentDetails{ID: beadID, Title: "Task " + beadID, IssueType: "task", Status: status, Assignee: f.owner[beadID],
+		Labels: f.labels, Description: f.description}, nil
 }
 
 func (f *fakeTracker) status(context.Context, string, string) (string, error) { return "open", nil }
@@ -344,6 +350,130 @@ func TestAssignKnownUnsentRetriesAsANewAttempt(t *testing.T) {
 	}
 	if _, err := w.db.Operation(context.Background(), OperationID(row.IdempotencyKey, 2)); err != nil {
 		t.Fatalf("attempt 2 operation: %v", err)
+	}
+}
+
+// fakeCASS answers every search with its hits and counts the searches.
+type fakeCASS struct {
+	mu       sync.Mutex
+	hits     []cass.Hit
+	searches []cass.Search
+}
+
+func (f *fakeCASS) Search(_ context.Context, s cass.Search) ([]cass.Hit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.searches = append(f.searches, s)
+	return f.hits, nil
+}
+
+func (f *fakeCASS) IndexSession(context.Context, string, string, string) (string, error) {
+	return cass.Indexed, nil
+}
+
+func (f *fakeCASS) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.searches)
+}
+
+// enriching gives the world CASS history and its deps --with-cass's port.
+func (w *world) enriching(t *testing.T) (*fakeCASS, *SpawnAssignmentDependencies) {
+	t.Helper()
+	cs := &fakeCASS{hits: []cass.Hit{{SourcePath: "/sessions/old.jsonl", Agent: "claude",
+		Content: "Bucket per API key at the gateway; refill on a ticker."}}}
+	w.env.CASS = cs
+	w.tracker.labels, w.tracker.description = []string{"gateway"}, "Use a token bucket per API key."
+	deps := w.deps()
+	port := deps.Dispatch.(SendPort)
+	port.Env, port.PreparedDir = w.env, PreparedDir("inst-000000000000")
+	deps.Dispatch, deps.Enrich = port, port
+	return cs, deps
+}
+
+// ntm's TestGetSpawnAssignWorkEnrichesWorkPromptAndReplaysWithoutRequery on
+// nhm's enrichment: one CASS search over the bead's title, labels and
+// description; the history above the work prompt; the ledger records the
+// enriched prompt with its template checksum; a re-run replays it with no
+// second delivery and no second search. nhm also records the exposure, with
+// its bead, under the delivering operation.
+func TestAssignEnrichesWorkPromptAndReplaysWithoutRequery(t *testing.T) {
+	isolate(t)
+	w := newWorld(t)
+	w.bind("IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	cs, deps := w.enriching(t)
+	plan := planOf("bd-ctx")
+	plan.Triage.Triage.Recommendations[0].Title = "Rate limiting middleware"
+	plan.Context = PromptContextOptions{WithCASS: true}
+	run := func() *SpawnOutput {
+		out := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: append([]robot.SpawnedAgent(nil), w.agents...)}
+		Assign(context.Background(), out, plan, "inst-000000000000", "", deps)
+		return out
+	}
+	out := run()
+	got := out.Assignments[0]
+	if !out.Success || !got.Claimed || !got.PromptSent || got.CASSInjection == nil || got.CASSInjection.ItemsInjected != 1 {
+		t.Fatalf("assignment = %+v (cass_injection %+v), want an enriched delivered prompt", got, got.CASSInjection)
+	}
+	if w.herdr.promptCount("w1:p1") != 1 {
+		t.Fatalf("deliveries = %d, want 1", w.herdr.promptCount("w1:p1"))
+	}
+	prompt := w.herdr.prompts["w1:p1"][0]
+	history, task := strings.Index(prompt, "Bucket per API key"), strings.Index(prompt, "Work on bead bd-ctx")
+	if history < 0 || task < 0 || history > task {
+		t.Fatalf("delivered prompt history=%d task=%d, want the history above the work prompt:\n%s", history, task, prompt)
+	}
+	if cs.count() != 1 || !strings.Contains(cs.searches[0].Query, "gateway") || !strings.Contains(cs.searches[0].Query, "bucket") ||
+		!strings.Contains(cs.searches[0].Query, "limiting") {
+		t.Fatalf("cass searches = %+v, want one over the bead's title, labels and description", cs.searches)
+	}
+	row := ledger(t).Get("bd-ctx")
+	if row == nil || row.PromptSent != prompt || row.BaseIntentSHA256 == "" || row.BaseIntentSHA256 == row.IntentSHA256 {
+		t.Fatalf("ledger row = %+v, want the enriched prompt recorded with its template checksum", row)
+	}
+	ex, err := enrich.Exposures(context.Background(), w.db, OperationID(row.IdempotencyKey, 1))
+	if err != nil || len(ex) != 1 || ex[0].Source != enrich.SourceCASS || len(ex[0].Items) != 1 || ex[0].Items[0].Status != enrich.Included {
+		t.Fatalf("exposure under the delivering operation = %+v %v", ex, err)
+	}
+
+	replayed := run()
+	if r := replayed.Assignments[0]; !r.PromptSent || r.IdempotencyKey != got.IdempotencyKey || r.CASSInjection != nil {
+		t.Fatalf("replay = %+v, want the recorded key %s replayed without enrichment", r, got.IdempotencyKey)
+	}
+	if w.herdr.promptCount("w1:p1") != 1 || cs.count() != 1 {
+		t.Fatalf("replay delivered %d prompts and searched %d times", w.herdr.promptCount("w1:p1"), cs.count())
+	}
+}
+
+// A refused first attempt keeps its prepared context: the next run sends
+// the recorded prompt as attempt 2, searches nothing, and records the
+// exposure under attempt 2's operation.
+func TestAssignEnrichedRetryKeepsItsPreparedContext(t *testing.T) {
+	isolate(t)
+	w := newWorld(t)
+	w.bind("IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	cs, deps := w.enriching(t)
+	plan := planOf("bd-ctx")
+	plan.Context = PromptContextOptions{WithCASS: true}
+	w.herdr.promptErr["w1:p1"] = &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotReady}
+	first := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: append([]robot.SpawnedAgent(nil), w.agents...)}
+	Assign(context.Background(), first, plan, "inst-000000000000", "", deps)
+	if first.Success || first.Assignments[0].PromptSent || cs.count() != 1 {
+		t.Fatalf("first = %+v, searches %d", first, cs.count())
+	}
+	delete(w.herdr.promptErr, "w1:p1")
+	second := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: append([]robot.SpawnedAgent(nil), w.agents...)}
+	Assign(context.Background(), second, plan, "inst-000000000000", "", deps)
+	if !second.Success || !second.Assignments[0].PromptSent || cs.count() != 1 {
+		t.Fatalf("second = %+v, searches %d", second, cs.count())
+	}
+	row := ledger(t).Get("bd-ctx")
+	if row.DispatchAttempts != 2 || !strings.Contains(w.herdr.prompts["w1:p1"][0], "Bucket per API key") {
+		t.Fatalf("row = %+v, prompts %q", row, w.herdr.prompts["w1:p1"])
+	}
+	ex, err := enrich.Exposures(context.Background(), w.db, OperationID(row.IdempotencyKey, 2))
+	if err != nil || len(ex) != 1 || len(ex[0].Items) != 1 {
+		t.Fatalf("attempt 2 exposure = %+v %v", ex, err)
 	}
 }
 

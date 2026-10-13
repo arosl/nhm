@@ -122,6 +122,14 @@ type Request struct {
 	// Enrich is the CM and CASS enrichment and the duplicate check.
 	// Internal prompts (wake, naming) leave it empty.
 	Enrich Enrichment
+	// Prepared is an enrichment prepared before Message was composed, its
+	// block already in Message (an assignment's work prompt, recorded
+	// before its delivery; nhm-i85). The send retrieves nothing and
+	// records it as its one target's exposure, under this operation and
+	// the target's context generation now. It needs one target, the
+	// binding it was prepared for at the same generation, and no
+	// enrichment of the send's own.
+	Prepared *enrich.Exposure
 }
 
 // Enrichment is a send's CM and CASS part (plan-v8 2.13).

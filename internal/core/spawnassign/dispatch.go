@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/assignment"
@@ -81,13 +82,23 @@ func (t Topology) ObserveOccupant(ctx context.Context, o Occupant) (bool, error)
 // send path: one operation per attempt ("assign:<key>:<attempt>"), the
 // target frozen at its binding and generation (Expect), the gate and the
 // target lock of every send, and its receipts as the proof of what
-// happened. Enrichment is off: the loop composes the prompt.
+// happened. The send enriches nothing itself: the prompt is the recorded
+// one, and a context prepared for it (Prepare) is recorded with it.
 type SendPort struct {
 	Env         send.Env
 	Session     string
 	WorkspaceID string
 	ProjectRoot string
 	ProjectKey  string
+	// PreparedDir keeps the prepared work prompt contexts (prepared.go)
+	// until their delivery; "" prepares none.
+	PreparedDir string
+}
+
+// PreparedDir is the instance's directory of prepared work prompt contexts,
+// beside its assignment ledger.
+func PreparedDir(instanceID string) string {
+	return filepath.Join(assignment.StorageDir(), instanceID, "prepared")
 }
 
 // OperationID is the send operation of one assignment attempt, in the
@@ -132,13 +143,19 @@ func (p SendPort) Dispatch(ctx context.Context, req assignment.DispatchRequest) 
 		return receipt, assignment.GuaranteeNoActuation(errors.New("assignment dispatch has no persisted attempt"))
 	}
 	opID := OperationID(req.IdempotencyKey, req.Attempt)
+	// The context prepared for this intent, if any, is recorded with the
+	// delivery. One that cannot be read leaves the delivery without its
+	// record: the prompt itself is fixed in the ledger.
+	prepared, _ := readPrepared(p.PreparedDir, req.IdempotencyKey)
 	res, sendErr := send.Send(ctx, p.Env, send.Request{
 		Session: p.Session, WorkspaceID: p.WorkspaceID, ProjectRoot: p.ProjectRoot, ProjectKey: p.ProjectKey,
 		Selector: send.Selector{Bindings: []string{bindingID}}, Message: req.Prompt,
 		OperationID: opID, Expect: map[string]int64{bindingID: generation},
 		Source: history.SourceRobot,
-		Scope: map[string]any{"assignment": map[string]any{"bead_id": req.BeadID, "idempotency_key": req.IdempotencyKey,
-			"attempt": req.Attempt}},
+		// The CLI send's scope keys: feedback reads the bead in project_root.
+		Scope: map[string]any{"workspace_id": p.WorkspaceID, "project_root": p.ProjectRoot, "mail_project_key": p.ProjectKey,
+			"assignment": map[string]any{"bead_id": req.BeadID, "idempotency_key": req.IdempotencyKey, "attempt": req.Attempt}},
+		Prepared: prepared,
 	})
 	receipt.Duration = time.Since(started)
 	if sendErr != nil {

@@ -24,7 +24,7 @@ import (
 type robotAssignFlags struct {
 	fs                                         *flag.FlagSet
 	strategy, legacyStrategy, reservationPaths *string
-	requireReservation                         *bool
+	requireReservation, withCASS, withMemory   *bool
 }
 
 func addRobotAssignFlags(fs *flag.FlagSet) robotAssignFlags {
@@ -33,6 +33,8 @@ func addRobotAssignFlags(fs *flag.FlagSet) robotAssignFlags {
 		legacyStrategy:     fs.String("spawn-assign-strategy", "top-n", ""),
 		reservationPaths:   fs.String("spawn-reservation-paths", "", ""),
 		requireReservation: fs.Bool("spawn-require-reservation", false, ""),
+		withCASS:           fs.Bool("with-cass", false, ""),
+		withMemory:         fs.Bool("with-memory", false, ""),
 	}
 }
 
@@ -85,6 +87,7 @@ func robotAssignPreflight(ctx context.Context, ie *instanceEnv, f robotAssignFla
 		}
 		return refuse(robot.ErrCodeInternalError, err.Error(), "")
 	}
+	plan.Context = spawnassign.PromptContextOptions{WithCASS: *f.withCASS, WithMemory: *f.withMemory}
 	return plan, s, nil
 }
 
@@ -95,10 +98,10 @@ func robotAssignPhase(ctx context.Context, ie *instanceEnv, res spawn.Result, sc
 	senv := ie.sendEnv()
 	topo := spawnassign.Topology{Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, WorkspaceID: res.WorkspaceID,
 		ProjectKey: scope.MailProjectKey}
+	port := spawnassign.SendPort{Env: senv, Session: res.Session, WorkspaceID: res.WorkspaceID,
+		ProjectRoot: res.ProjectRoot, ProjectKey: topo.ProjectKey, PreparedDir: spawnassign.PreparedDir(ie.inst.ID)}
 	deps := &spawnassign.SpawnAssignmentDependencies{
-		ListOccupants: topo.ListOccupants, ObserveOccupant: topo.ObserveOccupant,
-		Dispatch: spawnassign.SendPort{Env: senv, Session: res.Session, WorkspaceID: res.WorkspaceID,
-			ProjectRoot: res.ProjectRoot, ProjectKey: topo.ProjectKey},
+		ListOccupants: topo.ListOccupants, ObserveOccupant: topo.ObserveOccupant, Dispatch: port, Enrich: port,
 	}
 	lctx, cancel := context.WithTimeout(ctx, lockWait)
 	defer cancel()
