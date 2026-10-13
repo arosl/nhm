@@ -109,6 +109,8 @@ Usage:
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
                          bind an identity to the agent in a pane, by hand
+  nhm move <Name> --workspace W [--dry-run] [--json]
+                         move an agent's pane to a new tab of W; its binding follows
   nhm admin instance enroll [--session NAME] [--socket PATH] [--json]
                          enroll a herdr server (ACFS's install runs it)
   nhm admin recover reconcile --import-only [--dry-run] [--json]
@@ -140,6 +142,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runResolve(args[1:], stdout, stderr)
 	case "adopt":
 		return runAdopt(args[1:], stdout, stderr)
+	case "move":
+		return runMove(args[1:], stdout, stderr)
 	case "retire":
 		return runRetire(args[1:], stdout, stderr)
 	case "recycle":

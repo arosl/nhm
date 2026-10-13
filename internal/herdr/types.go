@@ -216,6 +216,21 @@ type ZoomResult struct {
 	FocusedPaneID string `json:"focused_pane_id"`
 }
 
+// PaneMoveResult is pane.move's answer, without the layouts: the pane
+// where it is now (a move to another workspace gives it a new id), and
+// where it was.
+type PaneMoveResult struct {
+	Changed             bool     `json:"changed"`
+	Pane                PaneInfo `json:"pane"`
+	PreviousPaneID      string   `json:"previous_pane_id"`
+	PreviousTabID       string   `json:"previous_tab_id"`
+	PreviousWorkspaceID string   `json:"previous_workspace_id"`
+	CreatedTab          *TabInfo `json:"created_tab"`
+	// herdr closes the tab, and the workspace, that the move left empty.
+	ClosedTabID       string `json:"closed_tab_id"`
+	ClosedWorkspaceID string `json:"closed_workspace_id"`
+}
+
 // OutputMatched is pane.wait_for_output's answer.
 type OutputMatched struct {
 	PaneID      string   `json:"pane_id"`

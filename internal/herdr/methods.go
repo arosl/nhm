@@ -73,6 +73,27 @@ type PaneSplitParams struct {
 	Ratio        *float64          `json:"ratio,omitempty"`
 }
 
+// PaneMoveParams are pane.move's parameters. herdr does not move the
+// focus with the pane unless asked.
+type PaneMoveParams struct {
+	PaneID      string              `json:"pane_id"`
+	Destination PaneMoveDestination `json:"destination"`
+}
+
+// PaneMoveDestination is herdr's PaneMoveDestination. nhm sends only the
+// new_tab variant (NewTabIn).
+type PaneMoveDestination struct {
+	Type        string `json:"type"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Label       string `json:"label,omitempty"`
+}
+
+// NewTabIn is the destination "a new tab of workspace W", with herdr's
+// default label.
+func NewTabIn(workspaceID string) PaneMoveDestination {
+	return PaneMoveDestination{Type: "new_tab", WorkspaceID: workspaceID}
+}
+
 // PaneReadParams are pane.read's parameters.
 type PaneReadParams struct {
 	PaneID    string     `json:"pane_id"`

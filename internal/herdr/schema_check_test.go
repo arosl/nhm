@@ -49,6 +49,7 @@ var paramTypes = map[string]any{
 	"events.wait":               eventsWaitParams{},
 	"pane.wait_for_output":      WaitForOutputParams{},
 	"plugin.action.invoke":      actionInvokeParams{},
+	"pane.move":                 PaneMoveParams{},
 	"plugin.pane.open":          PluginPaneOpenParams{},
 	"plugin.pane.focus":         paneParams{},
 	"plugin.pane.close":         paneParams{},
@@ -78,6 +79,7 @@ var resultTypes = map[string]any{
 	"pane_info":             paneResult{},
 	"pane_read":             readResult{},
 	"pane_zoom":             zoomResult{},
+	"pane_move":             paneMoveResult{},
 	"pane_process_info":     processInfoResult{},
 	"subscription_started":  nil,
 	"wait_matched":          waitMatchedResult{},
@@ -186,6 +188,7 @@ func TestObjectsMatchSchema(t *testing.T) {
 		"PaneProcessInfo":         ProcessInfo{},
 		"PaneProcessInfoProcess":  Process{},
 		"PaneZoomResult":          ZoomResult{},
+		"PaneMoveResult":          PaneMoveResult{},
 		"PluginActionInfo":        PluginAction{},
 		"PluginInvocationContext": InvocationContext{},
 		"PluginCommandLogInfo":    PluginCommandLog{},
@@ -238,6 +241,8 @@ func TestUnionsMatchSchema(t *testing.T) {
 	} {
 		checkVariant(t, "events.wait match", matches, string(m.Event), m)
 	}
+	dests := variants(t, "request", "PaneMoveDestination", "type")
+	checkVariant(t, "pane.move destination", dests, "new_tab", NewTabIn("w2"))
 	outputs := variants(t, "request", "OutputMatch", "type")
 	for _, m := range []OutputMatch{{Type: "substring", Value: "x"}, {Type: "regex", Value: "x"}} {
 		checkVariant(t, "output match", outputs, m.Type, m)

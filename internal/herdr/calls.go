@@ -33,6 +33,10 @@ type zoomResult struct {
 	Zoom ZoomResult `json:"zoom"`
 }
 
+type paneMoveResult struct {
+	MoveResult PaneMoveResult `json:"move_result"`
+}
+
 type processInfoResult struct {
 	ProcessInfo ProcessInfo `json:"process_info"`
 }
@@ -174,6 +178,14 @@ func (c *Client) PaneSplit(ctx context.Context, p PaneSplitParams) (PaneInfo, er
 	var r paneResult
 	err := c.call(ctx, "pane.split", p, &r, 0)
 	return r.Pane, err
+}
+
+// PaneMove moves a pane. A move to another workspace gives the pane a new
+// id; the result names it (Pane.PaneID).
+func (c *Client) PaneMove(ctx context.Context, p PaneMoveParams) (PaneMoveResult, error) {
+	var r paneMoveResult
+	err := c.call(ctx, "pane.move", p, &r, 0)
+	return r.MoveResult, err
 }
 
 // PaneZoom zooms a pane; mode is "toggle", "on" or "off".

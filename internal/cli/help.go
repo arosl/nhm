@@ -14,6 +14,7 @@ var verbUsage = map[string]string{
 	"version":       versionUsage,
 	"resolve":       resolveUsage,
 	"adopt":         adoptUsage,
+	"move":          moveUsage,
 	"retire":        retireUsage,
 	"recycle":       recycleUsage,
 	"reap":          reapUsage,
