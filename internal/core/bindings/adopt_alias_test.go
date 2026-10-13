@@ -46,4 +46,23 @@ func TestAdoptTakesAFreeAlias(t *testing.T) {
 	if err != nil || res.Binding.HerdrAlias != "icyknoll-2" || h.renamed["w1:p3"] != "icyknoll-2" {
 		t.Fatalf("handoff = %+v %v, renames %v", res.Binding, err, h.renamed)
 	}
+
+	// A displaced source whose old pane still holds an agent that shows
+	// icyknoll-2 (after /clear, say): the name is taken, and the new pane
+	// gets the next free one (ScarletBass's review of cb1f9b9).
+	h = session(paneSpec{pane: "w1:p1", kind: "claude", alias: "icyknoll"},
+		paneSpec{pane: "w1:p9", kind: "claude", alias: "icyknoll-2"}, paneSpec{pane: "w1:p3", kind: "claude", session: "sess-3"})
+	env, _ = testEnv(t, h)
+	nb = newBinding("IcyKnoll", t.TempDir(), "w1", "w1:t2", "w1:p9")
+	nb.HerdrAlias = "icyknoll-2"
+	if old, err = env.Bindings.Create(ctx, nb); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.Bindings.Displace(ctx, old.ID, 1, "the session was cleared"); err != nil {
+		t.Fatal(err)
+	}
+	res, err = Adopt(ctx, env, AdoptRequest{PaneID: "w1:p3", HandoffFrom: old.ID})
+	if err != nil || res.Binding.HerdrAlias != "icyknoll-3" || h.renamed["w1:p3"] != "icyknoll-3" {
+		t.Fatalf("handoff from a live old pane = %+v %v, renames %v", res.Binding, err, h.renamed)
+	}
 }

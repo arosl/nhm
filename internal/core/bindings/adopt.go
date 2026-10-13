@@ -204,12 +204,13 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, opID 
 	// The herdr name: the one the agent shows when it fits, else a
 	// handoff's source alias, when it is free; else the bare alias or the
 	// first free suffix. A same-name agent of another project may hold
-	// the bare name (nhm-4xt).
+	// the bare name (nhm-4xt). Only the adopted pane is the agent's own:
+	// an agent still in a displaced source's pane holds its name.
 	prefer := agent.Name
 	if !AliasFits(prefer, req.MailName) {
 		prefer = source.HerdrAlias
 	}
-	alias, err := FreeAlias(req.MailName, snap.Agents, prefer, req.PaneID, source.PaneID)
+	alias, err := FreeAlias(req.MailName, snap.Agents, prefer, req.PaneID)
 	if err != nil {
 		return res, err
 	}
