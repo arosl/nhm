@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/ui"
@@ -22,9 +23,10 @@ import (
 //
 // Each text loader runs a CLI verb in process and returns what it prints,
 // so a view shows what the verb shows, and no subprocess runs. Only
-// read-only verbs are used: health, version, compatibility status, admin
-// recover inspect, feedback list and ensemble status. Doctor's checks and
-// the capabilities come as nhm's own data and text.
+// read-only verbs and forms are used: health, version, compatibility
+// status, admin recover inspect, feedback list, ensemble status, status,
+// attention, quota, limits --dry-run, read and mail inbox --keep-unread.
+// Doctor's checks and the capabilities come as nhm's own data and text.
 func viewsEnv(c ui.Context) views.Env {
 	sock := c.SocketPath
 	if sock == "" {
@@ -63,6 +65,36 @@ func viewsEnv(c ui.Context) views.Env {
 		Compatibility: verbText(runCompatibility, "status"),
 		Recover:       verbText(runRecoverInspect, withSocket()...),
 		Feedback:      verbText(runFeedback, withSocket("list")...),
+		Status:        verbText(runStatus, withSocket()...),
+		Attention:     verbText(runAttention, withSocket()...),
+		// quota, then a limits pass that records nothing (no seen lines,
+		// no mail).
+		Usage: func(ctx context.Context) (string, error) {
+			q, qerr := verbText(runQuota, withSocket()...)(ctx)
+			l, lerr := verbText(runLimits, withSocket("--dry-run")...)(ctx)
+			if strings.TrimSpace(l) == "" && lerr == nil {
+				l = "no agent is at a limit\n"
+			}
+			return "quota\n\n" + q + "\nlimits (a dry run: nothing is recorded)\n\n" + l, errors.Join(qerr, lerr)
+		},
+		Read: func(ctx context.Context, t ui.Target) (views.Screen, error) {
+			name, pane, err := frozenTarget(sock, t)
+			if err != nil {
+				return views.Screen{Name: name, Pane: pane}, err
+			}
+			text, err := verbText(runRead, withSocket(pane, "--source", "recent", "--lines", "500")...)(ctx)
+			return views.Screen{Name: name, Pane: pane, Text: text}, err
+		},
+		Inbox: func(ctx context.Context, t ui.Target) (string, error) {
+			if !t.Bound() {
+				return "", errors.New("an agent without a binding has no Agent Mail inbox here")
+			}
+			b, err := frozenBinding(sock, t)
+			if err != nil {
+				return "", err
+			}
+			return verbText(runMail, withSocket(inboxArgs(b)...)...)(ctx)
+		},
 		RunStatus: func(ctx context.Context, id string) (string, error) {
 			return verbText(runEnsemble, withSocket("status", id)...)(ctx)
 		},
@@ -73,6 +105,47 @@ func viewsEnv(c ui.Context) views.Env {
 		}
 	}
 	return env
+}
+
+// frozenBinding is the binding a bound target names, while it still holds
+// the target's generation (plan-v4 section 4: a replaced target stays
+// visibly invalid and is never swapped for the agent now in its place). A
+// binding that moved keeps its generation and is followed.
+func frozenBinding(sock string, t ui.Target) (bindings.Binding, error) {
+	ie, err := openInstance(sock)
+	if err != nil {
+		return bindings.Binding{}, err
+	}
+	defer ie.db.Close()
+	b, err := bindings.NewStore(ie.db).Get(context.Background(), t.BindingID)
+	switch {
+	case errors.Is(err, bindings.ErrNotFound):
+		return b, fmt.Errorf("the agent you picked is gone: no binding %s", t.BindingID)
+	case err != nil:
+		return b, err
+	case b.Status != bindings.Active || b.Generation != t.Generation:
+		return b, fmt.Errorf("the agent you picked is gone: %s is %s at generation %d, not generation %d", b.MailName, b.Status, b.Generation, t.Generation)
+	}
+	return b, nil
+}
+
+// frozenTarget is the name and pane to read for a target: a bound one's
+// binding (frozenBinding), else the pane it names.
+func frozenTarget(sock string, t ui.Target) (string, string, error) {
+	if !t.Bound() {
+		return t.Kind, t.PaneID, nil
+	}
+	b, err := frozenBinding(sock, t)
+	if err != nil {
+		return b.MailName, t.PaneID, err
+	}
+	return b.MailName, b.PaneID, nil
+}
+
+// inboxArgs is nhm mail inbox for a binding's agent. --keep-unread always:
+// a view marks no mail read (plan-v4 section 4).
+func inboxArgs(b bindings.Binding) []string {
+	return []string{"inbox", "--agent", b.MailName, "--project", b.MailProjectKey, "--keep-unread"}
 }
 
 // verbText runs a CLI verb in process with args. Its text is what the

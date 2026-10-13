@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/board"
 )
 
@@ -65,6 +66,17 @@ type Env struct {
 	// outcome, and displaced and orphan bindings.
 	Recover  Text
 	Feedback Text
+	// Status, Attention: nhm status and nhm attention, every workspace.
+	Status    Text
+	Attention Text
+	// Usage is nhm quota, then nhm limits --dry-run (nothing recorded).
+	Usage Text
+	// Read is one agent's recent screen. It refuses a bound target whose
+	// binding no longer holds the target's generation: the view never
+	// shows another occupant.
+	Read func(ctx context.Context, t ui.Target) (Screen, error)
+	// Inbox is one agent's unread mail, read with --keep-unread.
+	Inbox func(ctx context.Context, t ui.Target) (string, error)
 	// RunsDir is the instance's ensemble runs directory; "" when the menu
 	// has no instance.
 	RunsDir string
@@ -72,8 +84,18 @@ type Env struct {
 	RunStatus func(ctx context.Context, id string) (string, error)
 	// Timeout bounds each load; 0 is DefaultTimeout.
 	Timeout time.Duration
+	// FollowEvery is how often a following read view reads again; 0 is
+	// one second.
+	FollowEvery time.Duration
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+}
+
+// Screen is what Read gives: the agent's name and pane, and its text.
+type Screen struct {
+	Name string
+	Pane string
+	Text string
 }
 
 // DefaultTimeout bounds a load. nhm doctor bounds its own checks to 20 s.
@@ -93,10 +115,31 @@ func (e Env) now() time.Time {
 	return time.Now()
 }
 
-// IDs are the menu rows (internal/ui/menu) that New opens.
+// IDs are the action table's rows (internal/ui/actions) that New opens.
 var IDs = []string{
 	"diag.doctor", "diag.health", "diag.capabilities", "diag.version", "diag.compatibility", "diag.recover",
-	"view.modes", "view.ensembles", "view.feedback",
+	"view.modes", "view.ensembles", "view.feedback", "view.status", "view.attention", "view.usage",
+}
+
+// ForIDs are the rows that NewFor opens: each takes one agent.
+var ForIDs = []string{"agent.read", "agent.inbox"}
+
+// NewFor returns the view of a row that takes one agent, for the frozen
+// target t, or false for any other row.
+func NewFor(id string, env Env, t ui.Target) (View, bool) {
+	switch id {
+	case "agent.read":
+		return newRead(env, t), true
+	case "agent.inbox":
+		var fn Text
+		if env.Inbox != nil {
+			fn = func(ctx context.Context) (string, error) { return env.Inbox(ctx, t) }
+		}
+		p := newPage("inbox", env, cleaned(fn))
+		p.empty = "no unread mail"
+		return p, true
+	}
+	return nil, false
 }
 
 // New returns the view of a menu row, or false for a row that is not a
@@ -126,6 +169,14 @@ func New(id string, env Env) (View, bool) {
 		return p, true
 	case "view.feedback":
 		return newPage("feedback", env, cleaned(env.Feedback)), true
+	case "view.status":
+		return newPage("status", env, cleaned(env.Status)), true
+	case "view.attention":
+		p := newPage("attention", env, cleaned(env.Attention))
+		p.empty = "nothing needs a decision"
+		return p, true
+	case "view.usage":
+		return newPage("usage", env, cleaned(env.Usage)), true
 	case "view.modes":
 		return newModes(env), true
 	case "view.ensembles":

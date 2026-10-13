@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arosl/nhm/internal/core/ensemble"
+	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/tui/components"
 )
@@ -81,10 +84,127 @@ func TestNewOpensTheMenuRows(t *testing.T) {
 			t.Errorf("New(%s) = %v, %v", id, v, ok)
 		}
 	}
-	for _, id := range []string{"agent.read", "operations", "view.status", "nope"} {
+	target := ui.Target{BindingID: "bnd-1", Generation: 1, PaneID: "w1:p1", Kind: "claude"}
+	for _, id := range ForIDs {
+		it, ok := actions.ByID(id)
+		if !ok || it.Kind != actions.KindView || it.Selection != actions.SelectOne {
+			t.Errorf("%s: action row %+v, %v", id, it, ok)
+		}
+		if v, ok := NewFor(id, Env{}, target); !ok || v.Title() == "" {
+			t.Errorf("NewFor(%s) = %v, %v", id, v, ok)
+		}
+		if _, ok := New(id, Env{}); ok {
+			t.Errorf("New(%s) opened a row that takes an agent", id)
+		}
+	}
+	for _, id := range append([]string{"operations", "nope"}, IDs...) {
+		if _, ok := NewFor(id, Env{}, target); ok {
+			t.Errorf("NewFor(%s) opened a row that takes no agent", id)
+		}
+	}
+	for _, id := range []string{"operations", "agent.retire", "nope"} {
 		if _, ok := New(id, Env{}); ok {
 			t.Errorf("New(%s) opened a view of another track", id)
 		}
+	}
+}
+
+// agent.read follows: each answer schedules the next read; p pauses, and
+// so does a scroll up; a stale tick is dropped.
+func TestReadFollowsAndPauses(t *testing.T) {
+	target := ui.Target{BindingID: "bnd-1", Generation: 1, PaneID: "w1:p1", Kind: "claude"}
+	var mu sync.Mutex
+	reads := 0
+	env := Env{FollowEvery: 5 * time.Millisecond, Read: func(_ context.Context, got ui.Target) (Screen, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if got != target {
+			t.Errorf("read target %+v", got)
+		}
+		reads++
+		return Screen{Name: "IcyKnoll", Pane: "w2:p2", Text: fmt.Sprintf("line \x1b[31m%d\x1b[0m\n", reads)}, nil
+	}}
+	v, _ := NewFor("agent.read", env, target)
+	r := v.(*readView)
+	open(t, v, 60, 10)
+	if v.Title() != "read IcyKnoll" || !strings.Contains(v.View(), "line 1") || !strings.Contains(v.View(), "w2:p2  following") {
+		t.Fatalf("first read: %q %q", v.Title(), v.View())
+	}
+	// Following: the answer scheduled a tick; the tick reads again.
+	_, tick := v.Update(loaded{id: r.req, value: Screen{Name: "IcyKnoll", Pane: "w2:p2", Text: "line 1\n"}})
+	if tick == nil {
+		t.Fatal("a following view scheduled no read")
+	}
+	if msg := step(t, v, tick()); msg == nil {
+		t.Fatal("the tick read nothing")
+	} else {
+		v.Update(msg)
+	}
+	if !strings.Contains(v.View(), "line 2") || strings.Contains(v.View(), "\x1b[31m") {
+		t.Fatalf("second read: %q", v.View())
+	}
+	// p pauses: a tick in flight reads nothing, an answer schedules none.
+	stale := followTick{id: r.tick}
+	v.Update(keyOf("p"))
+	if _, cmd := v.Update(stale); cmd != nil || !strings.Contains(v.View(), "paused") {
+		t.Fatalf("a paused view read again: %v %q", cmd, v.View())
+	}
+	// p again follows, and reads at once.
+	if msg := step(t, v, keyOf("p")); msg == nil || !r.following {
+		t.Fatal("p did not follow again")
+	} else if _, cmd := v.Update(msg); cmd == nil {
+		t.Fatal("following again scheduled no read")
+	}
+	// A scroll up pauses.
+	v.Update(keyOf("up"))
+	if r.following {
+		t.Error("a scroll up kept following")
+	}
+	for _, k := range []string{"esc", "q", "left", "backspace"} {
+		if msg := step(t, v, keyOf(k)); msg != (Back{}) {
+			t.Errorf("%s gave %#v", k, msg)
+		}
+	}
+}
+
+// A target whose binding no longer holds its generation is gone: the
+// view says so and does not follow.
+func TestReadOfAGoneTarget(t *testing.T) {
+	env := Env{FollowEvery: time.Millisecond, Read: func(context.Context, ui.Target) (Screen, error) {
+		return Screen{Name: "IcyKnoll"}, errors.New("the agent you picked is gone: IcyKnoll is active at generation 2, not generation 1")
+	}}
+	v, _ := NewFor("agent.read", env, ui.Target{BindingID: "bnd-1", Generation: 1})
+	v.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	msg := v.Init()()
+	if _, cmd := v.Update(msg); cmd != nil {
+		t.Error("a failed read scheduled the next one")
+	}
+	if out := v.View(); !strings.Contains(out, "the agent you picked is gone") {
+		t.Errorf("view = %q", out)
+	}
+	// No loader: not available.
+	v, _ = NewFor("agent.read", Env{}, ui.Target{PaneID: "w1:p9"})
+	open(t, v, 80, 10)
+	if !strings.Contains(v.View(), "not available in this menu") {
+		t.Errorf("view without a loader = %q", v.View())
+	}
+}
+
+func TestInboxView(t *testing.T) {
+	target := ui.Target{BindingID: "bnd-1", Generation: 1, PaneID: "w1:p1"}
+	var got ui.Target
+	v, _ := NewFor("agent.inbox", Env{Inbox: func(_ context.Context, t ui.Target) (string, error) {
+		got = t
+		return "thread nhm-qbi.8: \x1b]0;x\x07ready for review\n", nil
+	}}, target)
+	open(t, v, 80, 10)
+	if got != target || !strings.Contains(v.View(), "thread nhm-qbi.8: ready for review") || strings.Contains(v.View(), "\x1b]") {
+		t.Errorf("inbox: target %+v, view %q", got, v.View())
+	}
+	v, _ = NewFor("agent.inbox", Env{Inbox: func(context.Context, ui.Target) (string, error) { return "", nil }}, target)
+	open(t, v, 80, 10)
+	if !strings.Contains(v.View(), "no unread mail") {
+		t.Errorf("empty inbox = %q", v.View())
 	}
 }
 
@@ -380,11 +500,20 @@ func TestEnsemblesPresetsRunsAndStop(t *testing.T) {
 func TestViewsFitTheWindow(t *testing.T) {
 	dir := t.TempDir()
 	writeRun(t, dir, ensemble.Run{ID: "ens-20261013T030000-aaaaaa", Preset: strings.Repeat("long", 20), Status: ensemble.RunRunning})
-	env := Env{RunsDir: dir, Health: fixed(strings.Repeat("a very long line of health text ", 20)+"\n"+strings.Repeat("x\n", 50), nil),
-		RunStatus: func(context.Context, string) (string, error) { return strings.Repeat("status ", 50), nil }}
-	for _, id := range IDs {
+	long := strings.Repeat("a very long line of text ", 20) + "\n" + strings.Repeat("x\n", 50)
+	env := Env{RunsDir: dir, Health: fixed(long, nil), Status: fixed(long, nil),
+		RunStatus: func(context.Context, string) (string, error) { return strings.Repeat("status ", 50), nil },
+		Read: func(context.Context, ui.Target) (Screen, error) {
+			return Screen{Name: strings.Repeat("Long", 20), Pane: "w1:p1", Text: long}, nil
+		},
+		Inbox: func(context.Context, ui.Target) (string, error) { return long, nil }}
+	target := ui.Target{BindingID: "bnd-1", Generation: 1}
+	for _, id := range append(slices.Clone(IDs), ForIDs...) {
 		for _, size := range [][2]int{{40, 12}, {100, 30}} {
-			v, _ := New(id, env)
+			v, ok := New(id, env)
+			if !ok {
+				v, _ = NewFor(id, env, target)
+			}
 			open(t, v, size[0], size[1])
 			for _, k := range []string{"tab", "enter"} {
 				if msg := step(t, v, keyOf(k)); msg != nil {
