@@ -440,10 +440,7 @@ func (s *confirmScreen) View(width, _ int) string {
 		if s.f.Phase() == forms.Done {
 			r = s.f.Result()
 		}
-		b.WriteString(targetsText(r, width))
-		if r.Status != "" {
-			b.WriteString("  " + r.Status + "\n")
-		}
+		b.WriteString(resultText(r, width))
 		if err := s.f.Err(); err != nil {
 			b.WriteString("\n" + clip(err.Error(), width) + "\n")
 		}

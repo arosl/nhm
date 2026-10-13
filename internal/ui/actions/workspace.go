@@ -67,7 +67,20 @@ func runKill(ctx context.Context, core Core, req Request) (Result, error) {
 		kreq.OperationID = req.OperationID
 	}
 	res, err := core.Kill(ctx, kreq)
-	out := Result{OperationID: res.OperationID, Lines: res.Refusals}
+	out := Result{OperationID: res.OperationID}
+	// An agent's own refusal shows on its row; the lines keep the rest
+	// (a displaced binding, a pane retire cannot check).
+	refused := map[string]bool{}
+	for _, a := range res.Agents {
+		if len(a.Refusals) > 0 {
+			refused[a.MailName+": "+strings.Join(a.Refusals, "; ")] = true
+		}
+	}
+	for _, r := range res.Refusals {
+		if !refused[r] {
+			out.Lines = append(out.Lines, r)
+		}
+	}
 	for _, a := range res.Agents {
 		tr := TargetResult{Target: ui.Target{BindingID: a.BindingID, PaneID: a.PaneID}, Name: a.MailName}
 		switch {

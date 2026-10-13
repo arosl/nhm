@@ -18,6 +18,18 @@ const idleStep = 15 * time.Minute
 // running is the line a form shows while its job runs.
 const running = "esc closes this view; the operation runs on, and recent operations shows how it ends."
 
+// resultText is an action's whole answer (its status, lines, targets
+// and warnings), each line clipped to width.
+func resultText(r actions.Result, width int) string {
+	var b strings.Builder
+	for _, l := range strings.Split(strings.TrimRight(forms.ResultText(r), "\n"), "\n") {
+		if l != "" {
+			b.WriteString(clip(l, width) + "\n")
+		}
+	}
+	return b.String()
+}
+
 // targetsText lists a review's or a result's targets in the core's words.
 func targetsText(r actions.Result, width int) string {
 	var b strings.Builder
@@ -79,7 +91,7 @@ func (s *reapScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (s *reapScreen) View(width, _ int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "reap: retire the agents idle for %s or more, whose work is done\n\n", s.f.Idle())
+	b.WriteString(clip(fmt.Sprintf("reap: retire the agents idle for %s or more, whose work is done", s.f.Idle()), width) + "\n\n")
 	switch s.f.Phase() {
 	case forms.Reviewing:
 		b.WriteString("dry run…\n")
@@ -89,14 +101,14 @@ func (s *reapScreen) View(width, _ int) string {
 			len(s.f.Set()), idleStep)
 	case forms.Refused, forms.Failed, forms.Done:
 		if s.f.Phase() == forms.Done || len(s.f.Result().Targets) > 0 {
-			b.WriteString(targetsText(s.f.Result(), width))
+			b.WriteString(resultText(s.f.Result(), width))
 		} else {
 			b.WriteString(targetsText(s.f.Review(), width))
 		}
 		if err := s.f.Err(); err != nil {
 			b.WriteString("\n" + clip(err.Error(), width) + "\n")
 		}
-		b.WriteString("\nenter or esc: close · ←/→ idle −/+15m0s · r: dry run again\n")
+		fmt.Fprintf(&b, "\nenter or esc: close · ←/→ idle −/+%s · r: dry run again\n", idleStep)
 	case forms.Running:
 		b.WriteString("retiring one agent at a time, through retire's checks…\n" + running + "\n")
 	}
@@ -149,7 +161,7 @@ func (s *killScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (s *killScreen) View(width, _ int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "kill: retire every agent of workspace %s, then close it\n", s.f.Label())
+	b.WriteString(clip(fmt.Sprintf("kill: retire every agent of workspace %s, then close it", s.f.Label()), width) + "\n")
 	if s.f.NoBeads() {
 		b.WriteString("(no beads: the agents worked none)\n")
 	}
@@ -178,10 +190,7 @@ func (s *killScreen) View(width, _ int) string {
 		}
 		b.WriteString(running + "\n")
 	case forms.Done, forms.Failed:
-		b.WriteString(targetsText(s.f.Result(), width))
-		if r := s.f.Result(); r.Status != "" {
-			b.WriteString("  " + r.Status + "\n")
-		}
+		b.WriteString(resultText(s.f.Result(), width))
 		if err := s.f.Err(); err != nil {
 			b.WriteString("\n" + clip(err.Error(), width) + "\n")
 		}
@@ -251,7 +260,7 @@ func (s *newScreen) View(width, _ int) string {
 	case forms.Running:
 		b.WriteString("\ncreating…\n" + running + "\n")
 	default:
-		b.WriteString("\n" + targetsText(s.f.Result(), width))
+		b.WriteString("\n" + resultText(s.f.Result(), width))
 		if err := s.f.Err(); err != nil {
 			b.WriteString(clip(err.Error(), width) + "\n")
 		}
@@ -305,7 +314,7 @@ func (s *wakeScreen) View(width, _ int) string {
 	case forms.Running:
 		b.WriteString("waking…\n" + running + "\n")
 	default:
-		b.WriteString(targetsText(s.f.Result(), width))
+		b.WriteString(resultText(s.f.Result(), width))
 		if err := s.f.Err(); err != nil {
 			b.WriteString("\n" + clip(err.Error(), width) + "\n")
 		}

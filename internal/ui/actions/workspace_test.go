@@ -88,10 +88,14 @@ func TestKillReviewThenTypedLabel(t *testing.T) {
 	if k := w.kills[1]; !k.Yes || k.OperationID != "op-7" || !k.NoBeads {
 		t.Fatalf("the kill asked %+v", k)
 	}
-	// A review that refuses says why.
-	w.killRes, w.err = lifecycle.KillResult{Refusals: []string{"BlueLake: it is working"}}, fmt.Errorf("%w: BlueLake", lifecycle.ErrRefused)
+	// A review that refuses says why, once: an agent's refusal on its
+	// row, the others as lines.
+	w.killRes, w.err = lifecycle.KillResult{Refusals: []string{"BlueLake: it is working", "pane w1:p9 runs a job in the foreground"},
+		Agents: []lifecycle.RetireResult{{MailName: "BlueLake", Refusals: []string{"it is working"}}}},
+		fmt.Errorf("%w: BlueLake", lifecycle.ErrRefused)
 	if res, err := do(t, "workspace.kill", w.core(), Request{Context: ctxKill, Params: map[string]string{ParamDryRun: "1"}}); err == nil ||
-		res.Status != "refused" || res.Lines[0] != "BlueLake: it is working" {
+		res.Status != "refused" || len(res.Lines) != 1 || res.Lines[0] != "pane w1:p9 runs a job in the foreground" ||
+		res.Targets[0].Reason != "it is working" {
 		t.Fatalf("refused review = %+v %v", res, err)
 	}
 	if KillLabel(ui.Context{WorkspaceID: "w4", WorkspaceLabel: " "}) != "w4" {
