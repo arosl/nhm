@@ -9,6 +9,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/store"
 )
 
 // The menu's reap: a dry run, then exactly the reviewed set. A binding
@@ -36,8 +37,10 @@ func TestReapRetiresOnlyTheReviewedSet(t *testing.T) {
 		}
 		gen[it.MailName] = it
 	}
+	// IcyKnoll, the one agent that is retired, is last in the set: its
+	// receipt and its retire's id follow the set's order, not the sweep's.
 	var only []ReapTarget
-	for _, name := range []string{"IcyKnoll", "BlueLake", "RedStone"} {
+	for _, name := range []string{"BlueLake", "RedStone", "IcyKnoll"} {
 		only = append(only, ReapTarget{BindingID: gen[name].BindingID, Generation: gen[name].Generation})
 	}
 	// After the review: BlueLake is recycled (a new generation), RedStone
@@ -53,7 +56,7 @@ func TestReapRetiresOnlyTheReviewedSet(t *testing.T) {
 	if _, err := Retire(ctx, w.env, RetireRequest{Target: "RedStone"}); err != nil {
 		t.Fatal(err)
 	}
-	req.DryRun, req.Only = false, only
+	req.DryRun, req.Only, req.OperationID = false, only, "op-reap-1"
 	items, err := Reap(ctx, w.env, nil, req)
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +77,131 @@ func TestReapRetiresOnlyTheReviewedSet(t *testing.T) {
 	if green, err := w.env.Bindings.Get(ctx, gen["GreenPike"].BindingID); err != nil || green.Status != bindings.Active {
 		t.Fatalf("GreenPike, outside the review = %+v %v", green, err)
 	}
+	// The sweep has its record under the menu's id, with one receipt per
+	// reviewed agent in the review's order, and IcyKnoll's retire is its
+	// child (the review's M3).
+	op, err := ReadOperation(ctx, w.env.DB, "op-reap-1")
+	if err != nil || op.Verb != VerbReap || op.Status != ReapDone || op.Completed == nil || len(op.Targets) != 3 {
+		t.Fatalf("record = %+v %v", op, err)
+	}
+	for i, want := range []string{"refused", "refused", "retired"} {
+		if tg := op.Targets[i]; tg.Status != want || tg.BindingID != only[i].BindingID {
+			t.Fatalf("receipt %d = %+v, want %s", i, tg, want)
+		}
+	}
+	if !strings.Contains(string(op.Targets[2].Result), `"retire_operation":"op-reap-1.2"`) ||
+		!strings.Contains(string(op.Targets[0].Result), "changed since it was reviewed") {
+		t.Fatalf("receipts = %s | %s", op.Targets[2].Result, op.Targets[0].Result)
+	}
+	if child, err := ReadOperation(ctx, w.env.DB, "op-reap-1.2"); err != nil || child.Verb != "reap" || child.Completed == nil {
+		t.Fatalf("IcyKnoll's retire = %+v %v", child, err)
+	}
+	// An id claimed before is refused before any retire: GreenPike, whom
+	// the sweep could retire, stays.
+	if _, err := w.env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: "op-taken", Verb: "other"}, w.clock); err != nil {
+		t.Fatal(err)
+	}
+	taken := ReapRequest{Idle: req.Idle, WorkspaceID: "w1", OperationID: "op-taken",
+		Only: []ReapTarget{{BindingID: gen["GreenPike"].BindingID, Generation: gen["GreenPike"].Generation}}}
+	if _, err := Reap(ctx, w.env, nil, taken); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a sweep under a claimed id = %v", err)
+	}
+	if green, err := w.env.Bindings.Get(ctx, gen["GreenPike"].BindingID); err != nil || green.Status != bindings.Active {
+		t.Fatalf("GreenPike, under a claimed id = %+v %v", green, err)
+	}
+	// A dry run records nothing; a set that names an agent twice is refused.
+	dry := ReapRequest{Idle: req.Idle, WorkspaceID: "w1", DryRun: true, Only: only[:1], OperationID: "op-dry"}
+	if _, err := Reap(ctx, w.env, nil, dry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadOperation(ctx, w.env.DB, "op-dry"); !errors.Is(err, ErrNoOperation) {
+		t.Fatalf("a dry run's record = %v", err)
+	}
+	dry.Only = []ReapTarget{only[0], only[0]}
+	if _, err := Reap(ctx, w.env, nil, dry); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a set with a duplicate = %v", err)
+	}
 	// An explicitly empty set is refused, never read as "all".
-	req.Only = []ReapTarget{}
+	req.Only, req.OperationID = []ReapTarget{}, ""
 	if _, err := Reap(ctx, w.env, nil, req); !errors.Is(err, ErrRefused) {
 		t.Fatalf("an empty set = %v", err)
+	}
+}
+
+// A recorded sweep writes each agent's receipt as it goes, and stops at a
+// retire that fails after its claim: the agent before it is retired, the
+// failed one says so, the one after stays pending, and the record ends
+// stopped (the review's M3).
+func TestReapRecordStopsAtAFailedRetire(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	for i, name := range []string{"IcyKnoll", "BlueLake", "RedStone"} {
+		w.bind(t, name, "w1:p"+string(rune('1'+i)), herdr.StatusIdle)
+	}
+	req := ReapRequest{Idle: 10 * time.Minute, WorkspaceID: "w1", DryRun: true}
+	if _, err := Reap(ctx, w.env, nil, req); err != nil {
+		t.Fatal(err)
+	}
+	w.clock = w.clock.Add(11 * time.Minute)
+	review, err := Reap(ctx, w.env, nil, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var only []ReapTarget
+	for _, it := range review {
+		only = append(only, ReapTarget{BindingID: it.BindingID, Generation: it.Generation})
+	}
+	// The second pane to close has its binding changed under it, so its
+	// retire fails after its claim.
+	h := &hookHerdr{fakeHerdr: w.h}
+	w.env.Herdr = h
+	var closed []string
+	h.onClose = func(pane string) {
+		closed = append(closed, pane)
+		if len(closed) != 2 {
+			return
+		}
+		list, err := w.env.Bindings.List(ctx, bindings.Filter{WorkspaceID: "w1", Statuses: []bindings.Status{bindings.Active}})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		for _, b := range list {
+			if b.PaneID == pane {
+				if _, err := w.env.Bindings.Occupy(ctx, b.ID, b.Generation, bindings.Occupant{WorkspaceID: "w1", TabID: b.TabID,
+					PaneID: b.PaneID, HerdrAlias: b.HerdrAlias, Kind: b.Kind, Model: b.Model, NativeSession: b.NativeSession}); err != nil {
+					t.Error(err)
+				}
+			}
+		}
+	}
+	req.DryRun, req.Only, req.OperationID = false, only, "op-reap-f"
+	items, err := Reap(ctx, w.env, nil, req)
+	if err == nil || len(closed) != 2 {
+		t.Fatalf("a sweep with a failed retire = %+v %v (closed %v)", items, err, closed)
+	}
+	op, err := ReadOperation(ctx, w.env.DB, "op-reap-f")
+	if err != nil || op.Status != ReapStopped || op.Completed == nil || len(op.Targets) != 3 {
+		t.Fatalf("record = %+v %v", op, err)
+	}
+	byPane := map[string]string{}
+	for _, it := range review {
+		byPane[it.PaneID] = it.BindingID
+	}
+	status := map[string]string{}
+	for _, tg := range op.Targets {
+		status[tg.BindingID] = tg.Status
+	}
+	if status[byPane[closed[0]]] != "retired" || status[byPane[closed[1]]] != "failed" {
+		t.Fatalf("receipts = %v (closed %v)", status, closed)
+	}
+	pending := 0
+	for _, s := range status {
+		if s == "pending" {
+			pending++
+		}
+	}
+	if pending != 1 {
+		t.Fatalf("receipts = %v: want one pending", status)
 	}
 }

@@ -48,7 +48,8 @@ func runReapJob(ctx context.Context, ie *instanceEnv, j runner.Job) (any, int, e
 	if err != nil {
 		return nil, exitError, err
 	}
+	// The job's id is the sweep's record: its retires are its children.
 	items, code, err := reapSweep(ctx, ie, lenv, lifecycle.ReapRequest{Idle: req.Idle, WorkspaceID: req.WorkspaceID, Keep: keep,
-		Only: req.Only})
+		Only: req.Only, OperationID: j.ID})
 	return map[string]any{"agents": items}, code, err
 }

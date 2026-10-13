@@ -39,6 +39,12 @@ type ReapRequest struct {
 	// check runs again. nil sweeps every binding in scope; an empty set
 	// is refused.
 	Only []ReapTarget
+	// OperationID is the id of the record of a sweep over a reviewed set
+	// (the menu's confirm). Reap records the operation and a pending
+	// receipt per reviewed agent before the first retire, runs each retire
+	// as its child <id>.<index>, and records each agent's outcome as it
+	// happens. An id claimed before is refused. A dry run records nothing.
+	OperationID string
 }
 
 // ReapTarget is one agent of a reviewed set: the binding and the
@@ -56,7 +62,9 @@ type ReapItem struct {
 	Generation int64         `json:"generation"`
 	PaneID     string        `json:"pane_id,omitempty"`
 	IdleFor    time.Duration `json:"idle_ns"`
-	// Action: retired, would_retire, kept, refused.
+	// Action: retired, would_retire, kept, refused, or failed: the retire
+	// failed after its claim, so some of its effects may have happened;
+	// its record (Retire.OperationID) says how far it got.
 	Action string        `json:"action"`
 	Reason string        `json:"reason,omitempty"`
 	Retire *RetireResult `json:"retire,omitempty"`
@@ -85,6 +93,18 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 	if req.Only != nil && len(req.Only) == 0 {
 		return nil, fmt.Errorf("%w: the reviewed set is empty: nothing to reap", ErrRefused)
 	}
+	// index is each reviewed agent's receipt.
+	index := map[string]int{}
+	for i, t := range req.Only {
+		if _, dup := index[t.BindingID]; dup {
+			return nil, fmt.Errorf("%w: the reviewed set names %s twice", ErrRefused, t.BindingID)
+		}
+		index[t.BindingID] = i
+	}
+	record := req.OperationID != "" && !req.DryRun
+	if record && req.Only == nil {
+		return nil, errors.New("reap: a recorded sweep needs its reviewed set")
+	}
 	snap, err := env.Herdr.Snapshot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("herdr: %w", err)
@@ -101,7 +121,7 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 	if err != nil {
 		return nil, err
 	}
-	var items []ReapItem
+	var items, gone []ReapItem
 	reviewed := map[string]int64{}
 	if req.Only != nil {
 		for _, t := range req.Only {
@@ -124,12 +144,46 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 			if b, err := env.Bindings.Get(ctx, t.BindingID); err == nil {
 				item.MailName, item.PaneID = b.MailName, b.PaneID
 			}
-			items = append(items, item)
+			gone = append(gone, item)
 		}
 		list = in
 	}
 	idlePath := filepath.Join(env.InstanceDir, IdleFile)
 	idle := readIdle(idlePath)
+	// add keeps an agent's outcome, and records it in a recorded sweep.
+	add := func(item ReapItem) error {
+		items = append(items, item)
+		if !record {
+			return nil
+		}
+		return reapReceipt(ctx, env, req.OperationID, index[item.BindingID], item)
+	}
+	if record {
+		names := map[string]string{}
+		for _, b := range list {
+			names[b.ID] = b.MailName
+		}
+		for _, item := range gone {
+			names[item.BindingID] = item.MailName
+		}
+		if err := claimReap(ctx, env, req, names); err != nil {
+			return nil, fmt.Errorf("reap: record the operation: %w", err)
+		}
+	}
+	// stop ends a sweep that cannot go on: a recorded sweep's receipts say
+	// how far it got, and the idle file drops the agents it retired.
+	stop := func(err error) ([]ReapItem, error) {
+		if record {
+			_ = env.DB.SetOperationStatus(ctx, req.OperationID, ReapStopped, true, env.now())
+		}
+		_ = writeIdle(idlePath, idle)
+		return items, err
+	}
+	for _, item := range gone {
+		if err := add(item); err != nil {
+			return stop(fmt.Errorf("reap: record %s: %w", item.BindingID, err))
+		}
+	}
 	now := env.now()
 	seen := map[string]bool{}
 	keep := map[string]bool{}
@@ -141,7 +195,9 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 		if want, ok := reviewed[b.ID]; ok && want != b.Generation {
 			item.Action = "refused"
 			item.Reason = fmt.Sprintf("it changed since it was reviewed: expected generation %d, the binding is at generation %d", want, b.Generation)
-			items = append(items, item)
+			if err := add(item); err != nil {
+				return stop(fmt.Errorf("reap: record %s: %w", b.MailName, err))
+			}
 			continue
 		}
 		a, ok := agents[b.PaneID]
@@ -154,7 +210,9 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 			item.Reason = "herdr gives no state_change_seq"
 		}
 		if item.Reason != "" {
-			items = append(items, item)
+			if err := add(item); err != nil {
+				return stop(fmt.Errorf("reap: record %s: %w", b.MailName, err))
+			}
 			continue
 		}
 		seen[b.ID] = true
@@ -193,19 +251,29 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 			}
 		}
 		if item.Reason != "" {
-			items = append(items, item)
+			if err := add(item); err != nil {
+				return stop(fmt.Errorf("reap: record %s: %w", b.MailName, err))
+			}
 			continue
 		}
 		// A reviewer works no beads: only an agent spawned with --role
 		// reviewer may have none in the databases searched. Retire checks
-		// the generation the sweep saw under its lock.
-		rr, err := Retire(ctx, env, RetireRequest{Target: b.ID, KeepIdentity: false, DryRun: req.DryRun, Reason: "reap",
-			NoBeads: b.Role == spawn.RoleReviewer, ExpectedGeneration: b.Generation})
+		// the generation the sweep saw under its lock. In a recorded sweep
+		// each retire is the sweep's child.
+		rreq := RetireRequest{Target: b.ID, KeepIdentity: false, DryRun: req.DryRun, Reason: "reap",
+			NoBeads: b.Role == spawn.RoleReviewer, ExpectedGeneration: b.Generation}
+		if record {
+			rreq.OperationID = store.ChildOperationID(req.OperationID, index[b.ID])
+		}
+		rr, err := Retire(ctx, env, rreq)
 		r := rr
 		item.Retire = &r
 		switch {
 		case errors.Is(err, ErrRefused):
 			item.Action, item.Reason = "refused", strings.Join(rr.Refusals, "; ")
+		case err != nil && rr.OperationID != "":
+			// It failed after its claim: some effects may have happened.
+			item.Action, item.Reason = "failed", err.Error()
 		case err != nil:
 			item.Action, item.Reason = "refused", err.Error()
 		case req.DryRun:
@@ -214,7 +282,14 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 			item.Action = "retired"
 			delete(idle, b.ID)
 		}
-		items = append(items, item)
+		if err := add(item); err != nil {
+			return stop(fmt.Errorf("reap: record %s: %w", b.MailName, err))
+		}
+		// A recorded sweep stops at a failed retire, as kill does: its
+		// record and the receipts say how far it got.
+		if record && item.Action == "failed" {
+			return stop(fmt.Errorf("reap: %s: %w; the sweep stops", b.MailName, err))
+		}
 	}
 	// Keep the entries of other workspaces; drop those not seen idle.
 	for id := range idle {
@@ -222,11 +297,19 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 			delete(idle, id)
 		}
 	}
-	if err := writeIdle(idlePath, idle); err != nil {
-		return items, err
-	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].MailName < items[j].MailName })
-	return items, nil
+	// Every receipt is final: the record is done, whatever the idle file
+	// does.
+	var doneErr error
+	if record {
+		if err := env.DB.SetOperationStatus(ctx, req.OperationID, ReapDone, true, env.now()); err != nil {
+			doneErr = fmt.Errorf("reap: the sweep is done, but its record is not: %w", err)
+		}
+	}
+	if err := writeIdle(idlePath, idle); err != nil {
+		return items, errors.Join(doneErr, err)
+	}
+	return items, doneErr
 }
 
 func readIdle(path string) map[string]idleEntry {
@@ -367,6 +450,76 @@ const (
 	KillFailed      = "failed"
 )
 
+// VerbReap is the operation verb of a recorded sweep over a reviewed set;
+// each agent's retire is its own operation, with verb "reap" and the id
+// <reap operation>.<index>.
+const VerbReap = "reap_set"
+
+// Reap operation statuses. A sweep that stops while "dispatching" died
+// partway: its receipts say how far it got. A receipt's status is its
+// agent's action: retired, refused or kept, and pending until then.
+const (
+	ReapDispatching = "dispatching"
+	ReapDone        = "done"
+	ReapStopped     = "stopped"
+)
+
+// claimReap records a sweep over a reviewed set, and one pending receipt
+// per reviewed agent, before any effect. An id claimed before refuses:
+// its record shows how that sweep went.
+func claimReap(ctx context.Context, env Env, req ReapRequest, names map[string]string) error {
+	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: VerbReap,
+		Scope:   map[string]string{"workspace_id": req.WorkspaceID},
+		Request: map[string]any{"workspace_id": req.WorkspaceID, "idle_ns": req.Idle, "targets": req.Only}}, env.now())
+	if errors.Is(err, store.ErrOperationIDConflict) {
+		return fmt.Errorf("%w: %w; reap does not run it again", ErrRefused, err)
+	}
+	if err != nil {
+		return err
+	}
+	if claim.Existing {
+		return fmt.Errorf("%w: operation %s exists (%s); reap does not run it again", ErrRefused, claim.Operation.ID, claim.Operation.Status)
+	}
+	// A new record that cannot get its receipts ends stopped: nothing ran.
+	stop := func(err error) error {
+		_ = env.DB.SetOperationStatus(ctx, req.OperationID, ReapStopped, true, env.now())
+		return err
+	}
+	now := store.FormatTime(env.now())
+	for i, t := range req.Only {
+		js, err := json.Marshal(map[string]string{"mail_name": names[t.BindingID]})
+		if err != nil {
+			return stop(err)
+		}
+		if _, err := env.DB.SQL().ExecContext(ctx, `INSERT INTO receipts (operation_id, target_index, binding_id, generation,
+			status, result_json, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)`, req.OperationID, i, t.BindingID, t.Generation, string(js), now); err != nil {
+			return stop(err)
+		}
+	}
+	if err := env.DB.SetOperationStatus(ctx, req.OperationID, ReapDispatching, false, env.now()); err != nil {
+		return stop(err)
+	}
+	return nil
+}
+
+// reapReceipt records one reviewed agent's outcome as it happens.
+func reapReceipt(ctx context.Context, env Env, opID string, i int, item ReapItem) error {
+	detail := map[string]any{"mail_name": item.MailName}
+	if item.Reason != "" {
+		detail["reason"] = item.Reason
+	}
+	if item.Retire != nil && item.Retire.OperationID != "" {
+		detail["retire_operation"] = item.Retire.OperationID
+	}
+	js, err := json.Marshal(detail)
+	if err != nil {
+		return err
+	}
+	_, err = env.DB.SQL().ExecContext(ctx, `UPDATE receipts SET status = ?, result_json = ?, updated_at = ?
+		WHERE operation_id = ? AND target_index = ?`, item.Action, string(js), store.FormatTime(env.now()), opID, i)
+	return err
+}
+
 // killReceipt records one agent's outcome as it happens.
 func killReceipt(ctx context.Context, env Env, opID string, i int, status string, r RetireResult, rerr error) error {
 	detail := map[string]any{"mail_name": r.MailName, "retire_operation": r.OperationID}
@@ -410,18 +563,26 @@ func claimKill(ctx context.Context, env Env, req KillRequest, list []bindings.Bi
 	if claim.Existing {
 		return id, fmt.Errorf("%w: operation %s exists (%s); kill does not run it again", ErrRefused, id, claim.Operation.Status)
 	}
+	// A new record that cannot get its receipts ends stopped: nothing ran.
+	stop := func(err error) (string, error) {
+		_ = env.DB.SetOperationStatus(ctx, id, KillStopped, true, env.now())
+		return id, err
+	}
 	now := store.FormatTime(env.now())
 	for i, b := range list {
 		js, err := json.Marshal(map[string]string{"mail_name": b.MailName})
 		if err != nil {
-			return id, err
+			return stop(err)
 		}
 		if _, err := env.DB.SQL().ExecContext(ctx, `INSERT INTO receipts (operation_id, target_index, binding_id, generation,
 			status, result_json, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)`, id, i, b.ID, b.Generation, string(js), now); err != nil {
-			return id, err
+			return stop(err)
 		}
 	}
-	return id, env.DB.SetOperationStatus(ctx, id, KillDispatching, false, env.now())
+	if err := env.DB.SetOperationStatus(ctx, id, KillDispatching, false, env.now()); err != nil {
+		return stop(err)
+	}
+	return id, nil
 }
 
 // Kill closes a workspace: KillWith with a new operation id.
