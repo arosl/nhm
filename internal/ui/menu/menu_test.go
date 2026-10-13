@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/arosl/nhm/internal/core/ensemble"
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/ui"
@@ -246,6 +247,42 @@ func TestSurfaceComesBack(t *testing.T) {
 	m.Update(surfaceEnded{id: "palette", err: fmt.Errorf("exit status 2")})
 	if m.open != nil || !strings.Contains(m.note, "exit status 2") || !strings.Contains(m.View(), "palette") {
 		t.Fatalf("after the palette: open=%T note=%q", m.open, m.note)
+	}
+}
+
+// fakeView asks for the stop form on "s", as the ensembles view does.
+type fakeView struct{}
+
+func (fakeView) Init() tea.Cmd { return nil }
+func (v fakeView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "s" {
+		return v, func() tea.Msg { return views.Open{Row: "view.ensembles", Action: "stop", Arg: "run-1"} }
+	}
+	return v, nil
+}
+func (fakeView) View() string  { return "the runs" }
+func (fakeView) Title() string { return "ensembles" }
+
+// A view's form opens over the view, and the view comes back after it.
+func TestViewOpensAFormAndComesBack(t *testing.T) {
+	var asked []string
+	m := newMenu(ctxW, &fakeCore{})
+	m.env.Core.EnsembleStop = func(_ context.Context, run string, dryRun bool, opID string) (ensemble.Run, error) {
+		asked = append(asked, fmt.Sprintf("%s %v %s", run, dryRun, opID))
+		return ensemble.Run{ID: run, Status: ensemble.RunRunning}, nil
+	}
+	pump(m, m.show(&viewScreen{v: fakeView{}, open: m.openFromView}), 0)
+	press(m, "s")
+	if _, ok := m.open.(*confirmScreen); !ok || len(m.stack) != 1 || len(asked) != 1 || asked[0] != "run-1 true op-1" {
+		t.Fatalf("after s: open=%T stack=%d asked=%v", m.open, len(m.stack), asked)
+	}
+	press(m, "enter")
+	if len(asked) != 2 || asked[1] != "run-1 false op-1" {
+		t.Fatalf("the stop: %v", asked)
+	}
+	press(m, "esc")
+	if _, ok := m.open.(*viewScreen); !ok || len(m.stack) != 0 || !strings.Contains(m.View(), "the runs") {
+		t.Fatalf("after the form: open=%T\n%s", m.open, m.View())
 	}
 }
 

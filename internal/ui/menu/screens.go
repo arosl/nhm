@@ -40,14 +40,14 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 				if !ok {
 					return nil, errors.New("not built yet")
 				}
-				return &viewScreen{v: v}, nil
+				return &viewScreen{v: v, open: m.openFromView}, nil
 			})
 		}
 		v, ok := views.New(a.ID, m.env.Views)
 		if !ok {
 			return nil, errors.New("not built yet")
 		}
-		return &viewScreen{v: v}, nil
+		return &viewScreen{v: v, open: m.openFromView}, nil
 	}
 	run := forms.Runner{Action: a, Core: m.env.Core, Guard: actions.NewGuard(m.env.NewID)}
 	switch a.ID {
@@ -64,6 +64,13 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 			return nil, errors.New("no workspace list here")
 		}
 		return newWorkspacesScreen(a, m.env.Core, c, m.env.Agents), nil
+	case "ensemble.stop":
+		// The ensembles view picks the run: its s opens the stop form.
+		v, ok := views.New("view.ensembles", m.env.Views)
+		if !ok {
+			return nil, errors.New("no ensembles view here")
+		}
+		return &viewScreen{v: v, open: m.openFromView}, nil
 	}
 	if a.Selection == actions.SelectNone || a.Selection == "" {
 		return nil, errors.New("this menu has no form for it yet")
@@ -155,8 +162,12 @@ func (s *pickerScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 func (s *pickerScreen) View(int, int) string { return s.p.View() }
 
-// viewScreen is a read-only view.
-type viewScreen struct{ v views.View }
+// viewScreen is a read-only view. A form it asks for (views.Open) opens
+// over it, and the view comes back when the form closes.
+type viewScreen struct {
+	v    views.View
+	open func(views.Open) (screen, error)
+}
 
 func (s *viewScreen) Init() tea.Cmd { return s.v.Init() }
 
@@ -165,8 +176,12 @@ func (s *viewScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case views.Back:
 		return nil, true
 	case views.Open:
-		text := fmt.Sprintf("%s %s is not built yet in the menu: use nhm ensemble %s %s", m.Row, m.Action, m.Action, m.Arg)
-		return func() tea.Msg { return noteMsg{text: text} }, false
+		form, err := s.open(m)
+		if err != nil {
+			text := err.Error()
+			return func() tea.Msg { return noteMsg{text: text} }, false
+		}
+		return func() tea.Msg { return pushScreen{s: form} }, false
 	}
 	model, cmd := s.v.Update(msg)
 	if v, ok := model.(views.View); ok {
@@ -365,6 +380,76 @@ func (s *sendScreen) View(width, height int) string {
 		out += "\n" + s.err.Error()
 	}
 	return out
+}
+
+// openFromView is the form a view asks for: the ensembles view's stop.
+func (m *Model) openFromView(o views.Open) (screen, error) {
+	if o.Row != "view.ensembles" || o.Action != "stop" {
+		return nil, fmt.Errorf("%s %s: this menu has no form for it", o.Row, o.Action)
+	}
+	a, ok := actions.ByID("ensemble.stop")
+	if !ok {
+		return nil, errors.New("ensemble stop is not in the action table")
+	}
+	if why := a.Unavailable(m.env.Context, m.env.Core); why != "" {
+		return nil, fmt.Errorf("%s: %s", a.Label, why)
+	}
+	run := forms.Runner{Action: a, Core: m.env.Core, Guard: actions.NewGuard(m.env.NewID)}
+	req := actions.Request{Context: m.env.Context, Params: map[string]string{actions.ParamRun: o.Arg}}
+	return &confirmScreen{f: forms.NewConfirmForm(run, req)}, nil
+}
+
+// confirmScreen is a review-and-confirm form (ensemble stop).
+type confirmScreen struct{ f *forms.ConfirmForm }
+
+func (s *confirmScreen) Init() tea.Cmd { return s.f.StartReview() }
+
+func (s *confirmScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return s.f.Update(msg), false
+	}
+	switch k.String() {
+	case "esc":
+		return nil, true
+	case "enter":
+		switch s.f.Phase() {
+		case forms.Reviewed:
+			return s.f.Confirm(), false
+		case forms.Done, forms.Failed, forms.Refused:
+			return nil, true
+		}
+	}
+	return nil, false
+}
+
+func (s *confirmScreen) View(width, _ int) string {
+	var b strings.Builder
+	a := s.f.Action()
+	b.WriteString(a.Label + ": " + a.Help + "\n\n")
+	switch s.f.Phase() {
+	case forms.Reviewing:
+		b.WriteString("reading it…\n")
+	case forms.Reviewed:
+		b.WriteString(targetsText(s.f.Review(), width))
+		b.WriteString("\nenter: " + a.Label + " · esc: back\n")
+	case forms.Running:
+		b.WriteString(a.Label + "…\n" + running + "\n")
+	default:
+		r := s.f.Review()
+		if s.f.Phase() == forms.Done {
+			r = s.f.Result()
+		}
+		b.WriteString(targetsText(r, width))
+		if r.Status != "" {
+			b.WriteString("  " + r.Status + "\n")
+		}
+		if err := s.f.Err(); err != nil {
+			b.WriteString("\n" + clip(err.Error(), width) + "\n")
+		}
+		b.WriteString("\nenter or esc: back\n")
+	}
+	return b.String()
 }
 
 // doScreen runs an action that changes no agent (zoom, focus) at once,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/ensemble"
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
@@ -117,6 +118,13 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 		},
 		Zoom:  func(ctx context.Context, t ui.Target) (string, error) { return uiZoom(ctx, ie, t) },
 		Focus: func(ctx context.Context, ws string) error { return ie.herdr.WorkspaceFocus(ctx, ws) },
+		EnsembleStop: func(ctx context.Context, run string, dryRun bool, opID string) (ensemble.Run, error) {
+			if dryRun {
+				return ensembleStop(ie, run, true)
+			}
+			var r ensemble.Run
+			return r, uiJob(ctx, jobs, runner.VerbEnsembleStop, opID, runner.EnsembleStopRequest{Run: run}, &r, ensemble.ErrNoRun)
+		},
 	}
 }
 

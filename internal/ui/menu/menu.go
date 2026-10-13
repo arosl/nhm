@@ -61,6 +61,9 @@ type Model struct {
 	note   string
 	help   bool
 	open   screen
+	// stack holds the screens under the open one: a form a view opened
+	// returns to that view.
+	stack []screen
 }
 
 // screen is what the menu shows instead of its list: a form, a view, the
@@ -75,6 +78,10 @@ type screen interface {
 // openScreen replaces the open screen (the picker hands on to the form
 // of its pick).
 type openScreen struct{ s screen }
+
+// pushScreen opens a screen over the open one, which comes back when it
+// closes (a view's form).
+type pushScreen struct{ s screen }
 
 // noteMsg closes the open screen and shows a line in the list.
 type noteMsg struct{ text string }
@@ -154,12 +161,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case openScreen:
 		return m, m.show(msg.s)
+	case pushScreen:
+		if m.open != nil {
+			m.stack = append(m.stack, m.open)
+		}
+		return m, m.show(msg.s)
 	case noteMsg:
-		m.open, m.note = nil, msg.text
+		m.open, m.stack, m.note = nil, nil, msg.text
 		return m, nil
 	case surfaceEnded:
 		// The surface gave the terminal back: the menu shows again.
-		m.open, m.note = nil, ""
+		m.open, m.stack, m.note = nil, nil, ""
 		if msg.err != nil {
 			m.note = msg.id + ": " + msg.err.Error()
 		}
@@ -169,6 +181,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd, closed := m.open.Update(msg)
 		if closed {
 			m.open = nil
+			if n := len(m.stack); n > 0 {
+				m.open, m.stack = m.stack[n-1], m.stack[:n-1]
+			}
 		}
 		return m, cmd
 	}
@@ -181,6 +196,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // show opens a screen at the menu's size.
 func (m *Model) show(s screen) tea.Cmd {
 	m.open, m.note, m.help = s, "", false
+	if s == nil {
+		return nil
+	}
 	size, _ := s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height - 2})
 	return tea.Batch(size, s.Init())
 }

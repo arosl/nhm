@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/ensemble"
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
@@ -65,6 +66,10 @@ type Core struct {
 	Zoom func(ctx context.Context, t ui.Target) (string, error)
 	// Focus focuses a workspace (nhm attach); it changes no agent.
 	Focus func(ctx context.Context, workspaceID string) error
+	// EnsembleStop stops an ensemble run, by id or session (nhm ensemble
+	// stop): its results stay, and no agent retires. A dry run only reads
+	// the run (the review).
+	EnsembleStop func(ctx context.Context, run string, dryRun bool, opID string) (ensemble.Run, error)
 }
 
 // SpawnRequest is a spawn or an add as the spawn wizard collects it. The
@@ -99,6 +104,9 @@ func needsNew(c Core) string   { return needsSeam(c.New != nil, "create a worksp
 func needsSpawn(c Core) string { return needsSeam(c.Spawn != nil, "spawn") }
 func needsZoom(c Core) string  { return needsSeam(c.Zoom != nil, "zoom") }
 func needsFocus(c Core) string { return needsSeam(c.Focus != nil, "focus a workspace") }
+func needsEnsembleStop(c Core) string {
+	return needsSeam(c.EnsembleStop != nil, "stop an ensemble run")
+}
 
 // needsSend is why the core cannot send.
 func needsSend(c Core) string {

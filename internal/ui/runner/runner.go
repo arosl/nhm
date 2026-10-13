@@ -51,7 +51,14 @@ const (
 	VerbRetire    = "retire"
 	VerbRecycle   = "recycle"
 	VerbAdopt     = "adopt"
+	// VerbEnsembleStop stops an ensemble run (EnsembleStopRequest).
+	VerbEnsembleStop = "ensemble.stop"
 )
+
+// EnsembleStopRequest stops an ensemble run, by id or session.
+type EnsembleStopRequest struct {
+	Run string `json:"run"`
+}
 
 // Codes are the CLI verbs' exit codes.
 const (

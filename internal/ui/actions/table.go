@@ -75,7 +75,10 @@ var table = []Action{
 		Menu: MenuPlace{Parent: "views", Key: "m"}, Covers: []string{"modes list", "modes explain"}},
 	{ID: "view.ensembles", Label: "ensembles", Help: "presets, runs and their status; stop a run", Kind: KindView,
 		Scope: ScopeNone, Menu: MenuPlace{Parent: "views", Key: "e"},
-		Covers: []string{"ensemble presets", "ensemble runs", "ensemble status", "ensemble stop"}},
+		Covers: []string{"ensemble presets", "ensemble runs", "ensemble status"}},
+	{ID: "ensemble.stop", Label: "stop a run", Help: "stop an ensemble run: its results stay, and no agent retires",
+		Kind: KindForm, Scope: ScopeNone, Menu: MenuPlace{Parent: "views", Key: "x"}, Covers: []string{"ensemble stop"},
+		run: runEnsembleStop, needs: needsEnsembleStop},
 	{ID: "view.feedback", Label: "feedback", Help: "the feedback recorded on operations", Kind: KindView, Scope: ScopeNone,
 		Menu: MenuPlace{Parent: "views", Key: "f"}, Covers: []string{"feedback list"}},
 
