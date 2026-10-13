@@ -460,7 +460,8 @@ func TestRestartInPlaceGetsItsNameBack(t *testing.T) {
 }
 
 // nhm maintain's name pass names a bound agent's tab that still has
-// herdr's default label, a number (nhm-qyz). A hook leaves the tab
+// herdr's default label, a number (nhm-qyz), or the project label of a
+// shared tab it is the last agent of (nhm-4c4). A hook leaves the tab
 // alone; a label that someone set, and a tab with other panes, stay.
 func TestMaintainLabelsATabLeftAtItsNumber(t *testing.T) {
 	h := newHarness(t, core.OwnerNhm)
@@ -494,11 +495,18 @@ func TestMaintainLabelsATabLeftAtItsNumber(t *testing.T) {
 	for _, tab := range []struct {
 		label string
 		panes int
-	}{{"work", 1}, {"7", 2}} {
+	}{{"work", 1}, {"7", 2}, {"p", 2}} {
 		h.world.setTab(tab.label, tab.panes)
 		if r, err = ReconcilePane(ctx, h.env, "w1:p1"); err != nil || len(r.Actions) != 0 || h.world.count("tab.rename") != 1 {
 			t.Fatalf("tab %q with %d panes: calls %v, report %+v %v", tab.label, tab.panes, h.world.calls, r, err)
 		}
+	}
+	// The last agent of a tab its project's agents shared, which spawn
+	// labelled with the project's name, gets its own name back (nhm-4c4).
+	h.world.setTab("p", 1)
+	if r, err = ReconcilePane(ctx, h.env, "w1:p1"); err != nil || h.world.count("tab.rename") != 2 ||
+		!slices.Contains(r.Actions, "labelled tab w1:t1 IcyKnoll") {
+		t.Fatalf("shared tab left with one agent: calls %v, report %+v %v", h.world.calls, r, err)
 	}
 }
 

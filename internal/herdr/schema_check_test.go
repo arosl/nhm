@@ -39,6 +39,7 @@ var paramTypes = map[string]any{
 	"pane.split":                PaneSplitParams{},
 	"pane.zoom":                 paneZoomParams{},
 	"pane.process_info":         paneParams{},
+	"pane.layout":               paneParams{},
 	"pane.rename":               paneRenameParams{},
 	"pane.read":                 PaneReadParams{},
 	"pane.report_agent_session": ReportAgentSessionParams{},
@@ -60,11 +61,12 @@ var paramTypes = map[string]any{
 
 // alwaysSent lists optional parameters that the client sends even when
 // empty, on purpose: a null name or label clears it, and pane.process_info
-// always names its pane.
+// and pane.layout always name their pane.
 var alwaysSent = map[string]bool{
 	"agent.rename name":         true,
 	"pane.rename label":         true,
 	"pane.process_info pane_id": true,
+	"pane.layout pane_id":       true,
 }
 
 // resultTypes maps each result type to the type the client decodes it
@@ -85,6 +87,7 @@ var resultTypes = map[string]any{
 	"pane_move":             paneMoveResult{},
 	"plugin_list":           pluginListResult{},
 	"pane_process_info":     processInfoResult{},
+	"pane_layout":           layoutResult{},
 	"subscription_started":  nil,
 	"wait_matched":          waitMatchedResult{},
 	"output_matched":        OutputMatched{},
@@ -204,6 +207,10 @@ func TestObjectsMatchSchema(t *testing.T) {
 	} {
 		checkDef(t, "response", s.ResponseDefs, def, v)
 	}
+	// pane.layout reads more of PaneLayoutSnapshot than pane.zoom does.
+	checkDef(t, "response", s.ResponseDefs, "PaneLayoutSnapshot", PaneLayout{})
+	checkDef(t, "response", s.ResponseDefs, "PaneLayoutPane", LayoutPane{})
+	checkDef(t, "response", s.ResponseDefs, "PaneLayoutRect", LayoutRect{})
 	for def, v := range map[string]any{
 		"AgentPromptWaitOptions":  PromptWait{},
 		"PluginInvocationContext": InvocationContext{},

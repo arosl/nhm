@@ -47,6 +47,7 @@ type Herdr interface {
 	TabCreate(ctx context.Context, p herdr.TabCreateParams) (herdr.Created, error)
 	TabRename(ctx context.Context, tabID, label string) (herdr.TabInfo, error)
 	PaneSplit(ctx context.Context, p herdr.PaneSplitParams) (herdr.PaneInfo, error)
+	PaneLayout(ctx context.Context, paneID string) (herdr.PaneLayout, error)
 	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
 	PaneRename(ctx context.Context, paneID, label string) (herdr.PaneInfo, error)
 	PaneReportMetadata(ctx context.Context, p herdr.ReportMetadataParams) error
@@ -130,10 +131,13 @@ type Target struct {
 	KickoffStatus string `json:"kickoff_submission,omitempty"`
 	// DelayMS is the stagger offset from the first start.
 	DelayMS int64 `json:"delay_ms"`
-	// newTab: the target opens a tab; split: the pane is split from
-	// the previous target's pane.
-	newTab bool
-	token  string
+	// newTab: the target opens a tab. Otherwise its pane is split from
+	// the biggest pane of its tab: a tab that exists (anchor is one of
+	// its panes) or the one target tabFirst opened.
+	newTab   bool
+	anchor   string
+	tabFirst int
+	token    string
 }
 
 // Result is a spawn's outcome.
@@ -204,7 +208,7 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		res.KickoffTemplate = defaultKickoff
 	}
 	res.Admission = Decide(ctx, env.Admission, req)
-	targets, err := plan(ctx, env.DB, ws, req)
+	targets, err := plan(ctx, env, ws, req)
 	if err != nil {
 		return res, err
 	}
@@ -297,8 +301,11 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 	t.MailName, t.Provenance, t.token, t.Status = name, string(bindings.Created), token, StatusIdentityCreated
 	_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
 
-	// 2. A fresh pane with the launch id in its environment.
-	paneEnv := map[string]string{"NHM_LAUNCH_ID": t.LaunchID, "NHM_AGENT": name}
+	// 2. A fresh pane with the launch id in its environment, and the
+	// name in AGENT_MAIL_AGENT, which ACFS's Agent Mail hook and am read
+	// first: in a tab several agents share, the tab label is not the
+	// agent's name (nhm-4c4).
+	paneEnv := map[string]string{"NHM_LAUNCH_ID": t.LaunchID, "NHM_AGENT": name, "AGENT_MAIL_AGENT": name}
 	if err := createPane(ctx, env, req, res, t, paneEnv); err != nil {
 		t.Cleanup = retireIdentity(ctx, env, req.ProjectRoot, t)
 		return fail(StatusFailed, fmt.Errorf("pane: %w", err))
@@ -404,13 +411,25 @@ func createPane(ctx context.Context, env Env, req Request, res *Result, t *Targe
 		}
 		t.TabID, t.PaneID = c.Tab.TabID, c.RootPane.PaneID
 	default:
-		prev := res.Targets[t.Index-1]
-		p, err := env.Herdr.PaneSplit(ctx, herdr.PaneSplitParams{Direction: "right", TargetPaneID: prev.PaneID,
+		anchor := t.anchor
+		if anchor == "" {
+			anchor = res.Targets[t.tabFirst].PaneID
+		}
+		target, dir := splitTarget(ctx, env.Herdr, anchor)
+		p, err := env.Herdr.PaneSplit(ctx, herdr.PaneSplitParams{Direction: dir, TargetPaneID: target,
 			WorkspaceID: res.WorkspaceID, Cwd: req.ProjectRoot, Env: paneEnv, Focus: ptr(false)})
 		if err != nil {
 			return err
 		}
 		t.TabID, t.PaneID = p.TabID, p.PaneID
+		// The tab now holds several of the project's agents: it takes the
+		// project's label at once, so a later failure of this agent leaves
+		// no tab of several panes under one agent's name (nhm-4c4).
+		if req.Label == "" && req.Group == "" {
+			if _, err := env.Herdr.TabRename(ctx, t.TabID, bindings.ProjectTabLabel(req.ProjectRoot)); err != nil {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("%s: tab label: %v", t.MailName, err))
+			}
+		}
 	}
 	return nil
 }
@@ -560,7 +579,8 @@ func label(ctx context.Context, env Env, req Request, res *Result, t *Target) {
 	}
 	_, err := env.Herdr.PaneRename(ctx, t.PaneID, t.MailName+" "+model)
 	warn("pane label", err)
-	if t.newTab || t.Index == 0 {
+	// A split pane's tab took the project's label in createPane.
+	if t.newTab {
 		_, err = env.Herdr.TabRename(ctx, t.TabID, tabLabel(req, t))
 		warn("tab label", err)
 	}
@@ -666,39 +686,68 @@ func findWorkspace(ctx context.Context, h Herdr, session string) (string, error)
 	return "", fmt.Errorf("%w: %q is %s; give the workspace id", ErrAmbiguousSession, session, strings.Join(ids, ", "))
 }
 
-// plan lays out the targets with the slots they will get: the next tab
-// numbers of the workspace, M from 1 within a tab.
-func plan(ctx context.Context, db *store.DB, workspaceID string, req Request) ([]Target, error) {
+// plan lays out the targets with the slots they will get. Agents of one
+// project share a tab, up to PerTab (nhm-4c4): a target first goes into
+// a tab of the project with room (joinable), lowest N first, then into a
+// tab this spawn opened, then into a new tab with the workspace's next N.
+// M is one more than the tab's highest, as allocateSlot gives it.
+func plan(ctx context.Context, env Env, workspaceID string, req Request) ([]Target, error) {
 	maxTab := -1
+	tabN, maxPane := map[string]int{}, map[int]int{}
 	if workspaceID != "" {
-		rows, err := db.SQL().QueryContext(ctx, `SELECT slot FROM slots WHERE workspace_id = ?`, workspaceID)
+		rows, err := env.DB.SQL().QueryContext(ctx, `SELECT slot, tab_id FROM slots WHERE workspace_id = ?`, workspaceID)
 		if err != nil {
 			return nil, fmt.Errorf("spawn: slots: %w", err)
 		}
 		for rows.Next() {
 			var text string
-			if err := rows.Scan(&text); err != nil {
+			var tab sql.NullString
+			if err := rows.Scan(&text, &tab); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
-			if s, err := bindings.ParseSlot(text); err == nil && s.Tab > maxTab {
-				maxTab = s.Tab
+			s, err := bindings.ParseSlot(text)
+			if err != nil {
+				continue
 			}
+			maxTab = max(maxTab, s.Tab)
+			maxPane[s.Tab] = max(maxPane[s.Tab], s.Pane)
+			if tab.String != "" {
+				tabN[tab.String] = s.Tab
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("spawn: slots: %w", err)
 		}
 		if err := rows.Close(); err != nil {
 			return nil, err
 		}
 	}
+	rooms, err := joinable(ctx, env, workspaceID, req, tabN, maxPane)
+	if err != nil {
+		return nil, err
+	}
 	var out []Target
 	i := 0
 	for _, w := range req.Agents {
 		for n := 0; n < w.Count; n++ {
-			pane := i%req.PerTab + 1
-			if pane == 1 {
-				maxTab++
+			var r *tabRoom
+			for _, c := range rooms {
+				if c.agents < req.PerTab {
+					r = c
+					break
+				}
 			}
-			out = append(out, Target{Index: i, Kind: w.Kind, Model: w.Model, Effort: effortOf(req, w), Slot: fmt.Sprintf("%d.%d", maxTab, pane),
-				Status: StatusPlanned, newTab: pane == 1})
+			if r == nil {
+				maxTab++
+				r = &tabRoom{n: maxTab, first: i}
+				rooms = append(rooms, r)
+			}
+			r.agents++
+			r.maxPane++
+			out = append(out, Target{Index: i, Kind: w.Kind, Model: w.Model, Effort: effortOf(req, w), Slot: fmt.Sprintf("%d.%d", r.n, r.maxPane),
+				Status: StatusPlanned, newTab: r.tabID == "" && r.first == i, anchor: r.anchor, tabFirst: r.first})
 			i++
 		}
 	}
@@ -711,7 +760,8 @@ func fingerprint(req Request) map[string]any {
 	return map[string]any{"session": req.Session, "add": req.Add, "project": req.ProjectRoot, "agents": req.Agents, "effort": req.Effort,
 		"label": req.Label, "group": req.Group, "per_tab": req.PerTab, "prompt": req.Prompt, "no_kickoff": req.NoKickoff,
 		"assign": req.Assign, "stagger": req.StaggerMode, "delay_ms": req.StaggerDelay.Milliseconds(),
-		"force": req.Force, "allow_unguarded": req.AllowUnguarded, "require_observations": req.RequireObservations}
+		"force": req.Force, "allow_unguarded": req.AllowUnguarded, "require_observations": req.RequireObservations,
+		paneEnvKey: true}
 }
 
 // writeTarget stores a target's progress as the operation's receipt row.

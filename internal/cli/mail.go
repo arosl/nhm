@@ -24,7 +24,9 @@ grouped by thread, with bodies; then mark each listed message read. cc
 mail is counted and stays unread. --keep-unread marks nothing.
 
 The agent is --agent, else AGENT_MAIL_AGENT or AGENT_NAME, else the
-binding of the calling pane. The project is --project (Agent Mail's
+binding of the calling pane. The AGENT_MAIL_AGENT that nhm spawn set in
+the pane does not count once the pane's binding names another agent.
+The project is --project (Agent Mail's
 project key, the project's absolute path), else AGENT_MAIL_PROJECT, else
 the binding's project, else the git work tree of the cwd. A listing that
 reaches --limit (default 200) is refused: older mail would sink out of
@@ -72,10 +74,7 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	} else {
 		ie = nil
 	}
-	name := firstOf(*agent, os.Getenv("AGENT_MAIL_AGENT"), os.Getenv("AGENT_NAME"))
-	if name == "" && self != nil {
-		name = self.MailName
-	}
+	name := inboxAgent(*agent, self, os.Getenv)
 	if name == "" {
 		return output(stdout, stderr, *asJSON, env, errors.New("no agent: give --agent, or set AGENT_MAIL_AGENT or AGENT_NAME"), exitRefused, nil)
 	}
@@ -167,6 +166,24 @@ func printInbox(w io.Writer, l wake.Listing) {
 		fmt.Fprintf(w, "; ack pending: %s", strings.Join(ids, " "))
 	}
 	fmt.Fprintln(w)
+}
+
+// inboxAgent is the agent mail inbox lists: --agent, else AGENT_MAIL_AGENT
+// or AGENT_NAME, else the calling pane's binding. Spawn sets
+// AGENT_MAIL_AGENT and NHM_AGENT in the pane to the agent's name
+// (nhm-4c4). When both still hold that name but the pane's binding now
+// names another agent (the pane was reused and bound again), the value is
+// spawn's and stale, and the binding names the agent.
+func inboxAgent(flag string, self *bindings.Binding, getenv func(string) string) string {
+	mailAgent := getenv("AGENT_MAIL_AGENT")
+	if self != nil && mailAgent != "" && mailAgent == getenv("NHM_AGENT") && !strings.EqualFold(mailAgent, self.MailName) {
+		mailAgent = ""
+	}
+	name := firstOf(flag, mailAgent, getenv("AGENT_NAME"))
+	if name == "" && self != nil {
+		name = self.MailName
+	}
+	return name
 }
 
 func firstOf(values ...string) string {

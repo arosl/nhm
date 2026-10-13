@@ -68,7 +68,10 @@ type Request struct {
 	// Role is what the agents are spawned for: "" (they work beads) or
 	// "reviewer" (reap may retire one that worked none).
 	Role string
-	// PerTab agents share one tab (pane.split); 1 by default.
+	// PerTab is the most agents of the project that share one tab, a
+	// pane each (pane.split); DefaultPerTab when 0. A later spawn fills a
+	// tab of the project that has room before it opens one; 1 gives each
+	// agent its own tab.
 	PerTab int
 	// Prompt is the kickoff; empty means ACFS's default_new_agent
 	// palette prompt, unless NoKickoff.
@@ -128,7 +131,7 @@ func (r *Request) Validate() error {
 		return fmt.Errorf("nothing to spawn: give --cc=N, --cod=N, --agy=N … or --agent KIND=N")
 	}
 	if r.PerTab <= 0 {
-		r.PerTab = 1
+		r.PerTab = DefaultPerTab
 	}
 	switch r.StaggerMode {
 	case "":

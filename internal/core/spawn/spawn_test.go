@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +19,8 @@ import (
 	"github.com/arosl/nhm/internal/store"
 )
 
-// fakeHerdr is a herdr with workspaces, tabs and panes in memory.
+// fakeHerdr is a herdr with workspaces, tabs and panes in memory. A new
+// tab's pane is 240x60 cells; a split halves the pane it cuts.
 type fakeHerdr struct {
 	mu         sync.Mutex
 	workspaces []herdr.WorkspaceInfo
@@ -26,6 +28,15 @@ type fakeHerdr struct {
 	envs       map[string]map[string]string
 	n          int
 	calls      []string
+	// The tabs: each pane's tab and place, in the order panes were made,
+	// and each tab's workspace and label.
+	panes    []string
+	tabOf    map[string]string
+	rects    map[string]herdr.LayoutRect
+	tabWS    map[string]string
+	tabLabel map[string]string
+	tabs     []string
+	splits   []string // "<target> <direction>"
 	// startErr fails agent.start for the n-th start (1-based), every try.
 	startErr map[int]error
 	starts   int
@@ -37,7 +48,8 @@ type fakeHerdr struct {
 }
 
 func newFake() *fakeHerdr {
-	return &fakeHerdr{agents: map[string]herdr.AgentInfo{}, envs: map[string]map[string]string{}, startErr: map[int]error{}}
+	return &fakeHerdr{agents: map[string]herdr.AgentInfo{}, envs: map[string]map[string]string{}, startErr: map[int]error{},
+		tabOf: map[string]string{}, rects: map[string]herdr.LayoutRect{}, tabWS: map[string]string{}, tabLabel: map[string]string{}}
 }
 
 func (f *fakeHerdr) call(s string) {
@@ -47,14 +59,47 @@ func (f *fakeHerdr) call(s string) {
 func (f *fakeHerdr) Snapshot(context.Context) (herdr.SessionSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return herdr.SessionSnapshot{Workspaces: append([]herdr.WorkspaceInfo(nil), f.workspaces...)}, nil
+	snap := herdr.SessionSnapshot{Workspaces: append([]herdr.WorkspaceInfo(nil), f.workspaces...)}
+	count := map[string]uint{}
+	for _, p := range f.panes {
+		tab := f.tabOf[p]
+		count[tab]++
+		snap.Panes = append(snap.Panes, herdr.PaneInfo{PaneID: p, TabID: tab, WorkspaceID: f.tabWS[tab], Agent: f.agents[p].Agent})
+	}
+	for _, tab := range f.tabs {
+		if count[tab] > 0 {
+			snap.Tabs = append(snap.Tabs, herdr.TabInfo{TabID: tab, WorkspaceID: f.tabWS[tab], Label: f.tabLabel[tab], PaneCount: count[tab]})
+		}
+	}
+	return snap, nil
 }
 
+// newPane makes a tab with one pane.
 func (f *fakeHerdr) newPane(ws string, env map[string]string) (string, string) {
 	f.n++
 	pane, tab := fmt.Sprintf("%s:p%d", ws, f.n), fmt.Sprintf("%s:t%d", ws, f.n)
 	f.envs[pane] = env
+	f.panes = append(f.panes, pane)
+	f.tabOf[pane], f.rects[pane], f.tabWS[tab] = tab, herdr.LayoutRect{Width: 240, Height: 60}, ws
+	f.tabs = append(f.tabs, tab)
+	f.tabLabel[tab] = strconv.Itoa(len(f.tabs))
 	return pane, tab
+}
+
+func (f *fakeHerdr) PaneLayout(_ context.Context, pane string) (herdr.PaneLayout, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	tab, ok := f.tabOf[pane]
+	if !ok {
+		return herdr.PaneLayout{}, &herdr.Error{Code: "pane_not_found"}
+	}
+	l := herdr.PaneLayout{WorkspaceID: f.tabWS[tab], TabID: tab}
+	for _, p := range f.panes {
+		if f.tabOf[p] == tab {
+			l.Panes = append(l.Panes, herdr.LayoutPane{PaneID: p, Rect: f.rects[p]})
+		}
+	}
+	return l, nil
 }
 
 func (f *fakeHerdr) WorkspaceCreate(_ context.Context, p herdr.WorkspaceCreateParams) (herdr.Created, error) {
@@ -81,6 +126,7 @@ func (f *fakeHerdr) TabRename(_ context.Context, tab, label string) (herdr.TabIn
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.call("tab.rename " + tab + " " + label)
+	f.tabLabel[tab] = label
 	return herdr.TabInfo{TabID: tab, Label: label}, nil
 }
 
@@ -88,11 +134,26 @@ func (f *fakeHerdr) PaneSplit(_ context.Context, p herdr.PaneSplitParams) (herdr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.call("pane.split " + p.TargetPaneID)
-	ws := strings.Split(p.TargetPaneID, ":")[0]
+	f.splits = append(f.splits, p.TargetPaneID+" "+p.Direction)
+	tab, ok := f.tabOf[p.TargetPaneID]
+	if !ok {
+		return herdr.PaneInfo{}, &herdr.Error{Code: "pane_not_found"}
+	}
+	ws := f.tabWS[tab]
 	f.n++
 	pane := fmt.Sprintf("%s:p%d", ws, f.n)
 	f.envs[pane] = p.Env
-	tab := strings.Replace(p.TargetPaneID, ":p", ":t", 1)
+	r := f.rects[p.TargetPaneID]
+	kept, made := r, r
+	if p.Direction == "right" {
+		kept.Width = r.Width / 2
+		made.X, made.Width = r.X+kept.Width, r.Width-kept.Width
+	} else {
+		kept.Height = r.Height / 2
+		made.Y, made.Height = r.Y+kept.Height, r.Height-kept.Height
+	}
+	f.rects[p.TargetPaneID], f.rects[pane], f.tabOf[pane] = kept, made, tab
+	f.panes = append(f.panes, pane)
 	return herdr.PaneInfo{PaneID: pane, TabID: tab, WorkspaceID: ws}, nil
 }
 
@@ -128,6 +189,13 @@ func (f *fakeHerdr) PaneClose(_ context.Context, pane string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closed = append(f.closed, pane)
+	for i, p := range f.panes {
+		if p == pane {
+			f.panes = append(f.panes[:i], f.panes[i+1:]...)
+			break
+		}
+	}
+	delete(f.tabOf, pane)
 	return nil
 }
 
@@ -268,8 +336,10 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
+// req gives each agent its own tab, as spawn did before nhm-4c4; the
+// shared-tab tests set PerTab themselves.
 func req(agents ...Want) Request {
-	return Request{Session: "swarm", ProjectRoot: "/p", ProjectID: "proj", Agents: agents}
+	return Request{Session: "swarm", ProjectRoot: "/p", ProjectID: "proj", Agents: agents, PerTab: 1}
 }
 
 func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
@@ -308,8 +378,10 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 			t.Errorf("no %q in\n%s", want, calls)
 		}
 	}
-	// The pane env carries the launch id and the name.
-	if w.h.envs["w1:p1"]["NHM_LAUNCH_ID"] != "op-sp-1.0" || w.h.envs["w1:p2"]["NHM_AGENT"] != "BlueLake" {
+	// The pane env carries the launch id and the name, also as
+	// AGENT_MAIL_AGENT for ACFS's Agent Mail hook (nhm-4c4).
+	if w.h.envs["w1:p1"]["NHM_LAUNCH_ID"] != "op-sp-1.0" || w.h.envs["w1:p2"]["NHM_AGENT"] != "BlueLake" ||
+		w.h.envs["w1:p2"]["AGENT_MAIL_AGENT"] != "BlueLake" {
 		t.Fatalf("envs = %v", w.h.envs)
 	}
 	// The binding: generation 1, the slot, the session, the process, the token.
@@ -340,11 +412,21 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 	if err != nil || !again.Replayed || w.h.starts != starts || len(again.Targets) != 2 || again.Targets[1].MailName != "BlueLake" {
 		t.Fatalf("replay = %+v %v", again, err)
 	}
-	// add into the same workspace takes the next tab number.
+	// add with --per-tab 2 fills the project's two tabs, one agent
+	// each, which then take the project's label (nhm-4c4).
 	add := req(Want{Kind: "claude", Count: 2})
 	add.Add, add.PerTab, add.NoKickoff = true, 2, true
 	res, err = Spawn(ctx, w.env, add)
-	if err != nil || res.Targets[0].Slot != "2.1" || res.Targets[1].Slot != "2.2" || len(w.sent) != 2 {
+	if err != nil || res.Targets[0].Slot != "0.2" || res.Targets[1].Slot != "1.2" || len(w.sent) != 2 {
+		t.Fatalf("add = %+v %v", res.Targets, err)
+	}
+	if strings.Join(w.h.splits, ",") != "w1:p1 right,w1:p2 right" || w.h.tabLabel["w1:t1"] != "p" || w.h.tabLabel["w1:t2"] != "p" {
+		t.Fatalf("splits %v, labels %v", w.h.splits, w.h.tabLabel)
+	}
+	// Both tabs are full: the next add takes the next tab number.
+	w.mail.names = append(w.mail.names, "TanFinch", "OakRiver")
+	res, err = Spawn(ctx, w.env, add)
+	if err != nil || res.Targets[0].Slot != "2.1" || res.Targets[1].Slot != "2.2" {
 		t.Fatalf("add = %+v %v", res.Targets, err)
 	}
 	if !strings.Contains(strings.Join(w.h.calls, "\n"), "pane.split "+res.Targets[0].PaneID) {

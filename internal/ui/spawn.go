@@ -96,7 +96,7 @@ func SpawnWizard(p Prompter, header string, adapters []kinds.Adapter) (SpawnAnsw
 		}
 		a.Agents = append(a.Agents, agent)
 	}
-	if a.Label, err = p.Input("Tab label (empty: each agent's name)", "", ""); err != nil {
+	if a.Label, err = p.Input("Tab label (empty: the agent's name, or the project's when agents share the tab)", "", ""); err != nil {
 		return a, err
 	}
 	if a.Group, err = p.Input("Group (empty: none)", "", ""); err != nil {

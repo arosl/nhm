@@ -659,8 +659,10 @@ func keepName(ctx context.Context, env Env, st paneState, b *bindings.Binding, r
 }
 
 // keepTabLabel names a bound agent's tab "<Name>" when the tab holds
-// only the agent's pane and still has herdr's default label. A label
-// that spawn, the user or a tool set stays.
+// only the agent's pane and still has herdr's default label, or the
+// project label spawn gives a tab several of the project's agents share:
+// the last agent of a shared tab gets its name back (nhm-4c4). Any other
+// label that spawn, the user or a tool set stays.
 func keepTabLabel(ctx context.Context, env Env, st paneState, b *bindings.Binding, r *Reconcile) {
 	if st.agent.TabID == "" {
 		return
@@ -670,7 +672,7 @@ func keepTabLabel(ctx context.Context, env Env, st paneState, b *bindings.Bindin
 		r.warn("tab label of %s not read: %v", st.agent.TabID, err)
 		return
 	}
-	if tab.PaneCount != 1 || !defaultTabLabel(tab.Label) {
+	if tab.PaneCount != 1 || !defaultTabLabel(tab.Label) && tab.Label != bindings.ProjectTabLabel(b.MailProjectKey) {
 		return
 	}
 	if _, err := env.Herdr.TabRename(ctx, tab.TabID, b.MailName); err != nil {

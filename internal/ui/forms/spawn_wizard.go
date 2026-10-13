@@ -683,7 +683,7 @@ func (sw *SpawnWizard) initOptionsForm() {
 			Value(&sw.session))
 	}
 	first = append(first,
-		huh.NewInput().Title("Tab label").Description("Empty: each agent's name").Value(&sw.label),
+		huh.NewInput().Title("Tab label").Description("Empty: the agent's name, or the project's when agents share the tab").Value(&sw.label),
 		huh.NewInput().Title("Group").Description("Empty: none").Value(&sw.group))
 	sw.optionsForm = huh.NewForm(
 		huh.NewGroup(first...),

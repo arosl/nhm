@@ -46,10 +46,16 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc=N[:MODEL]] [--cod=N[:MODEL]
        nhm new <session>      only the workspace
 
 Start agents in a herdr workspace (the session, by label). For each agent:
-an Agent Mail identity first, a fresh tab (or a split, with --per-tab), the
-binding, agent.start, the labels, then the kickoff: --prompt, or ACFS's
-default_new_agent palette prompt. --assign appends next_bead after your
-explicit yes; nhm never picks a bead.
+an Agent Mail identity first, a pane, the binding, agent.start, the labels,
+then the kickoff: --prompt, or ACFS's default_new_agent palette prompt.
+--assign appends next_bead after your explicit yes; nhm never picks a bead.
+
+Agents of one project share a tab, a pane each, up to --per-tab (6): a new
+agent splits the biggest pane of a tab of its project that has room, or
+opens a tab. A tab with one agent has the agent's name; with more, the
+project's directory name. --label or --group always opens new tabs, and a
+tab from before this rule is never joined. --per-tab 1 gives each agent
+its own tab.
 
 Admission runs first: a quota at 90 % or a known limit refuses (--force
 overrides the quota only); unknown quota is a warning (refused with
@@ -93,7 +99,7 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.StringVar(&f.role, "role", "", "reviewer: the agents work no beads (reap may retire them)")
 	fs.StringVar(&f.label, "label", "", "the tabs' label")
 	fs.StringVar(&f.group, "group", "", "a group token on the panes")
-	fs.IntVar(&f.perTab, "per-tab", 1, "agents per tab")
+	fs.IntVar(&f.perTab, "per-tab", spawn.DefaultPerTab, "the most agents of a project in one tab (1: a tab each)")
 	fs.StringVar(&f.prompt, "prompt", "", "the kickoff prompt")
 	fs.StringVar(&f.promptFile, "prompt-file", "", "read the kickoff prompt from a file (- is stdin)")
 	fs.BoolVar(&f.noKickoff, "no-kickoff", false, "send no kickoff")

@@ -77,6 +77,8 @@ var methodResults = map[string][]string{
 	"plugin.list":    {"plugin_list"},
 	// nhm-qbi.5: the board's tab brought in front of an attached client.
 	"tab.focus": {"tab_info"},
+	// nhm-4c4: spawn splits the biggest pane of a project's tab.
+	"pane.layout": {"pane_layout"},
 	// From the pinned schema's response results, not yet observed
 	// (acfs-9hkh.70; the rehearsal, acfs-9hkh.31, runs it against herdr).
 	"workspace.focus":      {"workspace_info", "ok"},
