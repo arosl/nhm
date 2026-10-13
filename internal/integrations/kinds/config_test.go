@@ -8,8 +8,9 @@ import (
 )
 
 // herdr093Keys are key names herdr 0.9.3 takes and refuses (invalid_key),
-// probed with pane.send_keys on a private server in nhm's sandbox
-// (nhm-1b2, 2026-10-13).
+// probed on a private server in nhm's sandbox (nhm-1b2, 2026-10-13):
+// agent.send_keys (the call nhm's interrupt uses, to a named fake agent)
+// and pane.send_keys give the same answer for each name.
 var herdr093Keys = struct{ takes, refuses []string }{
 	takes: []string{"esc", "escape", "enter", "return", "tab", "shift+tab", "backspace", "space", "up", "down", "left", "right",
 		"f1", "f12", "ctrl+a", "ctrl+c", "ctrl+e", "ctrl+u", "ctrl+z", "ctrl+space", "alt+a", "shift+a", "a", "1"},

@@ -299,8 +299,9 @@ func hasControl(s string) bool {
 
 // keyNames are the herdr key names a config kind may use: herdr's
 // canonical names (herdr agent send-keys --help: "esc") that herdr 0.9.3
-// takes (pane.send_keys, probed for nhm-1b2). herdr refuses home, end,
-// pageup, pagedown and delete. Ctrl chords are herdr's ctrl+a … ctrl+z.
+// takes (agent.send_keys and pane.send_keys, probed for nhm-1b2). herdr
+// refuses home, end, pageup, pagedown and delete. Ctrl chords are
+// herdr's ctrl+a … ctrl+z.
 var keyNames = map[string]bool{"esc": true, "escape": true, "enter": true, "tab": true, "backspace": true,
 	"space": true, "up": true, "down": true, "left": true, "right": true}
 
