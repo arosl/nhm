@@ -286,6 +286,30 @@ func TestViewOpensAFormAndComesBack(t *testing.T) {
 	}
 }
 
+// At a small client the menu keeps its header and keys, and its list
+// scrolls with the cursor (PearlKnoll's 40x12 check).
+func TestSmallClient(t *testing.T) {
+	m := newMenu(ctxW, &fakeCore{})
+	m.env.Surface = func(id string) *exec.Cmd { return exec.Command("true") }
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	rows := m.Rows("")
+	for i := 0; i < len(rows)-1; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	v := m.View()
+	lines := strings.Split(v, "\n")
+	last := rows[len(rows)-1]
+	if len(lines) > 12 || !strings.HasPrefix(lines[0], "nhm") || !strings.Contains(v, "▶ "+last.Menu.Key) ||
+		!strings.Contains(lines[len(lines)-1], "q close") {
+		t.Fatalf("40x12, cursor on %s:\n%s", last.ID, v)
+	}
+	// A screen taller than the popup keeps its top.
+	if got := fit(strings.Repeat("x\n", 30)+"end", 12); len(strings.Split(got, "\n")) != 12 || !strings.HasPrefix(got, "x") ||
+		!strings.Contains(got, "more below") {
+		t.Fatalf("fit = %q", got)
+	}
+}
+
 func TestRecentOperations(t *testing.T) {
 	m := newMenu(ctxW, &fakeCore{})
 	press(m, "o")

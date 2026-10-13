@@ -292,20 +292,33 @@ func (m *Model) View() string {
 	head := lipgloss.NewStyle().Foreground(t.Primary).Bold(true).Render("nhm") + "  " +
 		lipgloss.NewStyle().Foreground(t.Subtext).Render(clip(m.env.Context.Header(), max(10, m.width-6)))
 	if m.open != nil {
-		return head + "\n\n" + m.open.View(m.width, m.height-2)
+		return fit(head+"\n\n"+m.open.View(m.width, m.height-2), m.height)
 	}
-	var b strings.Builder
-	b.WriteString(head + "\n")
+	top := []string{head}
 	if m.level != "" {
 		if g, ok := actions.ByID(m.level); ok {
-			b.WriteString(lipgloss.NewStyle().Foreground(t.Overlay).Render("› "+g.Label) + "\n")
+			top = append(top, lipgloss.NewStyle().Foreground(t.Overlay).Render("› "+g.Label))
 		}
 	}
-	b.WriteString("\n")
+	top = append(top, "")
+	var bottom []string
+	if m.note != "" {
+		bottom = append(bottom, "", lipgloss.NewStyle().Foreground(t.Warning).Render(clip(m.note, max(10, m.width-2))))
+	}
+	keys := "letter or enter: open · ↑/↓ · ?: help · q: close"
+	switch {
+	case m.width < 64:
+		keys = "enter · esc back · ? help · q close"
+	case m.level != "":
+		keys = "letter or enter: open · ↑/↓ · esc: back · ?: help · q: close"
+	}
+	bottom = append(bottom, "", lipgloss.NewStyle().Foreground(t.Overlay).Render(clip(keys, max(10, m.width-2))))
+	var body []string
 	if m.help {
-		b.WriteString(helpText)
+		body = strings.Split(strings.TrimRight(helpText, "\n"), "\n")
 	} else {
 		rows := m.Rows(m.level)
+		lines := make([]string, len(rows))
 		for i, a := range rows {
 			label := a.Label
 			if a.Kind == actions.KindGroup {
@@ -320,18 +333,28 @@ func (m *Model) View() string {
 			if i == m.cursor {
 				cursor, style = "▶ ", style.Bold(true)
 			}
-			b.WriteString(cursor + style.Render(clip(line, max(10, m.width-4))) + "\n")
+			lines[i] = cursor + style.Render(clip(line, max(10, m.width-4)))
 		}
+		// A list taller than the popup scrolls with the cursor; the header
+		// and the keys stay.
+		avail := max(1, m.height-len(top)-len(bottom))
+		start := max(0, m.cursor-avail+1)
+		body = lines[start:min(len(lines), start+avail)]
 	}
-	if m.note != "" {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(t.Warning).Render(clip(m.note, max(10, m.width-2))) + "\n")
+	return fit(strings.Join(append(append(top, body...), bottom...), "\n"), m.height)
+}
+
+// fit keeps a view within height lines, from the top: what a screen
+// shows first (its title, its review) stays, and a cut view says so.
+// bubbletea would keep the tail instead.
+func fit(s string, height int) string {
+	lines := strings.Split(s, "\n")
+	if height <= 0 || len(lines) <= height {
+		return s
 	}
-	keys := "letter or enter: open · ↑/↓ · ?: help · q: close"
-	if m.level != "" {
-		keys = "letter or enter: open · ↑/↓ · esc: back · ?: help · q: close"
-	}
-	b.WriteString("\n" + lipgloss.NewStyle().Foreground(t.Overlay).Render(keys))
-	return b.String()
+	lines = lines[:height]
+	lines[height-1] = "… more below: make the popup taller"
+	return strings.Join(lines, "\n")
 }
 
 const helpText = `The menu runs every nhm command that has a form or a view.
