@@ -16,17 +16,9 @@ import (
 // are equal; the other fields only describe it.
 type Key = ui.Target
 
-// AgentKey is a snapshot agent's key.
-func AgentKey(a snapshot.Agent) Key {
-	k := Key{PaneID: a.PaneID, Kind: a.Kind}
-	if a.Binding != nil {
-		k.BindingID, k.Generation = a.Binding.ID, a.Binding.Generation
-	}
-	if a.Session != nil {
-		k.Session = a.Session.Kind + ":" + a.Session.Value
-	}
-	return k
-}
+// AgentKey is a snapshot agent's key: ui.AgentTarget, the target the
+// picker and the palette give the same agent.
+func AgentKey(a snapshot.Agent) Key { return ui.AgentTarget(a) }
 
 // same reports whether two keys name the same target.
 func same(a, b Key) bool { return a.Key() == b.Key() }

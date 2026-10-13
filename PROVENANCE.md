@@ -133,6 +133,8 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/dashboard/panels/panel.go` | `internal/tui/dashboard/panels/panel.go` | provenance header |
 | `internal/ui/dashboard/panels/panel_base_test.go` | `internal/tui/dashboard/panels/panel_base_test.go` | provenance header |
 | `internal/ui/dashboard/panels/height_helpers_test.go` | `internal/tui/dashboard/panels/height_helpers_test.go` | provenance header |
+| `internal/ui/dashboard/panels/attention.go` | `internal/tui/dashboard/panels/attention.go` | provenance header; import paths; boundary edits: a local `Actionability` with ntm's three values in place of `robot.Actionability`; `SourcePane` is a string (slot or pane id); `Cursor` is a string key, so `SelectNearestCursor` and `absInt64` are gone; an item with no time shows no age |
+| `internal/ui/dashboard/panels/attention_test.go` | `internal/tui/dashboard/panels/attention_test.go` | provenance header; the local `Actionability`; string cursors and panes; the `SelectNearestCursor` tests are gone, and two tests are nhm's (a removed selection keeps its place; an item with no time has no age) |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
