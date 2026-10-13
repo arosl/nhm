@@ -208,6 +208,11 @@ The same rules apply to code from pt and dcg.
 | `internal/core/spawnassign/spawn_ntm_test.go` | `internal/robot/spawn_test.go` (in part) | provenance header; the strategy, prompt, finalize and schema tests; the tmux "single-window pane" finalize case left out |
 | `internal/core/spawnassign/assign/LICENSE` | `LICENSE` | none |
 | `internal/core/spawnassign/assign/capability.go` | `internal/assign/capability.go` | provenance header; the agent import path; `tmux.AgentType` and its constants, aliases of `agent.AgentType`'s, written as the latter |
+| `internal/core/spawnassign/assign/allocation.go` | `internal/assign/allocation.go` | provenance header; the agent import path; `tmux.AgentType`, an alias of `agent.AgentType`, written as the latter |
+| `internal/core/spawnassign/assign/allocation_batch.go` | `internal/assign/allocation_batch.go` | provenance header |
+| `internal/core/spawnassign/assign/allocation_test.go` | `internal/assign/allocation_test.go` | provenance header; the agent import path; `tmux.AgentType` and its constants written as `agent.AgentType`'s |
+| `internal/core/spawnassign/assign/allocation_plan_batch_test.go` | `internal/assign/allocation_plan_batch_test.go` | provenance header |
+| `internal/core/spawnassign/assign/allocation_batch_test.go` | `internal/assign/allocation_batch_test.go` | provenance header |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
