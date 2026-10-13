@@ -1,6 +1,7 @@
 package termbg_test
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -33,19 +34,23 @@ func silentPty(t *testing.T) string {
 // build builds a package into dir and returns the binary's path.
 func build(t *testing.T, dir, pkg string) string {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	bin := filepath.Join(dir, filepath.Base(pkg))
-	if out, err := exec.Command("go", "build", "-o", bin, pkg).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o", bin, pkg).CombinedOutput(); err != nil {
 		t.Fatalf("go build %s: %v\n%s", pkg, err, out)
 	}
 	return bin
 }
 
 // underPty runs a command line in script's pty and returns how long it
-// took.
+// took; it stops it after 30 s (Lip Gloss's query waits 5 s).
 func underPty(t *testing.T, script, cmdline string) time.Duration {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	start := time.Now()
-	if out, err := exec.Command(script, "-qec", cmdline, "/dev/null").CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, script, "-qec", cmdline, "/dev/null").CombinedOutput(); err != nil {
 		t.Errorf("%s under script: %v\n%q", cmdline, err, out)
 	}
 	return time.Since(start)
@@ -115,11 +120,12 @@ func TestBinariesLinkTermbg(t *testing.T) {
 }
 
 // TestHookLinksNoTUI: nhm-hook runs on herdr's events with a 2 s budget;
-// it links no TUI library at all.
+// it links no TUI library at all: nothing of Charm's, no termenv, nothing
+// of internal/ui/tui.
 func TestHookLinksNoTUI(t *testing.T) {
-	d := deps(t, hookCmd)
-	for _, p := range []string{bubbletea, lipgloss, termbg} {
-		if d[p] {
+	for p := range deps(t, hookCmd) {
+		if strings.HasPrefix(p, "github.com/charmbracelet/") || strings.HasPrefix(p, "github.com/muesli/termenv") ||
+			strings.HasPrefix(p, "github.com/arosl/nhm/internal/ui/tui") {
 			t.Errorf("%s links %s; package ui (which the hook imports) must not import internal/ui/tui", hookCmd, p)
 		}
 	}
