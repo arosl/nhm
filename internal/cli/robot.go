@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,6 +42,12 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		return runRobotInterrupt(args, stdout)
 	}
 	now := time.Now()
+	if slices.Contains(args, "--robot-health") {
+		// ntm's bare form is project health: bv's drift, bottlenecks and
+		// recommendations. nhm answers the session form only.
+		return robotFail(stdout, robot.ErrCodeNotImplemented, "--robot-health without a session is not in this nhm",
+			"use --robot-health=SESSION for each agent's health; nhm health covers the runtime", "json", robotUnavailable, now)
+	}
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	status := fs.Bool("robot-status", false, "")
@@ -48,6 +55,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	caps := fs.Bool("robot-capabilities", false, "")
 	activity := fs.String("robot-activity", "", "")
 	tail := fs.String("robot-tail", "", "")
+	health := fs.String("robot-health", "", "")
 	format := fs.String("robot-format", "auto", "")
 	lines := fs.Int("lines", 20, "")
 	socket := fs.String("socket", "", "")
@@ -71,7 +79,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 			"use --robot-format=json", "json", robotError, now)
 	}
 	chosen := 0
-	for _, b := range []bool{*status, *snap, *caps, *activity != "", *tail != ""} {
+	for _, b := range []bool{*status, *snap, *caps, *activity != "", *tail != "", *health != ""} {
 		if b {
 			chosen++
 		}
@@ -102,7 +110,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	case *snap:
 		return robotWrite(stdout, snapshot.Snapshot(m, snapshot.Attention(m), *format, now), robotOK)
 	}
-	session := *activity + *tail
+	session := *activity + *tail + *health
 	one, ws, err := selectWorkspace(m, session)
 	if err != nil {
 		code := robot.ErrCodeSessionNotFound
@@ -111,8 +119,11 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		}
 		return robotFail(stdout, code, err.Error(), "list sessions: nhm --robot-status", *format, robotError, now)
 	}
-	if *activity != "" {
+	switch {
+	case *activity != "":
 		return robotWrite(stdout, snapshot.ActivityFor(one, *ws, *format, now), robotOK)
+	case *health != "":
+		return robotWrite(stdout, snapshot.HealthFor(one, *ws, *format, now), robotOK)
 	}
 	reads, errs := map[string]herdr.PaneRead{}, map[string]error{}
 	for _, a := range one.Agents {
@@ -164,7 +175,7 @@ func robotKinds(types []string) []string {
 // parse.
 func unknownRobotFlag(args []string) string {
 	known := map[string]bool{"--robot-status": true, "--robot-snapshot": true, "--robot-capabilities": true,
-		"--robot-activity": true, "--robot-tail": true, "--robot-format": true,
+		"--robot-activity": true, "--robot-tail": true, "--robot-health": true, "--robot-format": true,
 		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true, "--robot-spawn": true}
 	for _, a := range args {
 		name, _, _ := strings.Cut(a, "=")

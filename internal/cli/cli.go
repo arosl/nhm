@@ -100,6 +100,7 @@ Usage:
   nhm --robot-interrupt=S [--msg=M] [--force] [--no-wait] [--timeout=D]
       [--panes=P] [--type=K] [--dry-run] [--op-id=ID]
                          interrupt agents, ntm's InterruptOutput
+  nhm --robot-health=S   each agent's health, ntm's SessionHealthOutput
   nhm --robot-spawn=S --spawn-dir=R --spawn-cc=N --spawn-cod=N [--spawn-agy=N]
       --spawn-no-user --spawn-safety --spawn-wait [--ready-timeout=Ns] [--dry-run]
                          ntm's robot spawn, ntm's SpawnOutput

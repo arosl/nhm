@@ -297,6 +297,69 @@ func ActivityFor(m *Model, ws Workspace, format string, now time.Time) robot.Act
 	return out
 }
 
+// HealthFor projects one workspace onto ntm's --robot-health=SESSION
+// (nhm-hir), with ntm's order: unhealthy, blocked, rate_limited,
+// degraded, healthy. A bound agent gone from its pane is unhealthy (ntm's
+// crash, counted as a restart); herdr's blocked is ntm's interactive
+// gate; a limit line nhm limits saw is a rate limit; herdr's unknown is
+// degraded, as nhm cannot observe the agent. herdr gives no time of last
+// output, so idle_since_seconds stays 0.
+func HealthFor(m *Model, ws Workspace, format string, now time.Time) robot.SessionHealthOutput {
+	out := robot.SessionHealthOutput{RobotResponse: robot.NewResponse(true, format, now), Session: sessionName(ws),
+		CheckedAt: now.UTC(), Agents: []robot.SessionAgentHealth{}}
+	add := func(h robot.SessionAgentHealth) {
+		out.Agents = append(out.Agents, h)
+		out.Summary.Total++
+		switch h.Health {
+		case robot.HealthHealthy:
+			out.Summary.Healthy++
+		case robot.HealthDegraded:
+			out.Summary.Degraded++
+		case robot.HealthUnhealthy:
+			out.Summary.Unhealthy++
+		case robot.HealthBlocked:
+			out.Summary.Blocked++
+		case robot.HealthRateLimited:
+			out.Summary.RateLimited++
+		}
+	}
+	for _, a := range m.Agents {
+		if a.WorkspaceID != ws.ID {
+			continue
+		}
+		_, _, conf := Activity(a.State)
+		h := robot.SessionAgentHealth{Pane: paneIdx(a.Slot), PaneTarget: paneTarget(a.Slot, a.PaneID), AgentType: NTMType(a.Kind),
+			Health: robot.HealthHealthy, Confidence: conf, NHM: agentExtras(a)}
+		switch {
+		case a.State == herdr.StatusBlocked:
+			h.Health, h.LastError = robot.HealthBlocked, "the agent waits for a person (herdr: blocked)"
+		case a.Limit != "":
+			h.Health, h.LastError, h.RateLimitCount = robot.HealthRateLimited, a.Limit, 1
+		case a.State != herdr.StatusIdle && a.State != herdr.StatusDone && a.State != herdr.StatusWorking:
+			h.Health = robot.HealthDegraded
+		}
+		add(h)
+	}
+	for _, b := range m.Absent {
+		if b.WorkspaceID != ws.ID {
+			continue
+		}
+		add(robot.SessionAgentHealth{Pane: paneIdx(b.Slot), PaneTarget: paneTarget(b.Slot, b.PaneID), AgentType: NTMType(b.Kind),
+			Health: robot.HealthUnhealthy, Restarts: 1, LastError: "the agent is gone from its pane",
+			NHM: map[string]any{"binding_id": b.ID, "mail_name": b.MailName, "pane_id": b.PaneID}})
+	}
+	return out
+}
+
+// paneTarget is a pane's address in robot output: its slot, or its herdr
+// pane id without one.
+func paneTarget(slot, paneID string) string {
+	if slot != "" {
+		return slot
+	}
+	return paneID
+}
+
 // TailFor projects one workspace's pane reads onto ntm's --robot-tail.
 // reads and errs are keyed by herdr pane id.
 func TailFor(m *Model, ws Workspace, reads map[string]herdr.PaneRead, errs map[string]error, format string, now time.Time) robot.TailOutput {
