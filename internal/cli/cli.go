@@ -55,6 +55,7 @@ Usage:
                          what needs a decision
   nhm read <name> [--lines N] [--source visible|recent] [--raw-to FILE]
                          print an agent's pane
+  nhm logs <name> …      ntm's name for nhm read
   nhm watch <session> [name|slot ...]
                          follow the agents' output
   nhm wait [session] [selector] [--until idle|done|complete|generating|healthy] [--after-op OP] [--timeout D] [--json]
@@ -102,6 +103,7 @@ Usage:
                          the agents a usage limit stopped
   nhm palette | board | menu
                          the prompt palette, the agent board, the nhm menu
+  nhm dashboard          ntm's name for nhm board
   nhm bind [--unbind | --force | --show | --print-client] [--dry-run]
                          herdr keys from [keys] in nhm's config (default prefix+a
                          palette, prefix+d board, prefix+m menu); --unbind opts out
@@ -172,7 +174,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runSnapshot(args[1:], stdout, stderr)
 	case "attention":
 		return runAttention(args[1:], stdout, stderr)
-	case "read":
+	case "read", "logs":
+		// logs is ntm's name for read (the operator's F.7 ruling, nhm-k9d).
 		return runRead(args[1:], stdout, stderr)
 	case "watch":
 		return runWatch(args[1:], stdout, stderr)
@@ -198,7 +201,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runLimits(args[1:], stdout, stderr)
 	case "palette":
 		return runPalette(args[1:], stdout, stderr)
-	case "board":
+	case "board", "dashboard":
+		// dashboard is ntm's name for the board (the operator's F.7
+		// ruling, nhm-k9d).
 		return runBoard(args[1:], stdout, stderr)
 	case "menu":
 		return runMenu(args[1:], stdout, stderr)
@@ -263,6 +268,8 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	fmt.Fprintf(stdout, "nhm %s (commit %s, herdr protocol %d, ntm %.8s)\n", info.Version, info.Commit, info.HerdrProtocol, info.NTMCommit)
+	// ntm's headline, "ntm version <v>": ACFS's export-config.sh reads
+	// field 3 of line 1. The detail goes to line 2 (nhm-k9d).
+	fmt.Fprintf(stdout, "nhm version %s\ncommit %s, herdr protocol %d, ntm %.8s\n", info.Version, info.Commit, info.HerdrProtocol, info.NTMCommit)
 	return 0
 }

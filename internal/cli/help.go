@@ -5,7 +5,9 @@ import "strings"
 const versionUsage = `Usage: nhm version [--json]
 
 Print nhm's version and commit, the ntm commit whose grammar it tracks,
-and the herdr protocol it speaks.
+and the herdr protocol it speaks. Line 1 is ntm's shape, "nhm version
+<version>"; line 2 holds the commit, the herdr protocol and the ntm
+commit.
 `
 
 // verbUsage is each verb's usage text. A verb with sub-verbs shares one
@@ -29,6 +31,7 @@ var verbUsage = map[string]string{
 	"snapshot":      snapshotUsage,
 	"attention":     attentionUsage,
 	"read":          readUsage,
+	"logs":          readUsage,
 	"watch":         watchUsage,
 	"activity":      activityUsage,
 	"health":        healthUsage,
@@ -42,6 +45,7 @@ var verbUsage = map[string]string{
 	"limits":        limitsUsage,
 	"palette":       paletteUsage,
 	"board":         paletteUsage,
+	"dashboard":     paletteUsage,
 	"menu":          paletteUsage,
 	"bind":          bindUsage,
 	"ui":            uiUsage,

@@ -412,7 +412,7 @@ them as popups (nhm bind). nhm board --go runs the new Go board; with
 [ui] board = "go" in nhm's config, prefix+d opens it in a tab of its own.
 nhm palette --go runs the new Go palette; with [ui] palette = "go",
 prefix+a opens it. nhm menu --go runs the new Go menu; with [ui] menu =
-"go", prefix+m opens it.
+"go", prefix+m opens it. nhm dashboard is nhm board, by ntm's name.
 `
 
 func runPalette(args []string, stdout, stderr io.Writer) int {
