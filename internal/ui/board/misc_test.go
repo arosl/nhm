@@ -9,17 +9,19 @@ import (
 	"time"
 )
 
-// A review is submitted once, whichever key submits it; an answer for
-// an operation the board does not know, or a second answer, changes
-// nothing.
-func TestResultsSubmitOnce(t *testing.T) {
+// An operation is recorded once; an answer for an operation the board
+// does not know, or a second answer, changes nothing.
+func TestResultsRecordOnce(t *testing.T) {
 	var r Results
-	rows := []Row{{Key: Key{BindingID: "bnd-1", Generation: 1}, Name: "IcyKnoll"}}
-	if err := r.Begin("rev-1", "op-1", "interrupt", rows, t0); err != nil {
+	icy := Key{BindingID: "bnd-1", Generation: 1}
+	if err := r.Begin("op-1", "interrupt", []Key{icy}, map[string]string{icy.Key(): "IcyKnoll"}, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Begin("rev-1", "op-2", "interrupt", rows, t0); !errors.Is(err, ErrSubmitted) {
-		t.Fatalf("second submit = %v", err)
+	if err := r.Begin("op-1", "interrupt", []Key{icy}, nil, t0); !errors.Is(err, ErrKnown) {
+		t.Fatalf("second Begin = %v", err)
+	}
+	if got, _ := r.Get("op-1"); got.Targets[0].Name != "IcyKnoll" {
+		t.Fatalf("result = %+v", got)
 	}
 	if r.InFlight() != 1 {
 		t.Fatalf("in flight = %d", r.InFlight())
@@ -38,7 +40,7 @@ func TestResultsSubmitOnce(t *testing.T) {
 		t.Fatalf("result = %+v", got)
 	}
 	for i := range maxResults + 5 {
-		_ = r.Begin("rev-x"+string(rune('a'+i%26))+strings.Repeat("y", i), "op-x", "send", nil, t0)
+		_ = r.Begin("op-x"+strings.Repeat("y", i), "send", nil, nil, t0)
 	}
 	if len(r.List()) != maxResults {
 		t.Fatalf("%d results kept", len(r.List()))

@@ -23,9 +23,8 @@ const (
 // maxResults bounds the board's own list; the core keeps every record.
 const maxResults = 100
 
-// ErrSubmitted means a review was submitted already: a second enter, or
-// another key on the same review, does not submit it again.
-var ErrSubmitted = errors.New("board: this review was submitted already; open a new review to act again")
+// ErrKnown means the board recorded that operation already.
+var ErrKnown = errors.New("board: that operation is recorded already")
 
 // TargetResult is one target's outcome, in the core's words.
 type TargetResult struct {
@@ -37,7 +36,6 @@ type TargetResult struct {
 
 // Result is one submission.
 type Result struct {
-	Review      string         `json:"review"`
 	OperationID string         `json:"operation_id"`
 	Verb        string         `json:"verb"`
 	Targets     []TargetResult `json:"targets"`
@@ -47,26 +45,23 @@ type Result struct {
 	Ended       time.Time      `json:"ended"`
 }
 
-// Results are the board's submissions, newest first. Each review is
-// submitted once, whatever key submits it (the submission guard).
+// Results are the board's submissions, newest first: what it handed the
+// core and how each ended, for its status line. The submission guard is
+// actions.Guard (one submission per review); the core's records are the
+// whole history (recent operations).
 type Results struct {
 	items []Result
-	used  map[string]bool
 }
 
-// Begin records a submission before it goes to the core. It refuses a
-// review that was submitted already.
-func (r *Results) Begin(review, operationID, verb string, targets []Row, now time.Time) error {
-	if r.used == nil {
-		r.used = map[string]bool{}
+// Begin records a submission as it goes to the core. It refuses an
+// operation id it has.
+func (r *Results) Begin(operationID, verb string, targets []Key, names map[string]string, now time.Time) error {
+	if _, ok := r.Get(operationID); ok {
+		return ErrKnown
 	}
-	if r.used[review] {
-		return ErrSubmitted
-	}
-	r.used[review] = true
-	res := Result{Review: review, OperationID: operationID, Verb: verb, Outcome: OutcomePending, Started: now}
+	res := Result{OperationID: operationID, Verb: verb, Outcome: OutcomePending, Started: now}
 	for _, t := range targets {
-		res.Targets = append(res.Targets, TargetResult{Key: t.Key, Name: t.Name, Status: OutcomePending})
+		res.Targets = append(res.Targets, TargetResult{Key: t, Name: names[t.Key()], Status: OutcomePending})
 	}
 	r.items = append([]Result{res}, r.items...)
 	if len(r.items) > maxResults {

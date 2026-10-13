@@ -16,10 +16,12 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/snapshot"
+	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/ui"
+	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/board"
 )
 
@@ -48,6 +50,12 @@ func u64(v uint64) *uint64 { return &v }
 // fixture: workspace w1 with IcyKnoll and BlueLake (bound) and an unbound
 // codex whose herdr name carries terminal controls.
 func fixture(t *testing.T) (*board.Board, *fakeHerdr) {
+	b, h, _ := fixtureStore(t)
+	return b, h
+}
+
+// fixtureStore is fixture with its bindings store.
+func fixtureStore(t *testing.T) (*board.Board, *fakeHerdr, *bindings.Store) {
 	t.Helper()
 	inst, _, err := store.Enroll(t.TempDir(), "/run/herdr.sock", "default", t0)
 	if err != nil {
@@ -79,7 +87,7 @@ func fixture(t *testing.T) (*board.Board, *fakeHerdr) {
 		t.Fatal(err)
 	}
 	t.Cleanup(b.Close)
-	return b, h
+	return b, h, bs
 }
 
 // settle refreshes the sources, waits for them and lets the model sync.
@@ -139,6 +147,8 @@ func press(m *Model, keys ...string) tea.Cmd {
 			msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
 		case "backspace":
 			msg = tea.KeyMsg{Type: tea.KeyBackspace}
+		case "right":
+			msg = tea.KeyMsg{Type: tea.KeyRight}
 		case "ctrl+c":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlC}
 		default:
@@ -378,6 +388,125 @@ func TestUpgradeFreezes(t *testing.T) {
 	m.Update(tickMsg(time.Now().Add(2 * time.Second)))
 	if !errors.Is(m.Frozen(), board.ErrUpgraded) || !strings.Contains(plain(m), "upgraded on disk") {
 		t.Fatalf("not frozen:\n%s", plain(m))
+	}
+}
+
+// interruptCore is a core that interrupts, and records what it was asked.
+type interruptCore struct {
+	mu     sync.Mutex
+	asked  []map[string]int64
+	ops    []string
+	gate   chan struct{} // when set, the interrupt waits for it
+	result wait.InterruptResult
+}
+
+func (c *interruptCore) core() actions.Core {
+	return actions.Core{Interrupt: func(_ context.Context, expect map[string]int64, opID string) (wait.InterruptResult, error) {
+		if c.gate != nil {
+			<-c.gate
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.asked, c.ops = append(c.asked, expect), append(c.ops, opID)
+		res := wait.InterruptResult{OperationID: opID, Status: "sent"}
+		for id := range expect {
+			res.Targets = append(res.Targets, wait.InterruptTarget{BindingID: id, Status: wait.InterruptSent})
+		}
+		return res, nil
+	}}
+}
+
+func opIDs() func() (string, error) {
+	n := 0
+	return func() (string, error) {
+		n++
+		return "op-" + strconv.Itoa(n), nil
+	}
+}
+
+// space lists the action menu with each reason; x interrupts the marked
+// agents, frozen at the review, once.
+func TestActionMenuInterruptsTheMarks(t *testing.T) {
+	ic := &interruptCore{}
+	m := newModel(t, Config{Core: ic.core(), NewOperationID: opIDs()})
+	press(m, "x", "j", "x", "space")
+	v := plain(m)
+	if m.view != viewActions || !strings.Contains(v, "Actions for 2 marked agents") || !strings.Contains(v, "x  interrupt") ||
+		!strings.Contains(v, "this surface cannot retire") {
+		t.Fatalf("action menu:\n%s", v)
+	}
+	press(m, "x")
+	if m.view != viewForm || !strings.Contains(plain(m), "IcyKnoll") || !strings.Contains(plain(m), "BlueLake") {
+		t.Fatalf("form:\n%s", plain(m))
+	}
+	cmd := press(m, "right", "enter")
+	if cmd == nil {
+		t.Fatal("confirm started nothing")
+	}
+	m.Update(cmd())
+	if len(ic.asked) != 1 || len(ic.asked[0]) != 2 || ic.ops[0] != "op-1" {
+		t.Fatalf("asked %v, ops %v", ic.asked, ic.ops)
+	}
+	if r, ok := m.b.Results.Get("op-1"); !ok || r.Outcome != "sent" || len(r.Targets) != 2 {
+		t.Fatalf("result = %+v", r)
+	}
+	press(m, "enter") // close the result
+	if m.view != viewMain || !strings.Contains(plain(m), "interrupt op-1: sent") {
+		t.Fatalf("after the form:\n%s", plain(m))
+	}
+}
+
+// A mark whose agent was recycled since refuses the action; it is never
+// swapped for the new generation.
+func TestActionMenuRefusesAReplacedMark(t *testing.T) {
+	b, _, bs := fixtureStore(t)
+	ic := &interruptCore{}
+	m := newModel(t, Config{Board: b, Core: ic.core(), NewOperationID: opIDs()})
+	press(m, "x")
+	icy, err := bs.ActiveByPane(context.Background(), "w1:p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bs.Occupy(context.Background(), icy.ID, icy.Generation, bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1",
+		PaneID: "w1:p1", HerdrAlias: "icyknoll"}); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m)
+	press(m, "space", "x")
+	if m.view != viewMain || !strings.Contains(plain(m), "no longer name their agent") || len(ic.asked) != 0 {
+		t.Fatalf("view %d, asked %v:\n%s", m.view, ic.asked, plain(m))
+	}
+}
+
+// The cursor on an unbound agent: interrupt refuses it (bound agents
+// only), with the table's reason.
+func TestActionMenuRefusesAnUnboundAgent(t *testing.T) {
+	ic := &interruptCore{}
+	m := newModel(t, Config{Core: ic.core(), NewOperationID: opIDs()})
+	press(m, "j", "j", "space", "x")
+	if m.view != viewMain || !strings.Contains(plain(m), "has no binding") {
+		t.Fatalf("view %d:\n%s", m.view, plain(m))
+	}
+}
+
+// esc while the job runs closes the form, not the job; its answer still
+// lands in the board's results.
+func TestClosedFormKeepsItsJob(t *testing.T) {
+	ic := &interruptCore{gate: make(chan struct{})}
+	m := newModel(t, Config{Core: ic.core(), NewOperationID: opIDs()})
+	press(m, "space", "x")
+	cmd := press(m, "right", "enter")
+	press(m, "esc")
+	if m.view != viewMain || len(m.pending) != 1 || !strings.Contains(plain(m), "runs on") {
+		t.Fatalf("view %d, pending %d:\n%s", m.view, len(m.pending), plain(m))
+	}
+	if r, ok := m.b.Results.Get("op-1"); !ok || r.Outcome != board.OutcomePending {
+		t.Fatalf("result before the answer = %+v", r)
+	}
+	close(ic.gate)
+	m.Update(cmd())
+	if r, _ := m.b.Results.Get("op-1"); r.Outcome != "sent" || len(m.pending) != 0 {
+		t.Fatalf("result after the answer = %+v, pending %d", r, len(m.pending))
 	}
 }
 

@@ -283,6 +283,10 @@ func TestRefusals(t *testing.T) {
 	if _, err := New(action(t, "agent.interrupt"), fc.core(), newGuard(), ctx0, nil, nil); err == nil {
 		t.Error("an empty selection was taken")
 	}
+	// send needs the palette's composer, not this form.
+	if _, err := New(action(t, "send"), fc.core(), newGuard(), ctx0, []ui.Target{icy}, nil); err == nil {
+		t.Error("the form took send")
+	}
 	frozen := errors.New("nhm was upgraded on disk")
 	f, _ := New(action(t, "agent.interrupt"), fc.core(), newGuard(), ctx0, []ui.Target{icy}, nil, WithFrozen(func() error { return frozen }))
 	if cmd := keys(f, "right", "enter"); cmd != nil || len(fc.interrupts) != 0 || !strings.Contains(f.View(80), "upgraded") {

@@ -99,7 +99,7 @@ func WithOrigin(origin string) Option { return func(f *Form) { f.origin = origin
 // action, a target given twice).
 func New(a actions.Action, core actions.Core, guard *actions.Guard, c ui.Context, ts []ui.Target,
 	names map[string]string, opts ...Option) (*Form, error) {
-	if !a.Visible() || a.Kind != actions.KindForm {
+	if !a.Visible() || a.Kind != actions.KindForm || !Supports(a.ID) {
 		return nil, fmt.Errorf("agentform: %s is not a form that runs here", a.ID)
 	}
 	if why := a.Unavailable(c, core); why != "" {
@@ -155,8 +155,26 @@ type (
 // Init starts retire's checks.
 func (f *Form) Init() tea.Cmd { return f.recheck() }
 
+// Supports reports whether the form runs the action with that id.
+func Supports(id string) bool {
+	switch id {
+	case "agent.interrupt", "agent.retire", "agent.recycle":
+		return true
+	}
+	return false
+}
+
 // Done reports whether the form is closed: canceled, or its result read.
 func (f *Form) Done() bool { return f.done }
+
+// Action is the form's action.
+func (f *Form) Action() actions.Action { return f.a }
+
+// Targets are the form's frozen targets.
+func (f *Form) Targets() []ui.Target { return append([]ui.Target(nil), f.targets...) }
+
+// OperationID is the id of the submission, "" before it.
+func (f *Form) OperationID() string { return f.opID }
 
 // Result is the core's answer, once the action ran; nil before.
 func (f *Form) Result() (*actions.Result, error) { return f.result, f.err }

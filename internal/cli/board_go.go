@@ -149,7 +149,11 @@ func runGoBoard(stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm board: warning: %v; the board cannot see an upgrade\n", err)
 	}
 	h := ie.herdr
+	// The action menu runs the table's actions on the core: a mutation is
+	// a runner job under the guard's operation id, so it outlives the board.
 	m, err := dashboard.New(dashboard.Config{Board: b, Context: c, Binary: bin, Inbox: inbox,
+		Core:           uiCore(ie, c, uiJobs(ie, c)),
+		NewOperationID: func() (string, error) { return store.NewOperationID(time.Now()) },
 		Zoom: func(ctx context.Context, ws, pane string) error {
 			if err := h.WorkspaceFocus(ctx, ws); err != nil {
 				return err

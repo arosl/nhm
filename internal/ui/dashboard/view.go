@@ -37,6 +37,12 @@ func (m *Model) View() string {
 		modal = m.box("Diagnostics", m.diagnosticsBody(), w)
 	case viewUsage:
 		modal = m.box("Usage", m.usageBody(), w)
+	case viewActions:
+		modal = m.box("Actions for "+m.actionTargets(), m.actionsBody(), w)
+	case viewForm:
+		if m.form != nil {
+			modal = m.box(m.form.Action().Label, m.form.View(min(w-10, 96)), w)
+		}
 	default:
 		return main
 	}
@@ -358,6 +364,41 @@ func (m *Model) preview(w, height int) string {
 		lines[i] = ansi.Truncate(l, w, "…")
 	}
 	return head + "\n" + strings.Join(lines, "\n")
+}
+
+// actionTargets names what the action menu acts on.
+func (m *Model) actionTargets() string {
+	tg := m.b.Sel.Targets()
+	switch {
+	case tg.From == board.FromNone:
+		return "no agent"
+	case tg.From == board.FromCursor && len(tg.Rows) == 1:
+		return board.Clean(rowName(tg.Rows[0]))
+	}
+	s := fmt.Sprintf("%d marked agents", len(tg.Rows)+len(tg.Invalid))
+	if len(tg.Invalid) > 0 {
+		s += fmt.Sprintf(" (%d no longer valid)", len(tg.Invalid))
+	}
+	return s
+}
+
+// actionsBody lists the action menu: each action's letter, and why it
+// cannot run here when it cannot.
+func (m *Model) actionsBody() string {
+	var lines []string
+	dim := lipgloss.NewStyle().Foreground(m.theme.Overlay)
+	for _, a := range m.menu {
+		line := fmt.Sprintf("%s  %-10s %s", a.Board.Space, a.Label, a.Help)
+		if why := a.Unavailable(m.cfg.Context, m.cfg.Core); why != "" {
+			line = dim.Render(line + " — " + why)
+		}
+		lines = append(lines, line)
+	}
+	for _, mk := range m.b.Sel.Targets().Invalid {
+		lines = append(lines, lipgloss.NewStyle().Foreground(m.theme.Error).Render(
+			"marked "+board.Clean(mk.Name)+": "+mk.Reason+" (esc on the board clears the marks)"))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // inboxBody lists the agent's unread mail, without bodies.

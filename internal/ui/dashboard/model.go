@@ -11,6 +11,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/ui"
+	"github.com/arosl/nhm/internal/ui/actions"
+	"github.com/arosl/nhm/internal/ui/agentform"
 	"github.com/arosl/nhm/internal/ui/board"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
 )
@@ -39,6 +42,12 @@ type Config struct {
 	// Binary watches the nhm binary: after an upgrade on disk the board
 	// takes no new mutations. nil watches nothing.
 	Binary *board.Binary
+	// Core runs the action menu's actions (space) through the action
+	// table; a missing seam makes its actions unavailable, with the reason.
+	Core actions.Core
+	// NewOperationID makes the submission guard's operation ids
+	// (store.NewOperationID); nil leaves space out.
+	NewOperationID func() (string, error)
 	// Now is time.Now in production.
 	Now func() time.Time
 	// CallTimeout bounds each call a key starts (default 5 s).
@@ -54,6 +63,8 @@ const (
 	viewInbox
 	viewDiagnostics
 	viewUsage
+	viewActions
+	viewForm
 )
 
 // tickEvery is how often the program lets the feeds start the reads that
@@ -87,6 +98,13 @@ type Model struct {
 
 	inbox inboxState
 	seq   uint64
+
+	// The action menu (space): its rows, the submission guard, the form
+	// shown, and the closed forms whose job runs on.
+	menu    []actions.Action
+	guard   *actions.Guard
+	form    *agentform.Form
+	pending []*agentform.Form
 }
 
 // inboxState is the inbox view's request and its answer.
@@ -132,7 +150,16 @@ func New(cfg Config) (*Model, error) {
 	m.keys.Zoom.SetEnabled(cfg.Zoom != nil)
 	m.keys.InboxToggle.SetEnabled(cfg.Inbox != nil)
 	m.keys.MailRefresh.SetEnabled(cfg.Board.Mail != nil)
-	for _, k := range []*key.Binding{&m.keys.Actions, &m.keys.SpawnWizard, &m.keys.NextPanel, &m.keys.PrevPanel,
+	if cfg.NewOperationID != nil {
+		m.guard = actions.NewGuard(cfg.NewOperationID)
+		for _, a := range actions.Space() {
+			if a.Visible() && agentform.Supports(a.ID) {
+				m.menu = append(m.menu, a)
+			}
+		}
+	}
+	m.keys.Actions.SetEnabled(len(m.menu) > 0)
+	for _, k := range []*key.Binding{&m.keys.SpawnWizard, &m.keys.NextPanel, &m.keys.PrevPanel,
 		&m.keys.Tab, &m.keys.ShiftTab, &m.keys.Num1, &m.keys.Num2, &m.keys.Num3, &m.keys.Num4, &m.keys.Num5,
 		&m.keys.Num6, &m.keys.Num7, &m.keys.Num8, &m.keys.Num9} {
 		k.SetEnabled(false)
@@ -161,6 +188,11 @@ func (m *Model) waitChanged() tea.Cmd {
 
 // Update handles one message; it never blocks.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, isKey := msg.(tea.KeyMsg); !isKey {
+		// A form's own answers (its checks, its result) go to it, also to
+		// a closed form whose job runs on.
+		m.toForms(msg)
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -204,6 +236,30 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.filtering {
 		m.filterKey(msg)
+		return m, nil
+	}
+	switch m.view {
+	case viewForm:
+		cmd := m.form.Update(msg)
+		m.track(m.form)
+		if m.form.Done() {
+			if m.form.Running() {
+				m.pending = append(m.pending, m.form)
+				m.say(false, m.form.Action().Label+" "+m.form.OperationID()+" runs on; recent operations shows it")
+			}
+			m.form, m.view = nil, viewMain
+		}
+		return m, cmd
+	case viewActions:
+		if key.Matches(msg, m.keys.Back) || key.Matches(msg, m.keys.Quit) || key.Matches(msg, m.keys.Actions) {
+			m.view = viewMain
+			return m, nil
+		}
+		for _, a := range m.menu {
+			if msg.String() == a.Board.Space {
+				return m, m.openForm(a)
+			}
+		}
 		return m, nil
 	}
 	if m.view != viewMain {
@@ -261,6 +317,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = viewUsage
 	case key.Matches(msg, m.keys.Help):
 		m.view = viewHelp
+	case key.Matches(msg, m.keys.Actions):
+		m.view = viewActions
 	case key.Matches(msg, m.keys.Mark):
 		m.b.Sel.Toggle()
 	case key.Matches(msg, m.keys.Filter):
@@ -343,6 +401,99 @@ func (m *Model) openInbox() tea.Cmd {
 		msgs, err := inbox(ctx, project, name)
 		return inboxMsg{seq: seq, msgs: msgs, err: err}
 	}
+}
+
+// toForms hands a message to the open form and to the closed forms whose
+// job runs on; a form ignores another form's messages.
+func (m *Model) toForms(msg tea.Msg) {
+	if m.form != nil {
+		m.form.Update(msg)
+		m.track(m.form)
+	}
+	keep := m.pending[:0]
+	for _, f := range m.pending {
+		f.Update(msg)
+		m.track(f)
+		if f.Running() {
+			keep = append(keep, f)
+		}
+	}
+	m.pending = keep
+}
+
+// track records a form's submission in the board's results, and its
+// answer when it comes.
+func (m *Model) track(f *agentform.Form) {
+	id := f.OperationID()
+	if id == "" {
+		return
+	}
+	if _, ok := m.b.Results.Get(id); !ok {
+		names := map[string]string{}
+		for _, r := range m.b.Sel.Rows() {
+			names[r.Key.Key()] = rowName(r)
+		}
+		_ = m.b.Results.Begin(id, f.Action().ID, f.Targets(), names, m.cfg.Now())
+	}
+	res, err := f.Result()
+	if res == nil && err == nil {
+		return
+	}
+	outcome, detail := board.OutcomeUnknown, ""
+	if res != nil && (err == nil || len(res.Targets) > 0) {
+		outcome, detail = res.Status, strings.Join(res.Lines, "; ")
+	}
+	if err != nil {
+		detail = strings.TrimPrefix(detail+"; "+err.Error(), "; ")
+	}
+	var per []board.TargetResult
+	if res != nil {
+		for _, t := range res.Targets {
+			per = append(per, board.TargetResult{Key: t.Target, Name: t.Name, Status: t.Status, Detail: t.Reason})
+		}
+	}
+	if m.b.Results.End(id, outcome, detail, per, m.cfg.Now()) {
+		m.say(outcome == board.OutcomeUnknown || err != nil, fmt.Sprintf("%s %s: %s", f.Action().Label, id, outcome))
+	}
+}
+
+// openForm opens the action's form on what the action menu acts on: the
+// marks, else the cursor's row, frozen now. An invalid mark refuses it:
+// it is never dropped or swapped for the row in its place.
+func (m *Model) openForm(a actions.Action) tea.Cmd {
+	tg := m.b.Sel.Targets()
+	switch {
+	case tg.From == board.FromNone:
+		m.view = viewMain
+		m.say(true, "no agent: move the cursor to one, or mark some with x")
+		return nil
+	case len(tg.Invalid) > 0:
+		m.view = viewMain
+		names := make([]string, len(tg.Invalid))
+		for i, mk := range tg.Invalid {
+			names[i] = mk.Name + " (" + mk.Reason + ")"
+		}
+		m.say(true, fmt.Sprintf("%d marks no longer name their agent: %s; esc clears the marks",
+			len(tg.Invalid), strings.Join(names, ", ")))
+		return nil
+	}
+	ts := make([]ui.Target, len(tg.Rows))
+	names := map[string]string{}
+	for i, r := range tg.Rows {
+		ts[i] = r.Key
+		names[r.Key.Key()] = rowName(r)
+	}
+	f, err := agentform.New(a, m.cfg.Core, m.guard, m.cfg.Context, ts, names, agentform.WithFrozen(m.Frozen))
+	if err != nil {
+		m.view = viewMain
+		m.say(true, a.Label+": "+err.Error())
+		return nil
+	}
+	m.form, m.view = f, viewForm
+	if tg.Hidden > 0 {
+		m.say(false, fmt.Sprintf("%d of the marked agents are hidden by the filter", tg.Hidden))
+	}
+	return f.Init()
 }
 
 // Upgraded reports whether the binary changed on disk: the board then
