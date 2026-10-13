@@ -93,6 +93,15 @@ func TestGoBoardOpensThenFocuses(t *testing.T) {
 		c.InstanceID != inst.ID || c.WorkspaceID != "w1" {
 		t.Fatalf("open params = %+v, context %+v", p, c)
 	}
+	// prefix+d before the board registers: it opens no second tab, and its
+	// line in herdr's plugin log says a board is starting.
+	stderr.Reset()
+	if code := openGoBoard(&stderr); code != exitOK || !strings.Contains(stderr.String(), "a board is starting in this workspace") {
+		t.Fatalf("openGoBoard while starting = %d: %q", code, stderr.String())
+	}
+	if n := len(requests(s, "plugin.pane.open")); n != 1 {
+		t.Fatalf("%d opens while the board starts", n)
+	}
 	// The board starts in the tab and registers.
 	env := uilaunch.Env{InstanceDir: inst.Dir, InstanceID: inst.ID}
 	if _, err := uilaunch.Register(context.Background(), env, herdr.New(s.SocketPath), "w1", token, uilaunch.Self{PID: os.Getpid()}); err != nil {
@@ -105,8 +114,9 @@ func TestGoBoardOpensThenFocuses(t *testing.T) {
 	if n := len(requests(s, "plugin.pane.open")); n != 1 {
 		t.Fatalf("%d opens after the second prefix+d", n)
 	}
+	// Both focus the board's pane: the starting one, then the live one.
 	focus := requests(s, "plugin.pane.focus")
-	if len(focus) != 1 || !strings.Contains(string(focus[0].Params), `"w1:p9"`) {
+	if len(focus) != 2 || !strings.Contains(string(focus[0].Params), `"w1:p9"`) || !strings.Contains(string(focus[1].Params), `"w1:p9"`) {
 		t.Fatalf("focus = %+v", focus)
 	}
 }

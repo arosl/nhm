@@ -200,8 +200,10 @@ func TestStartingLaunchIsNotOpenedTwice(t *testing.T) {
 	h := newFake("w1")
 	ctx := context.Background()
 	res, _ := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"})
+	c.add(3 * time.Second)
 	again, err := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"})
-	if err != nil || again.Action != Awaiting || again.Token != res.Token {
+	if err != nil || again.Action != Awaiting || again.Token != res.Token || again.OpenedAt == nil ||
+		env.now().Sub(*again.OpenedAt) != 3*time.Second {
 		t.Fatalf("Open while starting = %+v, %v", again, err)
 	}
 	if len(h.opened) != 1 || len(h.focused) != 1 || h.focused[0] != res.PaneID {

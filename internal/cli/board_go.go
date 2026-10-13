@@ -75,9 +75,14 @@ func openGoBoard(stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm ui board: %v\n", err)
 		return exitError
 	}
+	// herdr's plugin log keeps these lines.
 	if res.StalePane != "" {
-		// herdr's plugin log keeps it; the old pane stays for the user to close.
+		// The old pane stays for the user to close.
 		fmt.Fprintf(stderr, "nhm ui board: the old board in pane %s is gone (%s); a new board is open\n", res.StalePane, res.Dropped)
+	}
+	if res.Action == uilaunch.Awaiting && res.OpenedAt != nil {
+		fmt.Fprintf(stderr, "nhm ui board: a board is starting in this workspace (opened %s ago); if it has not started after %s, prefix+d opens a new one\n",
+			time.Since(*res.OpenedAt).Round(time.Second), uilaunch.StartGrace)
 	}
 	return exitOK
 }

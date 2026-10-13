@@ -274,6 +274,8 @@ type OpenResult struct {
 	// leaves it for the user to close.
 	Dropped   string `json:"dropped,omitempty"`
 	StalePane string `json:"stale_pane,omitempty"`
+	// OpenedAt is when the launch that is starting was opened (Awaiting).
+	OpenedAt *time.Time `json:"opened_at,omitempty"`
 }
 
 // Open focuses the workspace's live board, or opens a new board tab. It
@@ -306,7 +308,8 @@ func Open(ctx context.Context, env Env, h Opener, req OpenRequest) (OpenResult, 
 						return fmt.Errorf("uilaunch: focus the starting board: %w", err)
 					}
 				}
-				res = OpenResult{Action: Awaiting, PaneID: old.PaneID, Token: old.Token}
+				at := old.OpenedAt
+				res = OpenResult{Action: Awaiting, PaneID: old.PaneID, Token: old.Token, OpenedAt: &at}
 				return nil
 			}
 			res.Dropped = st.Reason
