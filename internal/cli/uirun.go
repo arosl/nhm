@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,6 +43,16 @@ func runJob(path string, stdout, stderr io.Writer) int {
 		return exitRefused
 	}
 	dir := filepath.Dir(path)
+	// A job that starts this late never runs: a surface that waited for
+	// it has voided it, or said it did not start. Void it here too, so
+	// nothing ran stays true.
+	if time.Since(j.CreatedAt) >= runner.ClaimTimeout {
+		if _, err := runner.Void(dir, j.ID, j.Verb, time.Now()); err != nil && !errors.Is(err, runner.ErrRan) {
+			fmt.Fprintf(stderr, "nhm ui run: %s: %v\n", j.ID, err)
+		}
+		fmt.Fprintf(stderr, "nhm ui run: %s: it started more than %s after it was made; it does not run: nothing ran\n", j.ID, runner.ClaimTimeout)
+		return exitRefused
+	}
 	if err := runner.Claim(dir, j.ID); err != nil {
 		fmt.Fprintf(stderr, "nhm ui run: %s: %v\n", j.ID, err)
 		return exitRefused
@@ -58,8 +69,10 @@ func runJob(path string, stdout, stderr io.Writer) int {
 		return err
 	}
 	// A signal that stops the job after its claim ends it with an unknown
-	// outcome: some of its effects may have happened.
+	// outcome: some of its effects may have happened. Once the verb has
+	// ended, its result is known, and the signal writes that one.
 	// The handler ends with runJob (in tests it runs in process).
+	var known atomic.Pointer[runner.Result]
 	sigs, ended := make(chan os.Signal, 1), make(chan struct{})
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer func() {
@@ -73,12 +86,16 @@ func runJob(path string, stdout, stderr io.Writer) int {
 		case <-ended:
 			return
 		}
-		r.Code, r.Unknown, r.EndedAt = exitError, true, time.Now().UTC()
-		r.Error = fmt.Sprintf("%s stopped on %v after its claim; its outcome is unknown: recent operations shows its record", j.Verb, s)
-		if err := finish(r); err == nil {
+		if k := known.Load(); k != nil {
+			r = *k
+		} else {
+			r.Code, r.Unknown, r.EndedAt = exitError, true, time.Now().UTC()
+			r.Error = fmt.Sprintf("%s stopped on %v after its claim; its outcome is unknown: recent operations shows its record", j.Verb, s)
+		}
+		if err := finish(r); err == nil && r.Error != "" {
 			fmt.Fprintf(stderr, "nhm ui run: %s\n", r.Error)
 		}
-		os.Exit(exitError)
+		os.Exit(r.Code)
 	}(res)
 	v, code, unknown, err := runJobVerb(j)
 	res.Code, res.Unknown = code, unknown
@@ -93,6 +110,7 @@ func runJob(path string, stdout, stderr io.Writer) int {
 		res.Result = data
 	}
 	res.EndedAt = time.Now().UTC()
+	known.Store(&res)
 	if err := finish(res); err != nil {
 		fmt.Fprintf(stderr, "nhm ui run: %s: %v\n", j.ID, err)
 		return exitError

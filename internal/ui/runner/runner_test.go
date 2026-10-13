@@ -183,6 +183,22 @@ func TestClaimFinishReadList(t *testing.T) {
 	if short, _ := List(dir, 1); len(short) != 1 || short[0].Job.ID != jobs[2].ID {
 		t.Fatalf("limit 1 = %+v", short)
 	}
+	// The order is the files' write time, not the ids' time: a job whose
+	// id is old (a review left open) but that was submitted last comes
+	// first (the re-check's low 9).
+	late := testJob(t, VerbWake, WakeRequest{Recipients: []ui.Target{{BindingID: "b1", Generation: 1}}}, t0.Add(-time.Hour))
+	if err := write(dir, late); err != nil {
+		t.Fatal(err)
+	}
+	for i, j := range append(jobs, late) {
+		at := t0.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(JobPath(dir, j.ID), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if short, _ := List(dir, 1); len(short) != 1 || short[0].Job.ID != late.ID {
+		t.Fatalf("limit 1 after a late submit = %+v", short)
+	}
 	if _, err := Load(filepath.Join(dir, "other.job.json")); err == nil {
 		t.Fatal("a missing job loaded")
 	}

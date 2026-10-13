@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -87,6 +88,31 @@ func TestGone(t *testing.T) {
 	state = "S"
 	if Gone(dir, "op-z") {
 		t.Error("a sleeping process at its start time is gone")
+	}
+}
+
+// A claim whose pid another user's process holds (kill says EPERM) is
+// gone, also with a start time when /proc hides that process (hidepid);
+// only /proc showing the claim's own start time keeps it (the re-check's
+// low 10). pid 1 is another user's process for a test that is not root.
+func TestGoneEPERM(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root may signal pid 1")
+	}
+	dir := t.TempDir()
+	writeClaim(t, dir, "op-e", "1 999\n")
+	t.Cleanup(func() { procStat = readProcStat })
+	procStat = func(int) (string, uint64, error) { return "", 0, fs.ErrPermission }
+	if !Gone(dir, "op-e") {
+		t.Error("EPERM and a hidden /proc entry: not gone")
+	}
+	procStat = func(int) (string, uint64, error) { return "S", 999, nil }
+	if Gone(dir, "op-e") {
+		t.Error("EPERM, but /proc shows the claim's process: gone")
+	}
+	writeClaim(t, dir, "op-e2", "1\n")
+	if !Gone(dir, "op-e2") {
+		t.Error("EPERM and no start time: not gone")
 	}
 }
 

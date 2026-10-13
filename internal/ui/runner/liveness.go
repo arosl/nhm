@@ -91,17 +91,21 @@ func Gone(dir, id string) bool {
 	if errors.Is(kerr, syscall.ESRCH) {
 		return true
 	}
+	// EPERM: another user's process holds the pid, and the job ran as this
+	// user; only /proc showing the job's own start time says otherwise (a
+	// security module that denies the signal).
+	eperm := errors.Is(kerr, syscall.EPERM)
 	if len(f) < 2 {
 		// No start time (no /proc, or a claim of v0.1.6): kill's answer
-		// stands. EPERM: another user's process holds the pid; the job ran
-		// as this user, so it is not the job.
-		return errors.Is(kerr, syscall.EPERM)
+		// stands.
+		return eperm
 	}
 	state, st, err := procStat(pid)
 	if err != nil {
 		// The claim has a start time, so /proc showed the process: when
-		// its entry is gone, so is the process.
-		return errors.Is(err, fs.ErrNotExist)
+		// its entry is gone, so is the process. With EPERM, an entry that
+		// cannot be read (hidepid) is another user's.
+		return eperm || errors.Is(err, fs.ErrNotExist)
 	}
 	// A zombie has ended; its parent has not reaped it yet.
 	return state == "Z" || strconv.FormatUint(st, 10) != f[1]

@@ -103,6 +103,37 @@ func TestUIRunPanicIsUnknown(t *testing.T) {
 	}
 }
 
+// nhm ui run that starts more than runner.ClaimTimeout after its job was
+// made does not run it: a surface may have said it did not start (the
+// re-check's low 11). The job is void, with a result that says so.
+func TestUIRunVoidsALateJob(t *testing.T) {
+	t.Chdir(t.TempDir())
+	ran := false
+	jobVerbs["test.late"] = func(context.Context, *instanceEnv, runner.Job) (any, int, error) {
+		ran = true
+		return nil, exitOK, nil
+	}
+	t.Cleanup(func() { delete(jobVerbs, "test.late") })
+	j, err := runner.NewJob("test.late", ui.Context{SocketPath: "/run/herdr.sock", Cwd: t.TempDir()}, nil, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := runner.JobPath(t.TempDir(), j.ID)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := run("ui", "run", path); code != exitRefused || ran || !strings.Contains(errOut, "does not run") {
+		t.Fatalf("a late job = %d, ran %v: %s", code, ran, errOut)
+	}
+	if r := jobResult(t, path, j); r.Unknown || !strings.Contains(r.Error, "nothing ran") {
+		t.Fatalf("a late job's result = %+v", r)
+	}
+}
+
 // A job that SIGTERM stops after its claim writes a result with an
 // unknown outcome before it exits. The test binary runs the job in a
 // child process, whose verb blocks once it has started.
