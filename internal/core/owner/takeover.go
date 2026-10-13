@@ -238,6 +238,19 @@ func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.Session
 			strings.Join(missing, ", "))
 	}
 	imp, err := env.ImportBindings(ctx, rep.DryRun, snap)
+	if err != nil && herdr.ServerDown(err) {
+		// No herdr server runs (a fresh install: ACFS starts none), so no
+		// pane holds an agent to import. When the Bash keeps no token and
+		// no wake state either, nothing is left behind and only the owner
+		// changes (nhm-swm, ACFS acfs-9hkh.93); otherwise its agents need
+		// the server for their import.
+		if len(st.Tokens) > 0 || len(st.Wake) > 0 {
+			return nil, refused("herdr is not running, and the Bash keeps %d tokens and %d wake entries: start herdr, "+
+				"so the takeover can import its agents", len(st.Tokens), len(st.Wake))
+		}
+		imp, err = bindings.ImportReport{DryRun: rep.DryRun, Items: []bindings.ImportItem{}, Warnings: []string{}}, nil
+		rep.Notes = append(rep.Notes, "herdr is not running: no pane to import, and the Bash keeps no token or wake state")
+	}
 	rep.Bindings = &imp
 	if err != nil {
 		return nil, fmt.Errorf("the Bash's agents cannot be imported: %w", err)

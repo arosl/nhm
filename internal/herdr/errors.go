@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"syscall"
 )
 
 // Error codes that herdr 0.9.3 returns and nhm acts on. herdr's
@@ -75,6 +76,14 @@ func (e *TransportError) Error() string {
 }
 
 func (e *TransportError) Unwrap() error { return e.Err }
+
+// ServerDown reports a call that found no herdr server: its socket does
+// not exist, or nothing accepts on it. A server that answers badly is not
+// down.
+func ServerDown(err error) bool {
+	var te *TransportError
+	return errors.As(err, &te) && (errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED))
+}
 
 // ErrStreamLost ends every event stream. herdr 0.9.3 has no events_lost
 // error: a subscriber that falls behind gets a plain EOF (ACFS evidence

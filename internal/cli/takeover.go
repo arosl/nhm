@@ -45,7 +45,10 @@ as --dry-run does before it writes. --exclude leaves one agent behind on
 purpose, and the report lists it (repeatable): NAME (an Agent Mail or
 herdr name, when only one project has it), /project:NAME, or the pane id
 of a skipped agent (its token goes with it). It deletes nothing of the
-Bash's.
+Bash's. With no herdr server running (a fresh install), it goes on only
+when the Bash keeps no token and no wake state: no pane holds an agent,
+nothing is imported, and only the owner changes; otherwise start herdr
+first.
 
 handback gives the server back to the Bash: it hands the tokens, each
 agent's wake state and the keep list to 'acfs agents import', and refuses,
