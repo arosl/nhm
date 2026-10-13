@@ -25,9 +25,9 @@ import (
 	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
-	"github.com/arosl/nhm/internal/ui/agentform"
 	"github.com/arosl/nhm/internal/ui/board"
 	"github.com/arosl/nhm/internal/ui/dashboard/panels"
+	"github.com/arosl/nhm/internal/ui/forms"
 	"github.com/arosl/nhm/internal/ui/tui/agent"
 	"github.com/arosl/nhm/internal/ui/tui/components"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
@@ -111,12 +111,11 @@ type Model struct {
 	inbox inboxState
 	seq   uint64
 
-	// The action menu (space): its rows, the submission guard, the form
-	// shown, and the closed forms whose job runs on.
-	menu    []actions.Action
-	guard   *actions.Guard
-	form    *agentform.Form
-	pending []*agentform.Form
+	// The action menu (space): its rows, the submission guard and the
+	// form shown.
+	menu  []actions.Action
+	guard *actions.Guard
+	form  *forms.AgentForm
 
 	// The side panels and the focus between them (focus.go). The board
 	// runs no animations: dashboardSprings stays nil.
@@ -185,7 +184,7 @@ func New(cfg Config) (*Model, error) {
 	}
 	for _, a := range actions.Space() {
 		// The forms need the guard; the read view is the board's own.
-		if a.ID == readActionID && cfg.Read != nil || m.guard != nil && a.Visible() && agentform.Supports(a.ID) {
+		if a.ID == readActionID && cfg.Read != nil || m.guard != nil && a.Visible() && forms.IsAgentAction(a.ID) {
 			m.menu = append(m.menu, a)
 		}
 	}
@@ -395,7 +394,6 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.track(m.form)
 		if m.form.Done() {
 			if m.form.Running() {
-				m.pending = append(m.pending, m.form)
 				m.say(false, m.form.Action().Label+" "+m.form.OperationID()+" runs on; recent operations shows it")
 			}
 			m.form, m.view = nil, viewMain
@@ -598,27 +596,19 @@ func historyKey(msg tea.KeyMsg, preview bool) bool {
 	return false
 }
 
-// toForms hands a message to the open form and to the closed forms whose
-// job runs on; a form ignores another form's messages.
+// toForms hands a message to the open form; a form ignores another
+// form's messages.
 func (m *Model) toForms(msg tea.Msg) {
 	if m.form != nil {
 		m.form.Update(msg)
 		m.track(m.form)
 	}
-	keep := m.pending[:0]
-	for _, f := range m.pending {
-		f.Update(msg)
-		m.track(f)
-		if f.Running() {
-			keep = append(keep, f)
-		}
-	}
-	m.pending = keep
 }
 
 // track records a form's submission in the board's results, and its
-// answer when it comes.
-func (m *Model) track(f *agentform.Form) {
+// answer when it comes. A form closed while its job runs takes no answer:
+// the job runs on, and recent operations has its outcome.
+func (m *Model) track(f *forms.AgentForm) {
 	id := f.OperationID()
 	if id == "" {
 		return
@@ -630,22 +620,20 @@ func (m *Model) track(f *agentform.Form) {
 		}
 		_ = m.b.Results.Begin(id, f.Action().ID, f.Targets(), names, m.cfg.Now())
 	}
-	res, err := f.Result()
-	if res == nil && err == nil {
+	if p := f.Phase(); p != forms.Done && p != forms.Failed {
 		return
 	}
-	outcome, detail := board.OutcomeUnknown, ""
-	if res != nil && (err == nil || len(res.Targets) > 0) {
-		outcome, detail = res.Status, strings.Join(res.Lines, "; ")
+	res, err := f.Result(), f.Err()
+	outcome, detail := res.Status, strings.Join(res.Lines, "; ")
+	if outcome == "" {
+		outcome = board.OutcomeUnknown
 	}
 	if err != nil {
 		detail = strings.TrimPrefix(detail+"; "+err.Error(), "; ")
 	}
 	var per []board.TargetResult
-	if res != nil {
-		for _, t := range res.Targets {
-			per = append(per, board.TargetResult{Key: t.Target, Name: t.Name, Status: t.Status, Detail: t.Reason})
-		}
+	for _, t := range res.Targets {
+		per = append(per, board.TargetResult{Key: t.Target, Name: t.Name, Status: t.Status, Detail: t.Reason})
 	}
 	if m.b.Results.End(id, outcome, detail, per, m.cfg.Now()) {
 		m.say(outcome == board.OutcomeUnknown || err != nil, fmt.Sprintf("%s %s: %s", f.Action().Label, id, outcome))
@@ -678,7 +666,8 @@ func (m *Model) openForm(a actions.Action) tea.Cmd {
 		ts[i] = r.Key
 		names[r.Key.Key()] = rowName(r)
 	}
-	f, err := agentform.New(a, m.cfg.Core, m.guard, m.cfg.Context, ts, names, agentform.WithFrozen(m.Frozen))
+	f, err := forms.NewAgentForm(a, m.cfg.Core, m.guard, m.cfg.Context, ts, names,
+		forms.WithFrozen(m.Frozen), forms.WithOrigin("board"))
 	if err != nil {
 		m.view = viewMain
 		m.say(true, a.Label+": "+err.Error())

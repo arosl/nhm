@@ -490,24 +490,24 @@ func TestActionMenuRefusesAnUnboundAgent(t *testing.T) {
 	}
 }
 
-// esc while the job runs closes the form, not the job; its answer still
-// lands in the board's results.
+// esc while the job runs closes the form, not the job: the job still
+// runs, and the board says recent operations has its outcome.
 func TestClosedFormKeepsItsJob(t *testing.T) {
 	ic := &interruptCore{gate: make(chan struct{})}
 	m := newModel(t, Config{Core: ic.core(), NewOperationID: opIDs()})
 	press(m, "space", "x")
 	cmd := press(m, "right", "enter")
 	press(m, "esc")
-	if m.view != viewMain || len(m.pending) != 1 || !strings.Contains(plain(m), "runs on") {
-		t.Fatalf("view %d, pending %d:\n%s", m.view, len(m.pending), plain(m))
+	if m.view != viewMain || m.form != nil || !strings.Contains(plain(m), "runs on") {
+		t.Fatalf("view %d:\n%s", m.view, plain(m))
 	}
 	if r, ok := m.b.Results.Get("op-1"); !ok || r.Outcome != board.OutcomePending {
 		t.Fatalf("result before the answer = %+v", r)
 	}
 	close(ic.gate)
 	m.Update(cmd())
-	if r, _ := m.b.Results.Get("op-1"); r.Outcome != "sent" || len(m.pending) != 0 {
-		t.Fatalf("result after the answer = %+v, pending %d", r, len(m.pending))
+	if len(ic.asked) != 1 || ic.ops[0] != "op-1" {
+		t.Fatalf("the job did not run: %v", ic.asked)
 	}
 }
 
