@@ -14,10 +14,18 @@ import (
 	"github.com/arosl/nhm/internal/ui/runner"
 )
 
-// recycleSelfStart starts the recycle's job; tests replace it, so that no
-// test runs its own binary as a job.
-var recycleSelfStart = func(c runner.Client, req lifecycle.RecycleRequest) (string, error) {
+// startRecycleJob starts a recycle as the UI runner's job (nhm recycle
+// --self, the recycle on close); tests replace it, so that no test runs
+// its own binary as a job.
+var startRecycleJob = func(c runner.Client, req lifecycle.RecycleRequest) (string, error) {
 	return c.Start(runner.VerbRecycle, req)
+}
+
+// recycleJobClient is the runner client for a recycle of b's agent: the
+// job runs in b's project, out of any pane.
+func recycleJobClient(ie *instanceEnv, b bindings.Binding) runner.Client {
+	c := ui.Context{Version: ui.ContextVersion, SocketPath: ie.herdr.SocketPath, Cwd: b.MailProjectKey}
+	return runner.Client{Bin: self(), Env: outOfPaneEnv(ie.herdr.SocketPath), JobDir: runner.JobDir(ie.inst.Dir), Context: c}
 }
 
 // selfRecycle is nhm recycle --self's result: the job's operation id and
@@ -74,9 +82,7 @@ func recycleSelf(req lifecycle.RecycleRequest, socket string, asJSON bool, stdou
 		}
 		return output(stdout, stderr, asJSON, env, err, code, nil)
 	}
-	c := ui.Context{Version: ui.ContextVersion, SocketPath: ie.herdr.SocketPath, Cwd: b.MailProjectKey}
-	client := runner.Client{Bin: self(), Env: outOfPaneEnv(ie.herdr.SocketPath), JobDir: runner.JobDir(ie.inst.Dir), Context: c}
-	id, err := recycleSelfStart(client, req)
+	id, err := startRecycleJob(recycleJobClient(ie, b), req)
 	if err != nil {
 		return output(stdout, stderr, asJSON, env, err, exitError, nil)
 	}

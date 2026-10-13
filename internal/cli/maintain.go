@@ -34,6 +34,14 @@ label (a number) and holds only that pane gets the agent's Mail name.
 With --mail-from, it also runs the limits scan and
 mails each new limit event (nhm limits).
 
+With [maintain] recycle_on_close = true in nhm's config, it recycles an
+agent whose bead closed: when the agent is idle or done with no bead in
+progress on two checks a minute apart, it starts nhm recycle's job with
+a handoff and the kickoff of [maintain] recycle_template (default ACFS's
+default_new_agent), once per occupant. It is off by default: an agent
+may keep its context for a follow-up, and can ask with nhm recycle
+--self.
+
 --once (the default) runs one pass; this is what ACFS's systemd timer
 runs every 15 s. --loop repeats it every --interval (default 15s). One
 runner per herdr server: a second one exits 0 and says so. nhm doctor
@@ -208,12 +216,15 @@ type maintainOptions struct {
 // maintainResult is one maintenance pass.
 type maintainResult struct {
 	// Skipped says why the pass did nothing.
-	Skipped string        `json:"skipped,omitempty"`
-	Runner  string        `json:"runner,omitempty"`
-	At      *time.Time    `json:"at,omitempty"`
-	Wake    *wakeResult   `json:"wake,omitempty"`
-	Names   []string      `json:"names"`
-	Limits  []limitReport `json:"limits"`
+	Skipped string      `json:"skipped,omitempty"`
+	Runner  string      `json:"runner,omitempty"`
+	At      *time.Time  `json:"at,omitempty"`
+	Wake    *wakeResult `json:"wake,omitempty"`
+	Names   []string    `json:"names"`
+	// Recycles are the recycles on close the pass started ([maintain]
+	// recycle_on_close).
+	Recycles []string      `json:"recycles,omitempty"`
+	Limits   []limitReport `json:"limits"`
 	// LimitsSkipped says why the limits scan did not run.
 	LimitsSkipped string   `json:"limits_skipped,omitempty"`
 	Warnings      []string `json:"warnings"`
@@ -260,6 +271,18 @@ func (ie *instanceEnv) maintainPass(ctx context.Context, opts maintainOptions) (
 			res.Names = append(res.Names, b.MailName+": "+a)
 		}
 		res.Warnings = append(res.Warnings, r.Warnings...)
+	}
+
+	if cfg, err := loadMaintainConfig(); err != nil {
+		res.Warnings = append(res.Warnings, "[maintain]: "+err.Error())
+	} else if cfg.RecycleOnClose {
+		if lenv, err := ie.lifecycleEnv(); err != nil {
+			res.Warnings = append(res.Warnings, "recycle on close: "+err.Error())
+		} else {
+			started, warnings := recycleOnClose(ctx, ie, cfg, lenv, time.Now().UTC())
+			res.Recycles = append(res.Recycles, started...)
+			res.Warnings = append(res.Warnings, warnings...)
+		}
 	}
 
 	if opts.mailFrom == "" {
@@ -327,6 +350,9 @@ func printMaintain(w io.Writer, res maintainResult, quiet bool) {
 	}
 	for _, n := range res.Names {
 		fmt.Fprintf(w, "%sname: %s\n", stamp, n)
+	}
+	for _, r := range res.Recycles {
+		fmt.Fprintf(w, "%srecycle: %s\n", stamp, r)
 	}
 	printLimits(w, res.Limits, false)
 	if !quiet {

@@ -22,9 +22,9 @@ type selfStarts struct {
 
 func (s *selfStarts) use(t *testing.T) {
 	t.Helper()
-	old := recycleSelfStart
-	t.Cleanup(func() { recycleSelfStart = old })
-	recycleSelfStart = func(c runner.Client, req lifecycle.RecycleRequest) (string, error) {
+	old := startRecycleJob
+	t.Cleanup(func() { startRecycleJob = old })
+	startRecycleJob = func(c runner.Client, req lifecycle.RecycleRequest) (string, error) {
 		s.clients, s.reqs = append(s.clients, c), append(s.reqs, req)
 		return "op-self-1", nil
 	}
