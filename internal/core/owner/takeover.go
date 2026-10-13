@@ -152,7 +152,8 @@ func Takeover(ctx context.Context, env Env, dry bool) (Report, error) {
 		// applies the plan the check passed instead of a new one
 		// (acfs-9hkh.85).
 		check := newReport(true)
-		if _, err := planTakeover(ctx, env, &check, nil); err != nil {
+		cp, err := planTakeover(ctx, env, &check, nil)
+		if err != nil {
 			rep.Bindings, rep.Tokens, rep.Wake, rep.Keep, rep.Excluded, rep.Notes =
 				check.Bindings, check.Tokens, check.Wake, check.Keep, check.Excluded, check.Notes
 			return err
@@ -168,6 +169,11 @@ func Takeover(ctx context.Context, env Env, dry bool) (Report, error) {
 		if err := samePlan(check.Bindings, rep.Bindings); err != nil {
 			return err
 		}
+		if cp.serverDown {
+			// The real pass imported from the check's empty snapshot, so
+			// only the check met the missing server.
+			rep.Notes = append(rep.Notes, noteServerDown)
+		}
 		return p.apply(ctx, env)
 	})
 	rep.Owner = o
@@ -182,7 +188,11 @@ func Takeover(ctx context.Context, env Env, dry bool) (Report, error) {
 type takeoverPlan struct {
 	secrets map[string]string  // binding id -> token
 	wake    map[string][]int64 // binding id -> message ids to announce
+	// serverDown: no herdr server ran, and the Bash kept nothing to import.
+	serverDown bool
 }
+
+const noteServerDown = "herdr is not running: no pane to import, and the Bash keeps no token or wake state"
 
 // samePlan checks that the real import did what the dry check planned:
 // each pane would_import is now imported, every other decision the same.
@@ -238,7 +248,8 @@ func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.Session
 			strings.Join(missing, ", "))
 	}
 	imp, err := env.ImportBindings(ctx, rep.DryRun, snap)
-	if err != nil && herdr.ServerDown(err) {
+	serverDown := err != nil && herdr.ServerDown(err)
+	if serverDown {
 		// No herdr server runs (a fresh install: ACFS starts none), so no
 		// pane holds an agent to import. When the Bash keeps no token and
 		// no wake state either, nothing is left behind and only the owner
@@ -252,7 +263,7 @@ func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.Session
 		// pass imports from it and never dials again (acfs-9hkh.85).
 		imp, err = bindings.ImportReport{DryRun: rep.DryRun, Items: []bindings.ImportItem{}, Warnings: []string{},
 			Snapshot: &herdr.SessionSnapshot{}}, nil
-		rep.Notes = append(rep.Notes, "herdr is not running: no pane to import, and the Bash keeps no token or wake state")
+		rep.Notes = append(rep.Notes, noteServerDown)
 	}
 	rep.Bindings = &imp
 	if err != nil {
@@ -270,7 +281,7 @@ func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.Session
 			}
 		}
 	}
-	p := &takeoverPlan{secrets: map[string]string{}, wake: map[string][]int64{}}
+	p := &takeoverPlan{secrets: map[string]string{}, wake: map[string][]int64{}, serverDown: serverDown}
 	var errs []error
 	for _, t := range st.Tokens {
 		it, err := planToken(ctx, env, idx, t, p, rep.DryRun)

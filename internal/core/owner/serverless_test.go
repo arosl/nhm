@@ -73,6 +73,10 @@ func TestTakeoverWithNoServerAndNothingToImport(t *testing.T) {
 		len(rep.Tokens) != 0 || len(rep.Wake) != 0 {
 		t.Fatalf("takeover = %+v %v", rep, err)
 	}
+	// The note says why nothing was imported on the real takeover too.
+	if len(rep.Notes) != 1 || !strings.Contains(rep.Notes[0], "herdr is not running") {
+		t.Fatalf("takeover notes = %q", rep.Notes)
+	}
 	if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerNhm || o.Generation != 1 {
 		t.Fatalf("owner = %+v", o)
 	}
