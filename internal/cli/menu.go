@@ -47,6 +47,11 @@ func runGoMenu(stderr io.Writer) int {
 	if err := c.CheckInstance(ie.inst.ID); err != nil {
 		return fail(exitRefused, err)
 	}
+	if c.WorkspaceID != "" && c.WorkspaceLabel == "" {
+		// A context from a pane's environment has no label: kill asks for
+		// the label the operator sees, so read it once now.
+		c.WorkspaceLabel = workspaceLabel(ie, c.WorkspaceID)
+	}
 	src, closeSrc, err := pickerSource(c.SocketPath)
 	if err != nil {
 		return fail(exitError, err)
@@ -72,6 +77,23 @@ func runGoMenu(stderr io.Writer) int {
 		return fail(exitError, err)
 	}
 	return exitOK
+}
+
+// workspaceLabel is a workspace's label in herdr's snapshot; "" when
+// herdr does not answer or has no such workspace.
+func workspaceLabel(ie *instanceEnv, id string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snap, err := ie.herdr.Snapshot(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, w := range snap.Workspaces {
+		if w.WorkspaceID == id {
+			return w.Label
+		}
+	}
+	return ""
 }
 
 // uiOperations reads the menu's recent operations: the core's records
