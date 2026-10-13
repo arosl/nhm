@@ -151,7 +151,8 @@ func TestBuildRequestFreezesTheTargets(t *testing.T) {
 	if req.Message != "hi" || req.Template != "" || req.Source != history.SourcePalette {
 		t.Fatalf("payload = %+v", req)
 	}
-	if req.WhenAny || req.Force || req.DryRun || req.OperationID != "" || req.Session != "swarm" || req.WorkspaceID != "w1" {
+	// WhenAny: the palette types into a busy agent, as ntm's (nhm-r0v).
+	if !req.WhenAny || req.Force || req.DryRun || req.OperationID != "" || req.Session != "swarm" || req.WorkspaceID != "w1" {
 		t.Fatalf("request = %+v", req)
 	}
 	req, err = BuildRequest(base, Payload{Key: "fix", Text: "Fix {{thread}}", Template: true, Vars: map[string]string{"thread": "t1"}},
@@ -319,8 +320,9 @@ func TestStatusCounts(t *testing.T) {
 }
 
 // The palette's request through the core: the send reaches only the
-// targets frozen at the keypress, refuses a busy one, and never swaps in
-// the agent that took a target's place.
+// targets frozen at the keypress, types into a busy one as ntm's palette
+// does (nhm-r0v), refuses a blocked one, and never swaps in the agent
+// that took a target's place.
 func TestPaletteSendThroughTheCore(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -328,7 +330,8 @@ func TestPaletteSendThroughTheCore(t *testing.T) {
 	busy := w.bind(t, "RedFox", "w1:p2", "claude", herdr.StatusWorking)
 	blue := w.bind(t, "BlueLake", "w1:p3", "codex", herdr.StatusIdle)
 	moved := w.bind(t, "GreenOwl", "w1:p4", "codex", herdr.StatusIdle)
-	ts := Targets{icy.Frozen(), busy.Frozen(), blue.Frozen(), moved.Frozen()}
+	blocked := w.bind(t, "OldElm", "w1:p6", "claude", herdr.StatusBlocked)
+	ts := Targets{icy.Frozen(), busy.Frozen(), blue.Frozen(), moved.Frozen(), blocked.Frozen()}
 	req, err := BuildRequest(baseRequest(), Payload{Text: "hello"}, ts, "")
 	if err != nil {
 		t.Fatal(err)
@@ -360,8 +363,11 @@ func TestPaletteSendThroughTheCore(t *testing.T) {
 	if rc := receiptFor(t, res, icy.BindingID); rc.Status != send.StatusSubmitted {
 		t.Fatalf("ready target = %+v", rc)
 	}
-	if rc := receiptFor(t, res, busy.BindingID); rc.Status != send.StatusRefused || rc.ErrorCode != "gate_busy" {
+	if rc := receiptFor(t, res, busy.BindingID); rc.Status != send.StatusSubmitted {
 		t.Fatalf("busy target = %+v", rc)
+	}
+	if rc := receiptFor(t, res, blocked.BindingID); rc.Status != send.StatusRefused || rc.ErrorCode != "gate_blocked" {
+		t.Fatalf("blocked target = %+v", rc)
 	}
 	if rc := receiptFor(t, res, blue.BindingID); rc.Status != send.StatusRefused || rc.ErrorCode != send.CodeGenerationChanged {
 		t.Fatalf("recycled target = %+v", rc)
@@ -381,7 +387,7 @@ func TestPaletteSendThroughTheCore(t *testing.T) {
 			t.Fatalf("an agent outside the targets got a receipt: %+v", rc)
 		}
 	}
-	if got := w.fake.sent(); len(got) != 1 || got[0] != "w1:p1: hello" {
+	if got := w.fake.sent(); !slices.Equal(slices.Sorted(slices.Values(got)), []string{"w1:p1: hello", "w1:p2: hello"}) {
 		t.Fatalf("prompts = %v", got)
 	}
 

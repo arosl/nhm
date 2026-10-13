@@ -191,7 +191,10 @@ func BuildRequest(base send.Request, p Payload, ts Targets, bodyPath string) (se
 	req.Expect = ts.Expect()
 	req.Source = history.SourcePalette
 	req.Message, req.Template, req.Vars, req.FileContent, req.BeadID = "", "", nil, "", ""
-	req.WhenAny, req.Force, req.DryRun, req.OperationID = false, false, false, ""
+	// WhenAny: the palette types into a busy agent, as ntm's palette does
+	// (the operator, nhm-r0v); a blocked agent and an unsafe pane are
+	// still refused.
+	req.WhenAny, req.Force, req.DryRun, req.OperationID = true, false, false, ""
 	if p.Template {
 		if bodyPath == "" {
 			return send.Request{}, errors.New("palette: a template payload needs its file")

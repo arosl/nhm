@@ -80,7 +80,9 @@ func runSend(ctx context.Context, core Core, req Request) (Result, error) {
 	sreq.Selector = send.Selector{Panes: panes}
 	sreq.Expect = ui.Expect(req.Targets)
 	sreq.Message, sreq.Template, sreq.Vars, sreq.FileContent, sreq.BeadID = text, "", nil, "", ""
-	sreq.WhenAny, sreq.Force, sreq.DryRun = false, false, false
+	// WhenAny: as the palette, the menu types into a busy agent, as ntm's
+	// palette does (the operator, nhm-r0v).
+	sreq.WhenAny, sreq.Force, sreq.DryRun = true, false, false
 	sreq.OperationID = req.OperationID
 	// The UI's sends are the palette's: its editor is the composer.
 	sreq.Source = history.SourcePalette

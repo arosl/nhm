@@ -342,8 +342,9 @@ func TestSendFreezesItsTargets(t *testing.T) {
 		!reflect.DeepEqual(got.Expect, map[string]int64{"bnd-1": 3, "bnd-2": 1}) {
 		t.Fatalf("selector %+v, expect %v", got.Selector, got.Expect)
 	}
+	// WhenAny: the menu types into a busy agent, as ntm's palette (nhm-r0v).
 	if got.Message != "hello" || got.Template != "" || got.OperationID != "op-7" || got.Source != history.SourcePalette ||
-		got.Session != "w1" || got.ProjectKey != "/p" {
+		got.Session != "w1" || got.ProjectKey != "/p" || !got.WhenAny || got.Force || got.DryRun {
 		t.Fatalf("request = %+v", got)
 	}
 	if res.Status != "partial" || len(res.Targets) != 2 || res.Targets[1].Target != bound2 || res.Targets[1].Status != "refused" ||

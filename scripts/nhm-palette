@@ -514,12 +514,11 @@ palette_send() {
         [[ -n "$thread" ]] || { palette_note "no thread given; nothing sent"; return 1; }
         extra=(--var "thread=$thread")
     fi
-    # --when ready: the palette, as the Go palette and the menu, does not
-    # type into a busy agent; nhm send's default does, as ntm's send does
-    # (nhm-r0v).
+    # nhm send's default types into a busy agent, as ntm's palette does
+    # (the operator, nhm-r0v).
     for call in "${calls[@]}"; do
         IFS=$'\t' read -r -a fields <<<"$call"
-        "$PALETTE_NHM" send "${fields[0]}" "${fields[@]:1}" --when ready -t "$file" "${extra[@]}" || status=$?
+        "$PALETTE_NHM" send "${fields[0]}" "${fields[@]:1}" -t "$file" "${extra[@]}" || status=$?
     done
     return "$status"
 }
