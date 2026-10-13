@@ -463,8 +463,14 @@ func (m *Model) actionsBody() string {
 		line := fmt.Sprintf("%s  %-10s %s", a.Board.Space, a.Label, a.Help)
 		// The read view is the board's own, and the palette a surface it
 		// opens: neither is a handler of the table.
-		if why := a.Unavailable(m.cfg.Context, m.cfg.Core); why != "" && a.ID != readActionID && a.ID != paletteActionID {
-			line = dim.Render(line + " — " + why)
+		if a.ID != readActionID && a.ID != paletteActionID {
+			why := a.Unavailable(m.cfg.Context, m.cfg.Core)
+			if why == "" {
+				why = m.targetsWhy(a)
+			}
+			if why != "" {
+				line = dim.Render(line + " — " + board.Clean(why))
+			}
 		}
 		lines = append(lines, line)
 	}

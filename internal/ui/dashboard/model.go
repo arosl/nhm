@@ -681,13 +681,18 @@ func (m *Model) toForms(msg tea.Msg) {
 
 // track records a form's submission in the board's results, and its
 // answer when it comes. A form closed while its job runs takes no answer:
-// the job runs on, and recent operations has its outcome.
+// the job runs on, and recent operations has its outcome. The review
+// gives the form its id, but the result begins at the submission, so a
+// form reviewed and then closed leaves no result pending.
 func (m *Model) track(f *forms.AgentForm) {
 	id := f.OperationID()
 	if id == "" {
 		return
 	}
 	if _, ok := m.b.Results.Get(id); !ok {
+		if !f.Running() {
+			return
+		}
 		names := map[string]string{}
 		for _, r := range m.b.Rows() {
 			names[r.Key.Key()] = rowName(r)
@@ -734,6 +739,26 @@ func (m *Model) menuSelection() (board.Targets, bool) {
 		tg.Rows[i] = now[j]
 	}
 	return tg, true
+}
+
+// targetsWhy is why the menu's frozen targets do not fit action a, or "":
+// adopt on a bound agent, or on one herdr reports no agent session for;
+// a bound-only action on an unbound agent. The menu says it before the
+// pick; the form would refuse after it. Invalid marks have their own
+// lines.
+func (m *Model) targetsWhy(a actions.Action) string {
+	tg := m.menuTargets
+	if tg.From == board.FromNone || len(tg.Invalid) > 0 {
+		return ""
+	}
+	ts := make([]ui.Target, len(tg.Rows))
+	for i, r := range tg.Rows {
+		ts[i] = r.Key
+	}
+	if _, _, err := a.Targets(m.cfg.Context.WithTargets("board", ts)); err != nil {
+		return strings.TrimPrefix(err.Error(), actions.ErrTargets.Error()+": ")
+	}
+	return ""
 }
 
 // openForm opens the action's form on the targets the action menu froze:

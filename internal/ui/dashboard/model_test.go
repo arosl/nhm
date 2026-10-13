@@ -671,6 +671,46 @@ func TestActionMenuRefusesAnUnboundAgent(t *testing.T) {
 	}
 }
 
+// A form reviewed and then closed leaves no result: the result begins at
+// the submission, not at the review that gave the form its id.
+func TestReviewedThenClosedFormLeavesNoResult(t *testing.T) {
+	ic := &interruptCore{}
+	m := newModel(t, Config{Core: ic.core(), NewOperationID: opIDs()})
+	press(m, "space", "x")
+	if m.view != viewForm || m.form == nil || m.form.OperationID() == "" {
+		t.Fatalf("no reviewed form:\n%s", plain(m))
+	}
+	id := m.form.OperationID()
+	press(m, "esc")
+	if m.view != viewMain || len(ic.asked) != 0 {
+		t.Fatalf("view %d, asked %v", m.view, ic.asked)
+	}
+	if r, ok := m.b.Results.Get(id); ok {
+		t.Fatalf("a closed review left a result: %+v", r)
+	}
+}
+
+// The action menu says why its targets do not fit an action before the
+// pick: adopt on a bound agent, adopt on one with no agent session,
+// interrupt on an unbound one.
+func TestActionMenuSaysWhyTheTargetsDoNotFit(t *testing.T) {
+	ic := &interruptCore{}
+	core := ic.core()
+	core.Adopt = func(context.Context, bindings.AdoptRequest) (bindings.AdoptResult, error) {
+		return bindings.AdoptResult{}, errors.New("not in this test")
+	}
+	m := newModel(t, Config{Core: core, NewOperationID: opIDs()})
+	press(m, "space")
+	if v := plain(m); !strings.Contains(v, "adopt") || !strings.Contains(v, "takes an agent with no binding") {
+		t.Fatalf("adopt on IcyKnoll:\n%s", v)
+	}
+	press(m, "esc", "j", "j", "space")
+	v := plain(m)
+	if !strings.Contains(v, "herdr reports no agent session") || !strings.Contains(v, "has no binding") {
+		t.Fatalf("the unbound codex without a session:\n%s", v)
+	}
+}
+
 // esc while the job runs closes the form, not the job: the job still
 // runs, and the board says recent operations has its outcome.
 func TestClosedFormKeepsItsJob(t *testing.T) {
