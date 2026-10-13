@@ -16,6 +16,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/ensemble"
 	"github.com/arosl/nhm/internal/core/lifecycle"
+	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
@@ -483,6 +484,44 @@ func TestHelpKeys(t *testing.T) {
 	press(m, "up")
 	if m.helpTop != before-1 {
 		t.Fatalf("up after a resize: help top %d, want %d", m.helpTop, before-1)
+	}
+}
+
+// workspace › focus: down and enter on a list that is loading or empty
+// do nothing (the review's M1: the cursor went to -1, and enter
+// panicked); a long list scrolls with the cursor.
+func TestWorkspacesScreen(t *testing.T) {
+	a, _ := actions.ByID("workspace.attach")
+	s := newWorkspacesScreen(a, (&fakeCore{}).core(), ctxW, nil)
+	keys := func(ks ...tea.KeyType) tea.Cmd {
+		var cmd tea.Cmd
+		for _, k := range ks {
+			cmd, _ = s.Update(tea.KeyMsg{Type: k})
+		}
+		return cmd
+	}
+	if cmd := keys(tea.KeyDown, tea.KeyEnter); cmd != nil || s.cursor != 0 {
+		t.Fatalf("loading: cursor %d, enter gave a command", s.cursor)
+	}
+	s.Update(workspacesRead{request: s.request})
+	if cmd := keys(tea.KeyDown, tea.KeyDown, tea.KeyEnter); cmd != nil || s.cursor != 0 ||
+		!strings.Contains(s.View(54, 18), "herdr has no workspace") {
+		t.Fatalf("empty: cursor %d, enter gave a command\n%s", s.cursor, s.View(54, 18))
+	}
+	var list []snapshot.Workspace
+	for i := range 30 {
+		list = append(list, snapshot.Workspace{ID: fmt.Sprintf("w%d", i+1), Label: fmt.Sprintf("ws%02d", i+1)})
+	}
+	s.Update(workspacesRead{request: s.request, list: list})
+	for range 40 {
+		keys(tea.KeyDown)
+	}
+	v := s.View(21, 3)
+	if s.cursor != 29 || len(strings.Split(v, "\n")) > 3 || !strings.Contains(v, "▶ ws30") {
+		t.Fatalf("30 workspaces at 21x3, cursor %d:\n%s", s.cursor, v)
+	}
+	if cmd := keys(tea.KeyEnter); cmd == nil {
+		t.Fatal("enter on ws30 gave no command")
 	}
 }
 

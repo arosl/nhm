@@ -611,6 +611,7 @@ func (s *workspacesScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case workspacesRead:
 		if m.request == s.request {
 			s.loaded, s.list, s.err = true, m.list, m.err
+			s.cursor = max(0, min(s.cursor, len(s.list)-1))
 		}
 	case tea.KeyMsg:
 		switch m.String() {
@@ -619,9 +620,10 @@ func (s *workspacesScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 		case "up":
 			s.cursor = max(0, s.cursor-1)
 		case "down":
-			s.cursor = min(len(s.list)-1, s.cursor+1)
+			// An empty list (loading, or no workspace) keeps the cursor at 0.
+			s.cursor = max(0, min(len(s.list)-1, s.cursor+1))
 		case "enter":
-			if s.cursor < len(s.list) {
+			if s.cursor >= 0 && s.cursor < len(s.list) {
 				req := actions.Request{Context: s.ctx, Params: map[string]string{actions.ParamWorkspace: s.list[s.cursor].ID}}
 				next := newDoScreen(s.a, s.core, req)
 				return func() tea.Msg { return openScreen{s: next} }, false
@@ -631,15 +633,35 @@ func (s *workspacesScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (s *workspacesScreen) View(width, _ int) string {
-	var b strings.Builder
-	b.WriteString("focus a workspace\n\n")
+// View shows the workspaces around the cursor: the title and the keys
+// stay, as long as the cursor row has room.
+func (s *workspacesScreen) View(width, height int) string {
+	var gap []string
+	if height >= compactHeight {
+		gap = []string{""}
+	}
+	top := append([]string{"focus a workspace"}, gap...)
+	keys := "↑/↓ · enter: focus · esc: back"
+	if width < 32 {
+		keys = "enter · esc back"
+	}
+	bottom := append(append([]string{}, gap...), clip(keys, width))
+	if height-len(top)-len(bottom) < 1 {
+		bottom = nil
+	}
+	for len(top) > 0 && height-len(top) < 1 {
+		top = top[:len(top)-1]
+	}
+	var lines []string
 	switch {
 	case !s.loaded:
-		b.WriteString("reading the workspaces…\n")
+		lines = append(lines, "reading the workspaces…")
 	case s.err != nil:
-		b.WriteString(clip("herdr did not answer: "+s.err.Error(), width) + "\n")
+		lines = append(lines, clip("herdr did not answer: "+forms.Clean(s.err.Error()), width))
+	case len(s.list) == 0:
+		lines = append(lines, "herdr has no workspace")
 	}
+	cursor := len(lines) + s.cursor
 	for i, w := range s.list {
 		mark := "  "
 		if i == s.cursor {
@@ -649,10 +671,11 @@ func (s *workspacesScreen) View(width, _ int) string {
 		if w.Focused {
 			line += ", focused"
 		}
-		b.WriteString(mark + clip(line, width-2) + "\n")
+		lines = append(lines, mark+clip(line, width-2))
 	}
-	b.WriteString("\n↑/↓ · enter: focus · esc: back")
-	return b.String()
+	cursor = min(cursor, max(0, len(lines)-1))
+	body := window(lines, cursor, cursor, height-len(top)-len(bottom))
+	return strings.Join(append(append(top, body...), bottom...), "\n")
 }
 
 // requests numbers the menu's own async requests, so an answer to a
