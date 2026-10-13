@@ -193,6 +193,25 @@ func TestBoardShowsItsWorkspace(t *testing.T) {
 	}
 }
 
+// The header's count is "?" before herdr's state answers, never 0, and
+// "N of M" under a filter.
+func TestHeaderCountsAgents(t *testing.T) {
+	b, _ := fixture(t)
+	m, err := New(Config{Board: b, Context: ui.Context{WorkspaceID: "w1", WorkspaceLabel: "swarm"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if v := plain(m); !strings.Contains(v, "? agents") || strings.Contains(v, "0 agents") {
+		t.Fatalf("before the first read:\n%s", v)
+	}
+	settle(t, m)
+	m.b.Sel.SetFilter("icy")
+	if v := plain(m); !strings.Contains(v, "1 of 3 agents") {
+		t.Fatalf("under a filter:\n%s", v)
+	}
+}
+
 // Pane, name and title text cannot drive the terminal.
 func TestHostileTextIsCleaned(t *testing.T) {
 	m := newModel(t, Config{})

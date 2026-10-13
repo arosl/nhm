@@ -138,6 +138,17 @@ func (m *Model) sidePanels(w, h int) string {
 // tableHeight is how many rows a page holds.
 func (m *Model) tableHeight() int { return max(m.height-8, 1) }
 
+// countAgents counts the rows that hold an agent (not an absent binding).
+func countAgents(rows []board.Row) int {
+	n := 0
+	for _, r := range rows {
+		if r.Agent != nil {
+			n++
+		}
+	}
+	return n
+}
+
 // header names what the board acts on, its counts, and what is not fresh.
 func (m *Model) header(w int) string {
 	c := m.cfg.Context
@@ -148,14 +159,15 @@ func (m *Model) header(w int) string {
 		ws += " (" + c.WorkspaceID + ")"
 	}
 	parts := []string{"nhm board", "workspace " + board.Clean(ws)}
-	rows := m.b.Sel.Rows()
-	agents := 0
-	for _, r := range rows {
-		if r.Agent != nil {
-			agents++
-		}
+	// Unknown is never shown as zero: "?" until herdr's state answers.
+	switch shown, all := countAgents(m.b.Sel.Rows()), countAgents(m.b.Rows()); {
+	case m.b.Model() == nil:
+		parts = append(parts, "? agents")
+	case shown != all:
+		parts = append(parts, fmt.Sprintf("%d of %d agents", shown, all))
+	default:
+		parts = append(parts, fmt.Sprintf("%d agents", all))
 	}
-	parts = append(parts, fmt.Sprintf("%d agents", agents))
 	if n := len(m.b.Sel.Marks()); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d marked", n))
 	}
