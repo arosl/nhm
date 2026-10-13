@@ -25,7 +25,7 @@ func TestAdoptNamesTheReviewedAgent(t *testing.T) {
 		got.OperationID != "op-a" || got.HandoffFrom != "" {
 		t.Fatalf("adopt request = %+v (%v)", got, err)
 	}
-	if res.Status != "done" || res.Targets[0].Status != "adopted" || res.Targets[0].Target != loose || res.Lines[0] != "GreenHill bound to binding bnd-7 in pane w1:p5" {
+	if res.Status != "done" || res.Targets[0].Status != "done" || res.Targets[0].Target != loose || res.Lines[0] != "GreenHill bound to binding bnd-7 in pane w1:p5" {
 		t.Fatalf("result = %+v", res)
 	}
 	// No name and no hand-over: refused before the core.
@@ -41,6 +41,14 @@ func TestAdoptNamesTheReviewedAgent(t *testing.T) {
 	if !errors.Is(err, bindings.ErrAgentChanged) || res.Status != "refused" || res.Targets[0].Status != "refused" {
 		t.Fatalf("changed agent = %+v %v", res, err)
 	}
+	// Every other error is failed, as the core records it (and as it
+	// arrives from a job, exit 1).
+	f.err = fmt.Errorf("%w: GreenHill is active in w1:p2 as bnd-2", bindings.ErrIdentityBusy)
+	req.OperationID = "op-c"
+	res, _ = a.Do(context.Background(), f.core(), req)
+	if res.Status != "failed" || res.Targets[0].Status != "failed" || !strings.Contains(res.Targets[0].Reason, "bnd-2") {
+		t.Fatalf("identity in use = %+v", res)
+	}
 	// A bound agent is not adopt's.
 	req.Targets = []ui.Target{bound1}
 	if _, err := a.Do(context.Background(), f.core(), req); !errors.Is(err, ErrTargets) {
@@ -50,7 +58,7 @@ func TestAdoptNamesTheReviewedAgent(t *testing.T) {
 	// it from another agent that starts in its pane before the adopt.
 	req.Targets = []ui.Target{{PaneID: "w1:p6", Kind: "claude"}}
 	if _, err := a.Do(context.Background(), f.core(), req); !errors.Is(err, ErrTargets) || !strings.Contains(err.Error(), "nhm adopt") ||
-		len(f.adopted) != 2 {
+		len(f.adopted) != 3 {
 		t.Fatalf("an agent without a session: %v (adopts %d)", err, len(f.adopted))
 	}
 }

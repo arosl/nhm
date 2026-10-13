@@ -150,14 +150,17 @@ func runRetire(ctx context.Context, core Core, req Request) (Result, error) {
 	}
 	res, err := core.Retire(ctx, rreq)
 	out := Result{OperationID: res.OperationID, Lines: res.Actions, Warnings: res.Warnings}
+	// In the core's words: the operation's record says done or failed; a
+	// refusal and the dry run record nothing, and nhm retire says
+	// "refused" and "would retire" for them.
 	tr := TargetResult{Target: t, Name: res.MailName}
 	switch {
 	case len(res.Refusals) > 0:
 		out.Status, tr.Status, tr.Reason = "refused", "refused", strings.Join(res.Refusals, "; ")
 	case res.DryRun:
-		out.Status, tr.Status = "checked", "checked"
+		out.Status, tr.Status = "would retire", "would retire"
 	case res.Done:
-		out.Status, tr.Status = "done", "retired"
+		out.Status, tr.Status = "done", "done"
 	default:
 		out.Status, tr.Status = "failed", "failed"
 		if err != nil {

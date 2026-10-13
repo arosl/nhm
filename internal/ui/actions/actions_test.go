@@ -403,14 +403,21 @@ func TestRetireAndRecycleNameTheBinding(t *testing.T) {
 	if err != nil || r.Target != "bnd-1" || r.ExpectedGeneration != 3 || !r.DryRun || r.OperationID != "" || r.Reason != "retire" {
 		t.Fatalf("dry run request = %+v (%v)", r, err)
 	}
-	if res.Status != "checked" || res.Lines[0] != "close pane w1:p1" {
+	if res.Status != "would retire" || res.Targets[0].Status != "would retire" || res.Lines[0] != "close pane w1:p1" {
 		t.Fatalf("dry run result = %+v", res)
+	}
+	// A retire that ran says what its record says: done.
+	f.retireRes = lifecycle.RetireResult{OperationID: "op-3", MailName: "Blue", Done: true}
+	res, err = mustAction(t, "agent.retire").Do(context.Background(), f.core(),
+		Request{Context: ctxWS, Targets: []ui.Target{bound1}, OperationID: "op-3"})
+	if err != nil || res.Status != "done" || res.Targets[0].Status != "done" {
+		t.Fatalf("done retire = %+v %v", res, err)
 	}
 	f.retireRes = lifecycle.RetireResult{MailName: "Blue", Refusals: []string{"Blue changed since it was reviewed"}}
 	f.err = lifecycle.ErrRefused
 	res, err = mustAction(t, "agent.retire").Do(context.Background(), f.core(),
 		Request{Context: ctxWS, Targets: []ui.Target{bound1}, OperationID: "op-4"})
-	if !errors.Is(err, lifecycle.ErrRefused) || f.retired[1].OperationID != "op-4" || res.Status != "refused" ||
+	if !errors.Is(err, lifecycle.ErrRefused) || f.retired[2].OperationID != "op-4" || res.Status != "refused" ||
 		res.Targets[0].Reason != "Blue changed since it was reviewed" {
 		t.Fatalf("refused retire = %+v %v", res, err)
 	}

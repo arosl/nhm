@@ -254,7 +254,7 @@ func TestRetireReviewsWithADryRun(t *testing.T) {
 	if f.Phase() != Done || real.DryRun || real.OperationID != reviewed || !real.NoBeads {
 		t.Fatalf("phase %s, retire %+v (review id %s)", f.Phase(), real, reviewed)
 	}
-	if v := f.View(80); !strings.Contains(v, "BlueLake: retired") || !strings.Contains(v, "closed pane w1:p1") {
+	if v := f.View(80); !strings.Contains(v, "BlueLake: done") || !strings.Contains(v, "closed pane w1:p1") {
 		t.Fatalf("result frame:\n%s", v)
 	}
 }

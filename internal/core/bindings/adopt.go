@@ -130,7 +130,12 @@ func Adopt(ctx context.Context, env Env, req AdoptRequest) (AdoptResult, error) 
 	}
 	res, err := adopt(ctx, env, req, source, alias, opID)
 	status := "done"
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrAgentChanged):
+		// Not the reviewed agent: refused before anything was bound, as
+		// nhm adopt's exit 2 says.
+		status = "refused"
+	case err != nil:
 		status = "failed"
 	}
 	if serr := env.DB.SetOperationStatus(ctx, opID, status, true, env.now()); serr != nil && err == nil {

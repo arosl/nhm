@@ -33,14 +33,18 @@ func runAdopt(ctx context.Context, core Core, req Request) (Result, error) {
 	res, err := core.Adopt(ctx, bindings.AdoptRequest{MailName: name, HandoffFrom: from, PaneID: t.PaneID, Kind: t.Kind,
 		ExpectedSession: t.Session, OperationID: req.OperationID})
 	out := Result{OperationID: res.OperationID, Warnings: res.Warnings}
+	// In the core's words, as the operation's record says them: refused
+	// when another agent is in the pane, failed for every other error (an
+	// identity in use, no agent in the pane), else done. From a job, every
+	// refusal (exit 2) arrives as ErrAgentChanged, and stays refused.
 	tr := TargetResult{Target: t, Name: firstNonEmpty(res.Binding.MailName, name)}
 	switch {
-	case errors.Is(err, bindings.ErrAgentChanged) || errors.Is(err, bindings.ErrIdentityBusy) || errors.Is(err, bindings.ErrNoAgent):
+	case errors.Is(err, bindings.ErrAgentChanged):
 		out.Status, tr.Status, tr.Reason = "refused", "refused", err.Error()
 	case err != nil:
 		out.Status, tr.Status, tr.Reason = "failed", "failed", err.Error()
 	default:
-		out.Status, tr.Status = "done", "adopted"
+		out.Status, tr.Status = "done", "done"
 		verb := "bound to"
 		if !res.Created {
 			verb = "took over"

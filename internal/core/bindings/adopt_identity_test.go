@@ -21,8 +21,13 @@ func TestAdoptChecksTheReviewedSession(t *testing.T) {
 		"no session now":  {MailName: "IcyKnoll", PaneID: "w1:p2", ExpectedSession: "id:sess-1"},
 	} {
 		req.ProjectKey, req.ProjectID = project, "p"
-		if _, err := Adopt(ctx, env, req); !errors.Is(err, ErrAgentChanged) {
+		res, err := Adopt(ctx, env, req)
+		if !errors.Is(err, ErrAgentChanged) {
 			t.Errorf("%s: %v", name, err)
+		}
+		// Its record says what the CLI's exit 2 says: refused, not failed.
+		if op, err := env.DB.Operation(ctx, res.OperationID); err != nil || op.Status != "refused" {
+			t.Errorf("%s: the record = %+v (%v)", name, op, err)
 		}
 	}
 	if open, err := env.Bindings.List(ctx, Filter{MailName: "IcyKnoll"}); err != nil || len(open) != 0 {
