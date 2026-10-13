@@ -70,6 +70,10 @@ type Model struct {
 	stack []screen
 	// surfaces is whether each surface is there, looked up once.
 	surfaces map[string]bool
+	// guard is every form's submission guard, for the menu's life: a form
+	// closed while its request runs, and opened again, finds that request
+	// held, not a new id for it.
+	guard *actions.Guard
 }
 
 // screen is what the menu shows instead of its list: a form, a view, the
@@ -100,7 +104,8 @@ type surfaceEnded struct {
 
 // New returns the menu for env.
 func New(env Env) *Model {
-	return &Model{env: env, theme: theme.Current(), width: 80, height: 24, surfaces: map[string]bool{}}
+	return &Model{env: env, theme: theme.Current(), width: 80, height: 24, surfaces: map[string]bool{},
+		guard: actions.NewGuard(env.NewID)}
 }
 
 // Init implements tea.Model.

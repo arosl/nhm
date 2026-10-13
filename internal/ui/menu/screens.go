@@ -53,10 +53,10 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 		}
 		return &viewScreen{v: v, open: m.openFromView}, nil
 	}
-	run := forms.Runner{Action: a, Core: m.env.Core, Guard: actions.NewGuard(m.env.NewID)}
+	run := forms.Runner{Action: a, Core: m.env.Core, Guard: m.guard}
 	switch a.ID {
 	case "spawn.add", "spawn.new":
-		return &wizardScreen{w: forms.NewSpawnWizard(run, c, m.env.Kinds, m.width, m.height-2)}, nil
+		return &wizardScreen{w: forms.NewSpawnWizard(run, c, m.env.Kinds, m.width, m.screenHeight())}, nil
 	case "workspace.reap":
 		return newReapScreen(run, c), nil
 	case "workspace.kill":
@@ -467,7 +467,7 @@ func (m *Model) openFromView(o views.Open) (screen, error) {
 	if why := a.Unavailable(m.env.Context, m.env.Core); why != "" {
 		return nil, fmt.Errorf("%s: %s", a.Label, why)
 	}
-	run := forms.Runner{Action: a, Core: m.env.Core, Guard: actions.NewGuard(m.env.NewID)}
+	run := forms.Runner{Action: a, Core: m.env.Core, Guard: m.guard}
 	req := actions.Request{Context: m.env.Context, Params: map[string]string{actions.ParamRun: o.Arg}}
 	return &confirmScreen{f: forms.NewConfirmForm(run, req)}, nil
 }

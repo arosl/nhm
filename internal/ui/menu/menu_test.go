@@ -301,6 +301,38 @@ func TestReviewSeenWholeBeforeConfirm(t *testing.T) {
 	}
 }
 
+// The menu's forms share one guard: a reap whose answer was lost, closed
+// and opened again, finds its set held and cannot submit it again (the
+// re-check's note on a guard per form).
+func TestReopenedFormFindsItsRequestHeld(t *testing.T) {
+	var reaps []lifecycle.ReapRequest
+	m := newMenu(ctxW, &fakeCore{})
+	m.env.Core.Reap = func(_ context.Context, r lifecycle.ReapRequest, _ string) ([]lifecycle.ReapItem, error) {
+		reaps = append(reaps, r)
+		if !r.DryRun {
+			return nil, fmt.Errorf("%w: the job's answer did not come in", actions.ErrNoAnswer)
+		}
+		return []lifecycle.ReapItem{{MailName: "IcyKnoll", BindingID: "b0", Generation: 1, Action: "would_retire"}}, nil
+	}
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	press(m, "w", "r", "enter", "esc", "esc")
+	press(m, "w", "r")
+	s, ok := m.open.(*reapScreen)
+	if !ok || s.f.Phase() != forms.Failed || !errors.Is(s.f.Err(), actions.ErrSubmitted) {
+		t.Fatalf("the reopened reap: %T %v", m.open, s.f.Err())
+	}
+	press(m, "enter")
+	confirms := 0
+	for _, r := range reaps {
+		if !r.DryRun {
+			confirms++
+		}
+	}
+	if confirms != 1 {
+		t.Fatalf("%d confirms: %+v", confirms, reaps)
+	}
+}
+
 // The kill's prompt and field stay under a long review, and its key line
 // names how many agents it kills.
 func TestKillFieldStaysInView(t *testing.T) {
