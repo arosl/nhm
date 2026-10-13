@@ -168,6 +168,35 @@ The same rules apply to code from pt and dcg.
 | `internal/core/assignment/stranded_test.go` | `internal/assignment/stranded_test.go` | provenance header; a binding id in place of `%993` |
 | `internal/core/assignment/events/LICENSE` | `LICENSE` | none |
 | `internal/core/assignment/events/events.go` | `internal/events/webhook_event.go`, `internal/events/bus.go` (derived) | the webhook types, `WebhookEvent`, `NewWebhookEvent`, `BusEvent`, `BaseEvent`; `EventEmitter` and `DefaultEmitter` are nhm's stand-in that drops each notice (nhm has no webhook sink) |
+| `internal/integrations/worksource/LICENSE` | `LICENSE` | none |
+| `internal/integrations/worksource/eligibility.go` | `internal/worksource/eligibility.go` | provenance header |
+| `internal/integrations/worksource/identity.go` | `internal/worksource/identity.go` | provenance header |
+| `internal/integrations/worksource/snapshot_clock.go` | `internal/worksource/snapshot_clock.go` | provenance header |
+| `internal/integrations/worksource/source.go` | `internal/worksource/source.go` | provenance header |
+| `internal/integrations/worksource/eligibility_batch_test.go` | `internal/worksource/eligibility_batch_test.go` | provenance header |
+| `internal/integrations/worksource/identity_test.go` | `internal/worksource/identity_test.go` | provenance header |
+| `internal/integrations/worksource/mutex_claim_test.go` | `internal/worksource/mutex_claim_test.go` | provenance header |
+| `internal/integrations/worksource/snapshot_clock_test.go` | `internal/worksource/snapshot_clock_test.go` | provenance header |
+| `internal/integrations/worksource/source_test.go` | `internal/worksource/source_test.go` | provenance header |
+| `internal/integrations/bv/LICENSE` | `LICENSE` | none |
+| `internal/integrations/bv/bv.go` | `internal/bv/bv.go` (in part), `internal/bv/client.go` (`ErrTimeout`) | provenance header; imports; the runners, plan reader, br runner, gates, claim API, br helpers and status/details readers whole; `claimBeadForAssignmentAttempt` claims through br's engine (`br update --claim --if-unchanged`, under nhm's claim lock, ntm's validation and mutex check on one read) in place of ntm's direct SQLite transaction, which leaves br 0.7.4 refusing writes after a bv read; no automatic JSONL rebuild; the direct SQLite claim/release/stale transactions, `ClaimBead`, `ReleaseBeadClaim` and the bv readers nhm does not call are not taken (nhm-i85) |
+| `internal/integrations/bv/assignment_mutex.go` | `internal/bv/assignment_mutex.go` (derived) | provenance header; the error types whole; `requireAssignmentMutexes` keeps ntm's rules on the claim's read and `br list --all` in place of SQL in the transaction |
+| `internal/integrations/bv/timeout.go` | `internal/bv/timeout.go` | provenance header |
+| `internal/integrations/bv/triage.go` | `internal/bv/triage.go` | provenance header; util and worksource import paths |
+| `internal/integrations/bv/types.go` | `internal/bv/types.go` | provenance header |
+| `internal/integrations/bv/work_source.go` | `internal/bv/work_source.go` | provenance header; the worksource import path |
+| `internal/integrations/bv/bead_status_test.go` | `internal/bv/bead_status_test.go` (in part) | provenance header; imports; two transaction tests call the public claim; the stale, non-terminal, release, rebuild and hash tests are not taken |
+| `internal/integrations/bv/bv_helpers_test.go` | `internal/bv/bv_helpers_test.go` (in part) | provenance header; the context test keeps its two assignment-claim cases; tests of readers not taken are left out |
+| `internal/integrations/bv/bv_pure_helpers_test.go` | `internal/bv/bv_pure_helpers_test.go` (in part) | provenance header; the markdown and client tests are left out |
+| `internal/integrations/bv/bv_test.go` | `internal/bv/bv_test.go` (in part) | provenance header; imports; tests of readers not taken are left out |
+| `internal/integrations/bv/timeout_test.go` | `internal/bv/timeout_test.go` (in part) | provenance header; imports; the two GetInsights tests are left out |
+| `internal/integrations/bv/triage_accessors_test.go` | `internal/bv/triage_accessors_test.go` (in part) | provenance header; `TestTriageAccessors_CachePrimed` is left out |
+| `internal/integrations/bv/triage_source_test.go` | `internal/bv/triage_source_test.go` | provenance header |
+| `internal/integrations/bv/triage_test.go` | `internal/bv/triage_test.go` | provenance header |
+| `internal/integrations/bv/work_source_test.go` | `internal/bv/work_source_test.go` | provenance header; the worksource import path |
+| `internal/integrations/bv/work_source_batch_test.go` | `internal/bv/work_source_batch_test.go` | provenance header |
+| `internal/integrations/bv/util/LICENSE` | `LICENSE` | none |
+| `internal/integrations/bv/util/dirs.go` | `internal/util/dirs.go` (in part) | provenance header; package comment; only `ResolveProjectDir` and what it calls |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
