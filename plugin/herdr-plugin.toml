@@ -7,8 +7,9 @@
 # acfs-9hkh.14, checked on herdr 0.9.3), so "../nhm" is the nhm binary of
 # the same release, whatever PATH the herdr server has.
 #
-# Keys (the operator, 2026-10-12): prefix+a palette, prefix+d board,
-# prefix+m menu; `nhm bind` writes them into herdr's config.toml.
+# Keys (the operator, 2026-10-12/13): [keys] in nhm's config, default
+# prefix+a palette, prefix+d board, prefix+m menu; `nhm bind` writes them
+# into herdr's config.toml.
 #
 # Event hooks must exit fast: herdr runs at most 32 plugin commands at
 # once and refuses the rest (ACFS evidence exp1), so a hook is a hint and

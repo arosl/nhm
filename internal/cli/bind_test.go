@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core"
+	"github.com/arosl/nhm/internal/ui"
 )
 
 // fakeHerdr is a herdr whose `config check` reports "unknown config key
@@ -69,25 +70,36 @@ func TestBindNeedsNhmAsOwner(t *testing.T) {
 		t.Fatalf("a refused bind changed the file: %q", data)
 	}
 	// --unbind removes only nhm's block, so it runs under the Bash too
-	// and keeps ACFS's palette.
+	// and keeps ACFS's palette; it records the opt-out after it.
 	if code, _, errOut := runVerb(runBind, "--config", cfg, "--unbind", "--no-reload"); code != exitOK {
 		t.Fatalf("unbind under the Bash = %d %s", code, errOut)
 	}
-	if data, _ := os.ReadFile(cfg); string(data) != acfs {
-		t.Fatalf("unbind touched ACFS's block: %q", data)
+	optedOut, _ := os.ReadFile(cfg)
+	if !strings.HasPrefix(string(optedOut), acfs) || ui.OptOutBy(string(optedOut)) != "nhm bind --unbind" {
+		t.Fatalf("unbind touched ACFS's block or left no opt-out: %q", optedOut)
+	}
+	// The opt-out is the answer before the owner check.
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOptedOut || strings.Contains(errOut, "Bash") {
+		t.Fatalf("bind under the Bash after the opt-out = %d %s", code, errOut)
 	}
 	t.Setenv("HERDR_SOCKET_PATH", "")
-	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitRefused || !strings.Contains(errOut, "--socket") {
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--force", "--no-reload"); code != exitRefused || !strings.Contains(errOut, "--socket") {
 		t.Fatalf("bind without a server = %d %s", code, errOut)
 	}
 	if _, err := core.SwitchOwner(context.Background(), inst.Dir, core.OwnerNhm, time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, errOut := runVerb(runBind, "--config", cfg, "--socket", s.SocketPath, "--no-reload"); code != exitOK {
-		t.Fatalf("bind once nhm owns it = %d %s", code, errOut)
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--socket", s.SocketPath, "--no-reload"); code != exitOptedOut {
+		t.Fatalf("bind once nhm owns it, after the opt-out = %d %s", code, errOut)
 	}
-	if data, _ := os.ReadFile(cfg); strings.Contains(string(data), "acfs palette") || !strings.Contains(string(data), "nhm.palette") {
-		t.Fatalf("bind did not replace ACFS's block: %q", data)
+	if data, _ := os.ReadFile(cfg); string(data) != string(optedOut) {
+		t.Fatalf("an opted-out bind changed the file: %q", data)
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--socket", s.SocketPath, "--force", "--no-reload"); code != exitOK {
+		t.Fatalf("bind --force once nhm owns it = %d %s", code, errOut)
+	}
+	if data, _ := os.ReadFile(cfg); strings.Contains(string(data), "acfs palette") || !strings.Contains(string(data), "nhm.palette") || ui.OptOutBy(string(data)) != "" {
+		t.Fatalf("bind --force did not replace ACFS's block and the opt-out: %q", data)
 	}
 }
 
@@ -140,7 +152,8 @@ func TestBindVerb(t *testing.T) {
 	if code, _, errOut := runVerb(runBind, "--config", link, "--unbind", "--no-reload"); code != exitOK {
 		t.Fatalf("unbind = %d %s", code, errOut)
 	}
-	if data, _ := os.ReadFile(real); string(data) != "# mine\n" {
+	if data, _ := os.ReadFile(real); !strings.HasPrefix(string(data), "# mine\n") || strings.Contains(string(data), "keys.command") ||
+		ui.OptOutBy(string(data)) != "nhm bind --unbind" {
 		t.Errorf("unbind left %q", data)
 	}
 
@@ -351,5 +364,164 @@ func TestBindRefusesAFileChangedDuringTheBind(t *testing.T) {
 	// The fake check edits the file each time it runs (old and new).
 	if data, _ := os.ReadFile(cfg); !strings.HasPrefix(string(data), "# mine\n# edited\n") || strings.Contains(string(data), "nhm") {
 		t.Errorf("the edit made during the bind was lost: %q", data)
+	}
+}
+
+// nhmKeys writes [keys] into nhm's config (under XDG_CONFIG_HOME, which
+// cliInstance makes temporary).
+func nhmKeys(t *testing.T, table string) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "nhm", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("[keys]\n"+table), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// [keys] in nhm's config sets the keys; an empty one binds nothing and
+// leaves its default key to the rest of herdr's config; a changed key
+// moves (plan-v4 section 2).
+func TestBindKeysFromNhmConfig(t *testing.T) {
+	fakeHerdr(t)
+	ownedInstance(t)
+	nhmKeys(t, "palette = \"ctrl+alt+p\"\nboard = \"\"\n")
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte("[keys]\nzoom = \"prefix+d\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload")
+	if code != exitOK || !strings.Contains(errOut, "ctrl+alt+p palette, board without a key, prefix+m menu") {
+		t.Fatalf("bind = %d %s", code, errOut)
+	}
+	data, _ := os.ReadFile(cfg)
+	for _, want := range []string{`zoom = "prefix+d"`, `key = "ctrl+alt+p"`, `command = "nhm.palette"`, `key = "prefix+m"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("the bound file lacks %s: %q", want, data)
+		}
+	}
+	if strings.Contains(string(data), `command = "nhm.board"`) || strings.Contains(string(data), `key = "prefix+a"`) {
+		t.Errorf("the bound file binds the board or the default palette key: %q", data)
+	}
+	if code, out, _ := runVerb(runBind, "--print-client"); code != exitOK || !strings.Contains(out, `key = "ctrl+alt+p"`) || strings.Contains(out, `command = "nhm.board"`) {
+		t.Errorf("--print-client = %d %q", code, out)
+	}
+
+	// Change a key, bind again: it moves.
+	nhmKeys(t, "palette = \"prefix+a\"\nboard = \"\"\n")
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOK {
+		t.Fatalf("bind after the change = %d %s", code, errOut)
+	}
+	data, _ = os.ReadFile(cfg)
+	if strings.Contains(string(data), "ctrl+alt+p") || !strings.Contains(string(data), `key = "prefix+a"`) || strings.Count(string(data), ui.BlockBegin) != 1 {
+		t.Fatalf("the key did not move: %q", data)
+	}
+
+	// A [keys] that gives one key to two surfaces is refused; --unbind
+	// needs no keys and still runs.
+	nhmKeys(t, "board = \"prefix+m\"\n")
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitRefused || !strings.Contains(errOut, "board and menu are both prefix+m") {
+		t.Fatalf("bind with a clash in [keys] = %d %s", code, errOut)
+	}
+	if again, _ := os.ReadFile(cfg); string(again) != string(data) {
+		t.Fatalf("a refused bind changed the file: %q", again)
+	}
+	if code, _, errOut := runVerb(runBind, "--print-client"); code != exitRefused {
+		t.Errorf("--print-client with a clash in [keys] = %d %s", code, errOut)
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--unbind", "--no-reload"); code != exitOK {
+		t.Errorf("unbind with a clash in [keys] = %d %s", code, errOut)
+	}
+}
+
+// ACFS's install and acfs update run nhm bind each time: after nhm bind
+// --unbind, or ACFS's acfs palette unbind, it binds nothing and exits
+// exitOptedOut until --force (ACFS acfs-uetm, nhm-7kz).
+func TestBindKeepsTheOptOut(t *testing.T) {
+	fakeHerdr(t)
+	ownedInstance(t)
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	show := func() string {
+		t.Helper()
+		code, out, errOut := runVerb(runBind, "--config", cfg, "--show")
+		if code != exitOK {
+			t.Fatalf("--show = %d %s", code, errOut)
+		}
+		return out
+	}
+	if out := show(); !strings.Contains(out, "nhm's keys: not bound") || !strings.Contains(out, "prefix+a palette, prefix+d board, prefix+m menu") {
+		t.Errorf("--show before a bind: %q", out)
+	}
+	if _, err := os.Stat(cfg); err == nil {
+		t.Fatal("--show wrote the config")
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOK {
+		t.Fatalf("bind = %d %s", code, errOut)
+	}
+	bound, _ := os.ReadFile(cfg)
+	if out := show(); !strings.Contains(out, "nhm's keys: bound\n") {
+		t.Errorf("--show after a bind: %q", out)
+	}
+	nhmKeys(t, "menu = \"\"\n")
+	if out := show(); !strings.Contains(out, "bound, but not as nhm bind writes them now") || !strings.Contains(out, "menu without a key") {
+		t.Errorf("--show after a change in [keys]: %q", out)
+	}
+	nhmKeys(t, "")
+
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--unbind", "--no-reload"); code != exitOK || !strings.Contains(errOut, "opt-out") {
+		t.Fatalf("unbind = %d %s", code, errOut)
+	}
+	optedOut, _ := os.ReadFile(cfg)
+	if strings.Contains(string(optedOut), "keys.command") {
+		t.Fatalf("unbind left keys: %q", optedOut)
+	}
+	for _, args := range [][]string{{"--no-reload"}, {"--dry-run"}} {
+		code, out, errOut := runVerb(runBind, append([]string{"--config", cfg}, args...)...)
+		if code != exitOptedOut || out != "" || !strings.Contains(errOut, "nhm bind --unbind") || !strings.Contains(errOut, "--force") {
+			t.Errorf("bind %v after the opt-out = %d %q %s", args, code, out, errOut)
+		}
+		if data, _ := os.ReadFile(cfg); string(data) != string(optedOut) {
+			t.Fatalf("bind %v changed an opted-out file: %q", args, data)
+		}
+	}
+	if out := show(); !strings.Contains(out, "opted out (nhm bind --unbind)") {
+		t.Errorf("--show after the opt-out: %q", out)
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--unbind", "--no-reload"); code != exitOK || !strings.Contains(errOut, "already as it should be") {
+		t.Errorf("a second unbind = %d %s", code, errOut)
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--force", "--no-reload"); code != exitOK {
+		t.Fatalf("bind --force = %d %s", code, errOut)
+	}
+	if data, _ := os.ReadFile(cfg); string(data) != string(bound) {
+		t.Fatalf("bind --force = %q, want %q", data, bound)
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOK || !strings.Contains(errOut, "already as it should be") {
+		t.Errorf("bind after --force = %d %s", code, errOut)
+	}
+
+	// ACFS's unbound palette block is an opt-out too, and stays.
+	acfs := "# >>> acfs palette >>> unbound by `acfs palette unbind`; `acfs palette bind` binds it again\n# <<< acfs palette <<<\n"
+	if err := os.WriteFile(cfg, []byte(acfs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOptedOut || !strings.Contains(errOut, "acfs palette unbind") {
+		t.Fatalf("bind over ACFS's unbound block = %d %s", code, errOut)
+	}
+	if data, _ := os.ReadFile(cfg); string(data) != acfs {
+		t.Fatalf("bind changed ACFS's unbound block: %q", data)
+	}
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--force", "--no-reload"); code != exitOK {
+		t.Fatalf("bind --force over ACFS's unbound block = %d %s", code, errOut)
+	}
+	if data, _ := os.ReadFile(cfg); strings.Contains(string(data), "acfs palette") || !strings.Contains(string(data), "nhm.menu") {
+		t.Fatalf("bind --force kept ACFS's block: %q", data)
+	}
+
+	for _, args := range [][]string{{"--force", "--unbind"}, {"--show", "--unbind"}, {"--show", "--print-client"}, {"--force", "--show"}} {
+		if code, _, _ := runVerb(runBind, args...); code != exitRefused {
+			t.Errorf("%v: code %d, want %d", args, code, exitRefused)
+		}
 	}
 }

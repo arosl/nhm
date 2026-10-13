@@ -9,18 +9,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/arosl/nhm/internal/core"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/ui"
 )
 
-const bindUsage = `Usage: nhm bind [--unbind] [--print-client] [--dry-run] [--no-reload] [--config PATH] [--socket PATH]
+const bindUsage = `Usage: nhm bind [--unbind | --force | --show | --print-client] [--dry-run] [--no-reload] [--config PATH] [--socket PATH]
 
 Write nhm's keys into the herdr server's config.toml, between
-"# >>> nhm >>>" and "# <<< nhm <<<": prefix+a the palette, prefix+d the
-agent board, prefix+m the nhm menu (each a plugin_action key). ACFS's old
+"# >>> nhm >>>" and "# <<< nhm <<<", each a plugin_action key. [keys] in
+nhm's config (~/.config/nhm/config.toml) sets them:
+
+  [keys]
+  palette = "prefix+a"   # the defaults
+  board   = "prefix+d"
+  menu    = "prefix+m"
+
+An empty value gives that surface no key (the menu still opens it).
+Change a key and run nhm bind again to move it. ACFS's old
 "# >>> acfs palette >>>" block goes. Then herdr reloads its config
 (--no-reload skips that).
 
@@ -29,48 +39,66 @@ It refuses, and changes nothing:
   while ACFS's Bash owns it, nhm's palette cannot send, and ACFS's
   palette keeps prefix+a until the takeover;
 - when the rest of the config already uses one of the keys (any quote
-  style, arrays too);
+  style, arrays too), or [keys] gives one key to two surfaces;
 - when the result would not parse, or herdr's config check reports an
   issue the old file did not have.
 A symlinked config is written through: the link stays.
 
---unbind removes nhm's block only, at any time. --print-client prints the block for the
-herdr client's own config: a remote client (herdr --remote, on a Mac)
-uses its own keys unless it attaches with --remote-keybindings server.
+--unbind removes nhm's keys at any time and records an opt-out in their
+place. While the opt-out is there, nhm bind (as ACFS's install and acfs
+update run it) changes nothing and exits 5; ACFS's "unbound by acfs
+palette unbind" block counts as an opt-out too. --force binds anyway and
+removes the opt-out. --show prints the state and the keys, and changes
+nothing. --print-client prints the block for the herdr client's own
+config: a remote client (herdr --remote, on a Mac) uses its own keys
+unless it attaches with --remote-keybindings server.
 `
+
+// exitOptedOut is nhm bind's exit code when herdr's config records an
+// opt-out (nhm bind --unbind, acfs palette unbind): nothing changed, and
+// the caller binds no other palette in its place.
+const exitOptedOut = 5
 
 func runBind(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("bind", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, bindUsage) }
-	unbind := fs.Bool("unbind", false, "remove nhm's keys")
+	unbind := fs.Bool("unbind", false, "remove nhm's keys and record an opt-out")
+	force := fs.Bool("force", false, "bind even after an opt-out, and remove it")
+	show := fs.Bool("show", false, "print the state and the keys, change nothing")
 	printClient := fs.Bool("print-client", false, "print the block for the client's config")
 	dryRun := fs.Bool("dry-run", false, "print the new config, write nothing")
 	noReload := fs.Bool("no-reload", false, "do not ask herdr to reload its config")
 	config := fs.String("config", "", "herdr's config.toml (default: $HERDR_CONFIG_PATH, $XDG_CONFIG_HOME/herdr/config.toml)")
 	socket := fs.String("socket", "", "the herdr server: nhm must own it, its config is written and it reloads (default HERDR_SOCKET_PATH)")
 	pos, err := parseInterleaved(fs, args)
-	if err != nil || len(pos) > 0 || (*printClient && *unbind) {
+	modes := 0
+	for _, on := range []bool{*unbind, *force, *show, *printClient} {
+		if on {
+			modes++
+		}
+	}
+	if err != nil || len(pos) > 0 || modes > 1 {
 		fmt.Fprint(stderr, bindUsage)
 		return exitRefused
 	}
+	// --unbind needs no keys, so a broken [keys] never blocks it.
+	var keys []ui.Key
+	var keysFrom string
+	if !*unbind {
+		if keys, keysFrom, err = bindKeys(); err != nil {
+			fmt.Fprintf(stderr, "nhm bind: %v\n", err)
+			return exitRefused
+		}
+	}
 	if *printClient {
-		fmt.Fprint(stdout, ui.ClientNote+"\n"+ui.Block())
+		fmt.Fprint(stdout, ui.ClientNote+"\n"+ui.Block(keys))
 		return exitOK
 	}
 	// One herdr server for the owner check, the config and the reload.
 	server := *socket
 	if server == "" {
 		server = os.Getenv("HERDR_SOCKET_PATH")
-	}
-	if !*unbind {
-		// While ACFS's Bash owns the instance, nhm's palette cannot send
-		// (nhm send refuses), and binding would also drop ACFS's own
-		// palette block: ACFS's palette stays on prefix+a until the
-		// takeover. --unbind only removes nhm's keys, so it may run any time.
-		if code := requireNhmOwner(server, stderr); code != exitOK {
-			return code
-		}
 	}
 	path := *config
 	if path == "" {
@@ -96,15 +124,33 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		seen = stateOf(path, old)
 	}
+	if *show {
+		return showBind(stdout, stderr, path, string(old), keys, keysFrom)
+	}
 	var next string
 	if *unbind {
-		next, err = ui.Unbind(string(old))
+		next, err = ui.OptOut(string(old))
 	} else {
-		next, err = ui.Bind(string(old))
+		next, err = ui.BindKeys(string(old), keys, *force)
+	}
+	if errors.Is(err, ui.ErrOptedOut) {
+		// Before the owner check: the user's own choice is the answer.
+		fmt.Fprintf(stderr, "nhm bind: herdr's config opts out of nhm's keys (%s, in %s), so nhm bind changes nothing; nhm bind --force binds them\n",
+			ui.OptOutBy(string(old)), path)
+		return exitOptedOut
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm bind: %v\n", err)
 		return exitRefused
+	}
+	if !*unbind {
+		// While ACFS's Bash owns the instance, nhm's palette cannot send
+		// (nhm send refuses), and binding would also drop ACFS's own
+		// palette block: ACFS's palette stays on prefix+a until the
+		// takeover. --unbind only removes nhm's keys, so it may run any time.
+		if code := requireNhmOwner(server, stderr); code != exitOK {
+			return code
+		}
 	}
 	if *dryRun {
 		fmt.Fprint(stdout, next)
@@ -141,15 +187,47 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm bind: %v\n", err)
 		return exitError
 	}
-	verb := "wrote nhm's keys (prefix+a palette, prefix+d board, prefix+m menu) to"
+	verb := "wrote nhm's keys (" + ui.Describe(keys) + ") to"
 	if *unbind {
-		verb = "removed nhm's keys from"
+		verb = "removed nhm's keys and recorded the opt-out (nhm bind --force binds them again) in"
 	}
 	fmt.Fprintf(stderr, "nhm bind: %s %s\n", verb, path)
 	if !*noReload {
 		reloadHerdr(server, stderr)
 	}
 	fmt.Fprintln(stderr, "nhm bind: a herdr client on another machine uses its own keys: see nhm bind --print-client")
+	return exitOK
+}
+
+// bindKeys are nhm's keys from [keys] of nhm's config, and where they come
+// from: "[keys] in PATH", or the defaults when there is no config
+// directory.
+func bindKeys() ([]ui.Key, string, error) {
+	path, err := kinds.ConfigPath()
+	if err != nil {
+		return slices.Clone(ui.Keys), "the defaults: no config directory", nil
+	}
+	keys, err := ui.LoadKeys(path)
+	return keys, "[keys] in " + path, err
+}
+
+// showBind prints what herdr's config at path holds of nhm's keys, and
+// the keys nhm bind would write. It changes nothing.
+func showBind(stdout, stderr io.Writer, path, config string, keys []ui.Key, keysFrom string) int {
+	rest, err := ui.Unbind(config)
+	if err != nil {
+		fmt.Fprintf(stderr, "nhm bind: %v\n", err)
+		return exitRefused
+	}
+	state := "not bound; run nhm bind"
+	if by := ui.OptOutBy(config); by != "" {
+		state = "opted out (" + by + "); nhm bind --force binds them"
+	} else if next, err := ui.BindKeys(config, keys, false); err == nil && next == config {
+		state = "bound"
+	} else if rest != config {
+		state = "bound, but not as nhm bind writes them now; run nhm bind"
+	}
+	fmt.Fprintf(stdout, "herdr config: %s\nnhm's keys: %s\nkeys (%s): %s\n", path, state, keysFrom, ui.Describe(keys))
 	return exitOK
 }
 

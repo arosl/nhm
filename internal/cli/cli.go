@@ -102,8 +102,9 @@ Usage:
                          the agents a usage limit stopped
   nhm palette | board | menu
                          the prompt palette, the agent board, the nhm menu
-  nhm bind [--unbind] [--print-client] [--dry-run]
-                         herdr keys: prefix+a palette, prefix+d board, prefix+m menu
+  nhm bind [--unbind | --force | --show | --print-client] [--dry-run]
+                         herdr keys from [keys] in nhm's config (default prefix+a
+                         palette, prefix+d board, prefix+m menu); --unbind opts out
   nhm resolve <name|herdr-name|pane-id|--current> [--json]
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
