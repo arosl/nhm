@@ -212,14 +212,20 @@ func TestUICoreRunsMutationsAsJobs(t *testing.T) {
 		t.Fatalf("adopt job = %+v %+v", j, ar)
 	}
 	// zoom finds a bound agent by its binding and refuses one at another
-	// generation; it runs in the surface.
+	// generation; it runs in the surface, and brings the pane's tab in
+	// front (nhm-e46).
+	s.Handle("session.snapshot", snapshotWithPanes(map[string]string{"w1:p1": "w1:t1", "w1:p2": "w1:t2"}))
 	var herdrCalls []string
-	for _, name := range []string{"workspace.focus", "pane.zoom"} {
+	for _, name := range []string{"workspace.focus", "pane.zoom", "tab.focus"} {
 		name := name
 		s.Handle(name, func(r herdrtest.Request) (any, *herdrtest.Error) {
 			herdrCalls = append(herdrCalls, name+" "+string(r.Params))
-			if name == "pane.zoom" {
+			switch name {
+			case "pane.zoom":
 				return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p1", "zoomed": true}}, nil
+			case "tab.focus":
+				return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1,
+					"label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"}}, nil
 			}
 			return map[string]any{"type": "ok"}, nil
 		})
@@ -229,7 +235,7 @@ func TestUICoreRunsMutationsAsJobs(t *testing.T) {
 		t.Fatalf("zoom of a stale target = %v %v", err, herdrCalls)
 	}
 	if pane, err := core.Zoom(ctx, ui.Target{BindingID: icy.ID, Generation: icy.Generation}); err != nil || pane != "w1:p1" ||
-		len(herdrCalls) != 2 || !strings.Contains(herdrCalls[0], `"w1"`) {
+		len(herdrCalls) != 3 || !strings.Contains(herdrCalls[0], `"w1"`) || !strings.Contains(herdrCalls[2], `"w1:t1"`) {
 		t.Fatalf("zoom = %q %v %v", pane, err, herdrCalls)
 	}
 	// The send base is nhm send's for the workspace, with no selector.

@@ -9,12 +9,14 @@ import (
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 )
 
-// zoomServer is waitInstance's server, with herdr's focus and zoom calls
-// recorded in order. ACFS's Bash owns the instance: attach and zoom change
-// no agent, so they run under either owner.
+// zoomServer is waitInstance's server, with the agents' panes in their
+// tabs, and herdr's focus and zoom calls recorded in order. ACFS's Bash
+// owns the instance: attach and zoom change no agent, so they run under
+// either owner.
 func zoomServer(t *testing.T) (*herdrtest.Server, func() []string) {
 	t.Helper()
 	s, _, _ := waitInstance(t, func(string) map[string]any { return nil })
+	s.Handle("session.snapshot", snapshotWithPanes(map[string]string{"w1:p1": "w1:t1", "w1:p2": "w1:t2"}))
 	var mu sync.Mutex
 	var calls []string
 	record := func(name string) herdrtest.Handler {
@@ -22,27 +24,50 @@ func zoomServer(t *testing.T) (*herdrtest.Server, func() []string) {
 			var p struct {
 				WorkspaceID string `json:"workspace_id"`
 				PaneID      string `json:"pane_id"`
+				TabID       string `json:"tab_id"`
 				Mode        string `json:"mode"`
 			}
 			_ = json.Unmarshal(r.Params, &p)
 			mu.Lock()
-			calls = append(calls, strings.TrimSpace(name+" "+p.WorkspaceID+p.PaneID+" "+p.Mode))
+			calls = append(calls, strings.TrimSpace(name+" "+p.WorkspaceID+p.PaneID+p.TabID+" "+p.Mode))
 			mu.Unlock()
-			if name == "pane.zoom" {
+			switch name {
+			case "pane.zoom":
 				return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": p.PaneID, "zoomed": true,
 					"changed": true, "zoom_changed": true, "focus_changed": true}}, nil
+			case "tab.focus":
+				return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": p.TabID, "workspace_id": "w1", "number": 1,
+					"label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"}}, nil
 			}
 			return map[string]any{"type": "ok"}, nil
 		}
 	}
 	s.Handle("workspace.focus", record("workspace.focus"))
 	s.Handle("pane.zoom", record("pane.zoom"))
+	s.Handle("tab.focus", record("tab.focus"))
 	return s, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		out := calls
 		calls = nil
 		return out
+	}
+}
+
+// snapshotWithPanes is waitInstance's snapshot (workspace w1, "swarm")
+// with these panes, each in its tab (pane id -> tab id).
+func snapshotWithPanes(tabs map[string]string) herdrtest.Handler {
+	return func(herdrtest.Request) (any, *herdrtest.Error) {
+		panes := []any{}
+		for pane, tab := range tabs {
+			panes = append(panes, map[string]any{"pane_id": pane, "tab_id": tab, "workspace_id": "w1", "terminal_id": "t-" + pane,
+				"agent_status": "unknown", "focused": false, "revision": 1})
+		}
+		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
+			"protocol": 22, "version": "0.9.3", "layouts": []any{}, "tabs": []any{}, "agents": []any{}, "panes": panes,
+			"workspaces": []any{map[string]any{"workspace_id": "w1", "number": 1, "label": "swarm", "focused": true,
+				"pane_count": len(panes), "tab_count": 2, "active_tab_id": "w1:t1", "agent_status": "idle"}},
+		}}, nil
 	}
 }
 
@@ -78,7 +103,9 @@ func TestZoomResolvesSlotNameKindAndPaneID(t *testing.T) {
 	if code != 0 || res["pane_id"] != "w1:p2" || res["mail_name"] != "BlueLake" || res["zoomed"] != true {
 		t.Fatalf("zoom by name = %d %s %s", code, out, errOut)
 	}
-	if got := calls(); strings.Join(got, ";") != "workspace.focus w1;pane.zoom w1:p2 on" {
+	// The zoomed pane's tab comes in front of the attached clients, which
+	// do not follow pane.zoom to another tab (nhm-e46).
+	if got := calls(); strings.Join(got, ";") != "workspace.focus w1;pane.zoom w1:p2 on;tab.focus w1:t2" {
 		t.Fatalf("calls = %v", got)
 	}
 	slot, _ := res["slot"].(string)
@@ -90,19 +117,11 @@ func TestZoomResolvesSlotNameKindAndPaneID(t *testing.T) {
 	}
 	calls()
 	// A herdr pane id must be a pane of the session's workspace.
-	s.Handle("session.snapshot", func(herdrtest.Request) (any, *herdrtest.Error) {
-		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
-			"protocol": 22, "version": "0.9.3", "layouts": []any{}, "tabs": []any{}, "agents": []any{},
-			"workspaces": []any{map[string]any{"workspace_id": "w1", "number": 1, "label": "swarm", "focused": true,
-				"pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1", "agent_status": "idle"}},
-			"panes": []any{map[string]any{"pane_id": "w1:p7", "tab_id": "w1:t3", "workspace_id": "w1", "terminal_id": "t7",
-				"agent_status": "unknown", "focused": false, "revision": 1}},
-		}}, nil
-	})
+	s.Handle("session.snapshot", snapshotWithPanes(map[string]string{"w1:p7": "w1:t3"}))
 	if code, out, _ := runVerb(runZoom, "swarm", "w1:p7", "--socket", s.SocketPath); code != 0 || !strings.Contains(out, "zoomed w1:p7") {
 		t.Fatalf("zoom by pane id = %d %s", code, out)
 	}
-	if got := calls(); strings.Join(got, ";") != "workspace.focus w1;pane.zoom w1:p7 on" {
+	if got := calls(); strings.Join(got, ";") != "workspace.focus w1;pane.zoom w1:p7 on;tab.focus w1:t3" {
 		t.Fatalf("calls = %v", got)
 	}
 	for _, c := range []struct{ arg, want string }{

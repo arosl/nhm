@@ -129,10 +129,10 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 }
 
 // uiZoom is nhm zoom for a frozen target: it focuses the target's
-// workspace and zooms its pane. A bound target is found by its binding,
-// which may have moved; one at another generation is refused, never
-// swapped for the agent now in its pane. Zoom changes no agent, so it
-// runs in the surface.
+// workspace, zooms its pane and brings the pane's tab in front (zoomPane).
+// A bound target is found by its binding, which may have moved; one at
+// another generation is refused, never swapped for the agent now in its
+// pane. Zoom changes no agent, so it runs in the surface.
 func uiZoom(ctx context.Context, ie *instanceEnv, t ui.Target) (string, error) {
 	pane, ws := t.PaneID, ""
 	if t.Bound() {
@@ -160,10 +160,7 @@ func uiZoom(ctx context.Context, ie *instanceEnv, t ui.Target) (string, error) {
 	if pane == "" || ws == "" {
 		return "", fmt.Errorf("pane %q is gone", pane)
 	}
-	if err := ie.herdr.WorkspaceFocus(ctx, ws); err != nil {
-		return "", err
-	}
-	if _, err := ie.herdr.PaneZoom(ctx, pane, "on"); err != nil {
+	if _, err := zoomPane(ctx, ie.herdr, ws, pane); err != nil {
 		return "", err
 	}
 	return pane, nil

@@ -2,11 +2,12 @@
 # surfaces step of nhm-qbi.11): prefix+d opens the board in a tab of its
 # own and the client shows it, and prefix+d again focuses that tab; a
 # mark and the space actions on it (interrupt, send); i peeks at the
-# inbox and marks nothing read; ctrl+w opens the spawn wizard; z zooms the
-# agent, and the client shows its tab; a board in a second workspace, and
-# the menu kills that workspace, with the kill in recent operations; last,
-# the client disconnects, and the board lives on. tests/surfaces_e2e.sh
-# runs it, with tests/fake_agentmail.py as Agent Mail.
+# inbox and marks nothing read; ctrl+w opens the spawn wizard; z, and nhm
+# zoom from a shell, zoom the agent, and the client shows its tab; a board
+# in a second workspace, and the menu kills that workspace, with the kill
+# in recent operations; last, the client disconnects, and the board lives
+# on. tests/surfaces_e2e.sh runs it, with tests/fake_agentmail.py as Agent
+# Mail.
 #
 # herdr confirms a prompt when the agent reports that it works. The fake
 # agent has no hooks, so a watcher reports for it once the prompt is in
@@ -78,6 +79,12 @@ note z zooms IcyKnoll: its tab comes in front; prefix+d brings the board back
 key z
 refute 5 nhm board · workspace proj
 check herdr pane get w1:p1 | jq -e '.result.pane.focused'
+key ctrl+b d
+expect 5 nhm board · workspace proj (w1)
+run herdr pane zoom w1:p1 --off >/dev/null
+note nhm zoom from a shell brings IcyKnoll's tab in front too
+run nhm zoom proj IcyKnoll >/dev/null
+refute 5 nhm board · workspace proj
 key ctrl+b d
 expect 5 nhm board · workspace proj (w1)
 run herdr pane zoom w1:p1 --off >/dev/null

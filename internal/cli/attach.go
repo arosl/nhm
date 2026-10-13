@@ -25,12 +25,12 @@ its list. Changes no agent, so it runs whoever owns this herdr instance.
 
 const zoomUsage = `Usage: nhm zoom <session> <pane> [--socket PATH] [--json]
 
-ntm's zoom on herdr: focus the session's workspace and zoom one pane. The
-pane is a slot N.M (as nhm status shows it), a herdr pane id such as w1:p3,
-an Agent Mail or herdr name, or a kind (cc, cod, agy, or a kind's name),
-which zooms that kind's first agent. ntm's tmux pane indexes do not exist
-on herdr: use the slot. Changes no agent, so it runs whoever owns this herdr
-instance.
+ntm's zoom on herdr: focus the session's workspace, zoom one pane, and
+bring the pane's tab in front. The pane is a slot N.M (as nhm status shows
+it), a herdr pane id such as w1:p3, an Agent Mail or herdr name, or a kind
+(cc, cod, agy, or a kind's name), which zooms that kind's first agent.
+ntm's tmux pane indexes do not exist on herdr: use the slot. Changes no
+agent, so it runs whoever owns this herdr instance.
 `
 
 var (
@@ -115,10 +115,7 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
 	}
-	if err := ie.herdr.WorkspaceFocus(ctx, ws); err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
-	}
-	z, err := ie.herdr.PaneZoom(ctx, res.PaneID, "on")
+	z, err := zoomPane(ctx, ie.herdr, ws, res.PaneID)
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
@@ -131,6 +128,36 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(w, "zoomed %s in %s; open herdr to see it\n", who, pos[0])
 	})
+}
+
+// zoomPane focuses workspace ws, zooms pane on, and brings the pane's tab
+// in front: nhm zoom, the menu's zoom and the board's.
+func zoomPane(ctx context.Context, h *herdr.Client, ws, pane string) (herdr.ZoomResult, error) {
+	if err := h.WorkspaceFocus(ctx, ws); err != nil {
+		return herdr.ZoomResult{}, err
+	}
+	z, err := h.PaneZoom(ctx, pane, "on")
+	if err != nil {
+		return z, err
+	}
+	return z, frontTab(ctx, h, pane)
+}
+
+// frontTab brings pane's tab in front of herdr's attached clients. herdr
+// 0.9.3's client follows tab.focus and workspace.focus, but not the focus
+// that pane.zoom moves to another tab (seen in the sandbox, nhm-qbi.5).
+func frontTab(ctx context.Context, h *herdr.Client, pane string) error {
+	snap, err := h.Snapshot(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range snap.Panes {
+		if p.PaneID == pane {
+			_, err := h.TabFocus(ctx, p.TabID)
+			return err
+		}
+	}
+	return fmt.Errorf("pane %s is gone", pane)
 }
 
 // focusSession focuses a session's workspace and returns its id, or the
