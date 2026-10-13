@@ -195,7 +195,7 @@ func (s *killScreen) View(width, _ int) string {
 		if err := s.f.Err(); err != nil && len(r.Lines) == 0 && len(r.Targets) == 0 {
 			b.WriteString(wrap(err.Error(), width-2) + "\n")
 		}
-		b.WriteString("\nr: check again · ctrl+b: the agents worked no beads · enter or esc: close\n")
+		b.WriteString("\n" + clip("r: check again · ctrl+b: no beads · enter or esc: close", width) + "\n")
 	case forms.Running:
 		b.WriteString("killing…\n")
 		if p := s.f.Progress(); p != nil {
