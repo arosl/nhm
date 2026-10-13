@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -288,15 +289,26 @@ func index(ctx context.Context, env Env, b bindings.Binding, path string, warnin
 	}
 }
 
-// namesAgent reports a worktree path with a part that is the agent's
-// name: a path element, or one of its words split at '-', '_' and '.'
-// ("/data/tmp/icyknoll-check.x1" names icyknoll; "/data/tmp/icyknollx"
-// does not).
-func namesAgent(path, alias string) bool {
+// namesAgent reports a worktree path with a part that names the agent by
+// one of names: in a path element, a run of words split at '-', '_' and
+// '.' that is the name, split the same way. "/data/tmp/icyknoll-check.x1"
+// names icyknoll, "/w/icyknoll-2-wt" names icyknoll-2 (a suffixed herdr
+// alias, nhm-4xt), and "/data/tmp/icyknollx" names neither.
+func namesAgent(path string, names ...string) bool {
+	words := func(s string) []string {
+		return strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == '.' })
+	}
 	for _, el := range strings.Split(strings.ToLower(path), "/") {
-		for _, word := range strings.FieldsFunc(el, func(r rune) bool { return r == '-' || r == '_' || r == '.' }) {
-			if word == alias {
-				return true
+		ws := words(el)
+		for _, name := range names {
+			nw := words(strings.ToLower(name))
+			if len(nw) == 0 {
+				continue
+			}
+			for i := 0; i+len(nw) <= len(ws); i++ {
+				if slices.Equal(ws[i:i+len(nw)], nw) {
+					return true
+				}
 			}
 		}
 	}
@@ -461,7 +473,9 @@ func check(ctx context.Context, env Env, req RetireRequest, b bindings.Binding, 
 	fetched := false
 	var fetchErr error
 	for _, wt := range wts {
-		if wt == project || !namesAgent(wt, alias) {
+		// The mail name and the alias: a suffixed alias (name-2) still
+		// leaves worktrees named after the agent (nhm-4xt).
+		if wt == project || !namesAgent(wt, b.MailName, alias) {
 			continue
 		}
 		res.Worktrees = append(res.Worktrees, wt)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1075,6 +1076,23 @@ func TestRetireWorktreeChecks(t *testing.T) {
 	if namesAgent("/data/tmp/icyknollx", "icyknoll") || namesAgent("/data/tmp/xicyknoll-y", "icyknoll") {
 		t.Error("a name inside another word matched")
 	}
+	// A suffixed alias (icyknoll-2) is matched whole, and the mail name
+	// still names the agent's worktrees (nhm-4xt).
+	for _, c := range []struct {
+		path  string
+		names []string
+		want  bool
+	}{
+		{"/w/icyknoll-2-wt", []string{"IcyKnoll", "icyknoll-2"}, true},
+		{"/data/tmp/icyknoll-check", []string{"IcyKnoll", "icyknoll-2"}, true},
+		{"/w/icyknoll-3", []string{"icyknoll-2"}, false},
+		{"/w/x-icyknoll-2", []string{"icyknoll-2"}, true},
+		{"/w/icyknoll-22", []string{"icyknoll-2"}, false},
+	} {
+		if got := namesAgent(c.path, c.names...); got != c.want {
+			t.Errorf("namesAgent(%s, %v) = %v, want %v", c.path, c.names, got, c.want)
+		}
+	}
 	w := newWorld(t)
 	w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
 	w.facts.worktrees = []string{"/tmp/icyknoll-wt"}
@@ -1089,6 +1107,29 @@ func TestRetireWorktreeChecks(t *testing.T) {
 	if res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll"}); !errors.Is(err, ErrRefused) ||
 		!strings.Contains(strings.Join(res.Refusals, "|"), ".beads/") {
 		t.Fatalf("ignored files = %v %v", res.Refusals, err)
+	}
+
+	// An agent whose herdr alias has a suffix (bluelake-2: another
+	// project's BlueLake held bluelake) still has its worktrees found, by
+	// its mail name and by its alias (nhm-4xt).
+	b, err := w.env.Bindings.Create(ctx, bindings.New{MailName: "BlueLake", MailProjectKey: "/p", ProjectID: "proj",
+		Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p2",
+			HerdrAlias: "bluelake-2", Kind: "claude", Model: "opus", NativeSession: &bindings.NativeSession{Value: "sess-bl"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.h.add("w1:p2", "claude", "bluelake-2", "sess-bl", herdr.StatusIdle)
+	if err := store.WriteSecret(w.env.InstanceDir, b.ID, "tok-BlueLake"); err != nil {
+		t.Fatal(err)
+	}
+	w.facts.fetchErr = errors.New("network unreachable")
+	for _, wt := range []string{"/tmp/bluelake-wt", "/tmp/bluelake-2-wt"} {
+		w.facts.worktrees = []string{wt}
+		w.facts.wtState[wt] = [2]bool{false, true}
+		if res, err := Retire(ctx, w.env, RetireRequest{Target: "BlueLake"}); !errors.Is(err, ErrRefused) ||
+			!strings.Contains(strings.Join(res.Refusals, "|"), "merged is unknown") || !slices.Contains(res.Worktrees, wt) {
+			t.Errorf("%s: retire of bluelake-2 = %v %v %v", wt, res.Worktrees, res.Refusals, err)
+		}
 	}
 }
 
