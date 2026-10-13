@@ -376,8 +376,7 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 	// 6. The kickoff, through send.
 	if !kick.empty() && env.Send != nil {
 		task := kick.text(req, t)
-		text := fmt.Sprintf("Your Agent Mail identity is already registered: name %s, project key %s (use it; don't register a new one). Your herdr name is %s, in herdr workspace %s.\n\n%s",
-			name, req.ProjectRoot, alias, res.WorkspaceID, task)
+		text := IdentityPreamble(name, req.ProjectRoot, alias, res.WorkspaceID) + "\n\n" + task
 		// CM and CASS are asked about the task, not the identity preamble:
 		// with the preamble's start as the query, cm drops every rule as
 		// irrelevant (acfs-9hkh.87).
@@ -486,6 +485,18 @@ func waitShell(ctx context.Context, env Env, pane string) bool {
 		env.sleep(ctx, shellPoll)
 	}
 	return false
+}
+
+// IdentityPreamble opens the kickoff that spawn and recycle send: the
+// agent's Agent Mail identity, which nhm registered, and its herdr name.
+// The prompt that follows may be ACFS's palette text, which says only
+// "register": the agent registers again with exactly this name and key,
+// as Agent Mail picks a new name when none is given, and a second key
+// makes a second identity (nhm-lm4).
+func IdentityPreamble(mailName, projectKey, alias, workspaceID string) string {
+	return fmt.Sprintf("Your Agent Mail identity is already registered: name %s, project key %s (use it; don't register a new one). "+
+		"When the prompt below says to register, register with exactly this name and project key. "+
+		"Your herdr name is %s, in herdr workspace %s.", mailName, projectKey, alias, workspaceID)
 }
 
 // freeAlias is the lowercase mail name, or with a short suffix when that

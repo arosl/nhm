@@ -303,8 +303,7 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	// The kickoff with the handoff, through the normal send path.
 	res.Stage = StageKickoff
 	if env.Send != nil {
-		text := fmt.Sprintf("Your Agent Mail identity is already registered: name %s, project key %s (use it; don't register a new one). Your herdr name is %s, in herdr workspace %s.",
-			b.MailName, b.MailProjectKey, alias, b.WorkspaceID)
+		text := spawn.IdentityPreamble(b.MailName, b.MailProjectKey, alias, b.WorkspaceID)
 		if res.Handoff != nil && res.Handoff.Text != "" {
 			text += "\n\n" + res.Handoff.Text
 		}
