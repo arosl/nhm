@@ -236,7 +236,9 @@ func paletteHandOff(sub *palette.Submitter, jobs runner.Client, opID string, wai
 	t := time.NewTicker(runner.WaitPoll / 4)
 	defer t.Stop()
 	for {
-		if !sub.InFlight() || jobClaimed(jobs, opID) {
+		// A job with a result has its claim too: one that did not start
+		// is claimed and finished at once.
+		if !sub.InFlight() || runner.Claimed(jobs.JobDir, opID) {
 			return true
 		}
 		select {
@@ -245,21 +247,6 @@ func paletteHandOff(sub *palette.Submitter, jobs runner.Client, opID string, wai
 		case <-t.C:
 		}
 	}
-}
-
-// jobClaimed reports whether nhm ui run has claimed job id, or the job has
-// its result.
-func jobClaimed(jobs runner.Client, id string) bool {
-	recent, err := jobs.Recent(0)
-	if err != nil {
-		return false
-	}
-	for _, e := range recent {
-		if e.Job.ID == id {
-			return e.Claimed || e.Result != nil
-		}
-	}
-	return false
 }
 
 // paletteEngine is the palette that nhm ui palette-popup runs for c: the
