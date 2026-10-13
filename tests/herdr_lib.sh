@@ -35,7 +35,8 @@ herdr_private_stop() {
     wait "$HERDR_SERVER" 2>/dev/null || true
     HERDR_SERVER=""
   fi
-  [[ -z "$HERDR_WORK" ]] || rm -rf "$HERDR_WORK"
+  # go build makes its module cache in the private HOME read-only.
+  [[ -z "$HERDR_WORK" ]] || { chmod -R u+w "$HERDR_WORK" 2>/dev/null; rm -rf "$HERDR_WORK"; }
 }
 
 herdr_private_start() {

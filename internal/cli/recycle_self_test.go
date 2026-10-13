@@ -94,7 +94,9 @@ func TestRecycleSelfStartsAJob(t *testing.T) {
 		}) {
 		t.Fatalf("job client = %+v", c)
 	}
-	if code, out, _ := run("recycle", "--self", sock); code != exitOK || !strings.Contains(out, "end your turn now") {
+	// A prompt, not the default kickoff: ACFS's default_new_agent is not
+	// on every test host.
+	if code, out, _ := run("recycle", "--self", "--prompt", "Go on.", sock); code != exitOK || !strings.Contains(out, "end your turn now") {
 		t.Fatalf("text = %d %q", code, out)
 	}
 }
