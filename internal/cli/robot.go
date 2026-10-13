@@ -33,6 +33,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotSpawn(args) {
 		return runRobotSpawn(args, stdout, stderr)
 	}
+	if hasRobotFlag(args, "--robot-wait") {
+		return runRobotWait(args, stdout)
+	}
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -119,6 +122,16 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		reads[a.PaneID] = read
 	}
 	return robotWrite(stdout, snapshot.TailFor(one, *ws, reads, errs, *format, now), robotOK)
+}
+
+// hasRobotFlag reports whether args hold the robot flag name.
+func hasRobotFlag(args []string, name string) bool {
+	for _, a := range args {
+		if n, _, _ := strings.Cut(a, "="); n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // unknownRobotFlag returns the first --robot-* flag this nhm does not

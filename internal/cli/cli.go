@@ -93,6 +93,9 @@ Usage:
   nhm --robot-send=S --panes=P --type=K (--msg=M | --msg-file=-) --op-id=ID |
       --robot-send-receipt=OP | --robot-ack=S [--op-id=ID] [--timeout=D]
                          ntm's robot dispatch flags, ntm's types
+  nhm --robot-wait=S [--condition=idle|generating|healthy] [--timeout=D]
+      [--transition] [--exit-on-error] [--panes=P] [--type=K] [--any]
+                         wait for agents, ntm's WaitResponse
   nhm --robot-spawn=S --spawn-dir=R --spawn-cc=N --spawn-cod=N [--spawn-agy=N]
       --spawn-no-user --spawn-safety --spawn-wait [--ready-timeout=Ns] [--dry-run]
                          ntm's robot spawn, ntm's SpawnOutput

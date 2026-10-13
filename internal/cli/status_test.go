@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arosl/nhm/compat"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
@@ -444,7 +445,18 @@ func TestRobotCapabilities(t *testing.T) {
 			unavailable[m["flag"].(string)] = true
 		}
 	}
-	if !unavailable["--robot-wait"] || unavailable["--robot-status"] || unavailable["--robot-send"] || unavailable["--robot-spawn"] {
+	// Each robot row of the contract is unavailable unless implemented.
+	for _, r := range compat.Rows() {
+		form := strings.Trim(r.Form, "`")
+		if !strings.HasPrefix(form, "--robot-") {
+			continue
+		}
+		flagName, _, _ := strings.Cut(strings.Fields(form)[0], "=")
+		if unavailable[flagName] != (r.Disposition != "implemented") {
+			t.Errorf("%s: unavailable %v, but the contract says %s", flagName, unavailable[flagName], r.Disposition)
+		}
+	}
+	if unavailable["--robot-status"] || unavailable["--robot-send"] || unavailable["--robot-spawn"] || unavailable["--robot-wait"] {
 		t.Fatalf("unavailable = %v", unavailable)
 	}
 }
@@ -454,9 +466,9 @@ func TestRobotFormat(t *testing.T) {
 	if code != 1 || env.ErrorCode != "INVALID_FLAG" {
 		t.Fatalf("toon = %d %+v", code, env)
 	}
-	env, code = robotRun(t, "--robot-wait=swarm")
-	if code != 2 || env.ErrorCode != "NOT_IMPLEMENTED" || !strings.Contains(env.Hint, "nhm.wait") {
-		t.Fatalf("send = %d %+v", code, env)
+	env, code = robotRun(t, "--robot-route=swarm")
+	if code != 2 || env.ErrorCode != "NOT_IMPLEMENTED" || !strings.Contains(env.Hint, "--robot-capabilities") {
+		t.Fatalf("route = %d %+v", code, env)
 	}
 	env, code = robotRun(t, "--robot-status", "--robot-snapshot")
 	if code != 1 || env.ErrorCode != "INVALID_FLAG" {

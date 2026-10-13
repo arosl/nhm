@@ -20,6 +20,13 @@ const (
 	UntilComplete   Until = "complete"
 	UntilGenerating Until = "generating"
 	UntilHealthy    Until = "healthy"
+	// The robot form's conditions, which nhm wait does not parse
+	// (nhm-hir). ntm's idle is an agent at its prompt: herdr shows it
+	// idle, or done when nobody looked yet. ntm's healthy is any state
+	// but an error or a stall: herdr has no error state, and blocked is
+	// ntm's stall.
+	UntilWaiting   Until = "waiting"
+	UntilUnblocked Until = "unblocked"
 )
 
 // ParseUntil checks an --until value.
@@ -131,6 +138,15 @@ type Request struct {
 	Until Until
 	// AfterOp: only a state reached after the baseline counts.
 	AfterOp bool
+	// Transition is ntm's --transition: an agent that is in a target
+	// state when the wait starts must leave the target states and come
+	// back. A read in another state shows that it left, and so does a
+	// turn that herdr counted as complete after the start, when a turn
+	// leaves the target states. Without --after-op only.
+	Transition bool
+	// FailFast is ntm's --exit-on-error: the first target that cannot
+	// meet the condition any more ends the other waits.
+	FailFast bool
 	// Poll is the longest sleep between two reads of the agent.
 	Poll time.Duration
 }
@@ -158,6 +174,20 @@ type Result struct {
 // errEnough cancels the other waits once --any has its count.
 var errEnough = errors.New("wait: enough targets met the condition")
 
+// errLost cancels the other waits of a FailFast wait once one target
+// cannot meet the condition any more.
+var errLost = errors.New("wait: another target cannot meet the condition")
+
+// Lost reports an outcome after which the target never meets the
+// condition.
+func (o Outcome) Lost() bool {
+	switch o {
+	case Replaced, ContinuityLost, NotSubmitted, Failed:
+		return true
+	}
+	return false
+}
+
 // One waits for one target until the condition holds, the target is
 // replaced or loses continuity, or ctx ends. ctx's deadline is the
 // timeout.
@@ -179,6 +209,9 @@ type waiter struct {
 	r       Result
 	base    Baseline
 	started bool
+	// inTarget: a Transition wait's agent was in a target state at the
+	// start; left: it left the target states since.
+	inTarget, left bool
 }
 
 func (w *waiter) finish(o Outcome, reason string) Result {
@@ -193,10 +226,15 @@ func (w *waiter) ended(ctx context.Context) Result {
 	switch {
 	case errors.Is(cause, errEnough):
 		return w.finish(Pending, "enough other targets met the condition")
+	case errors.Is(cause, errLost):
+		return w.finish(Pending, "another target cannot meet the condition")
 	case errors.Is(cause, context.DeadlineExceeded):
 		reason := "the deadline passed"
-		if w.req.Until == UntilComplete && w.started {
+		switch {
+		case w.req.Until == UntilComplete && w.started:
 			reason += "; the turn started but did not complete"
+		case w.inTarget && !w.left:
+			reason += "; the agent did not leave the target state"
 		}
 		return w.finish(Timeout, reason)
 	default:
@@ -208,10 +246,11 @@ func (w *waiter) run(ctx context.Context, t Target) Result {
 	if w.req.AfterOp && t.Baseline == nil {
 		return w.finish(NotSubmitted, "the operation recorded no baseline for this target (receipt "+t.Submission+")")
 	}
-	// A state wait without --after-op sleeps in herdr's agent.wait. The
-	// other waits sleep on the event stream: watch first, so a change
-	// between the first read and the subscription still wakes the loop.
-	inHerdr := w.req.Until != UntilComplete && !w.req.AfterOp
+	// A state wait without --after-op or a transition sleeps in herdr's
+	// agent.wait. The other waits sleep on the event stream: watch first,
+	// so a change between the first read and the subscription still
+	// wakes the loop.
+	inHerdr := w.req.Until != UntilComplete && !w.req.AfterOp && !w.req.Transition
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var watch <-chan struct{}
@@ -235,6 +274,7 @@ func (w *waiter) run(ctx context.Context, t Target) Result {
 		if w.base, err = Capture(t.Binding, a, w.env.inode(), w.env.now()); err != nil {
 			return w.finish(Failed, err.Error())
 		}
+		w.inTarget = w.req.Transition && stateMet(w.req.Until, a.AgentStatus)
 	}
 	seq := w.base.StateChangeSeq
 	w.r.BaselineSeq = &seq
@@ -310,8 +350,19 @@ func statesFor(u Until) []herdr.AgentStatus {
 		return []herdr.AgentStatus{herdr.StatusWorking}
 	case UntilHealthy:
 		return []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusWorking}
+	case UntilWaiting:
+		return []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone}
+	case UntilUnblocked:
+		return []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusWorking, herdr.StatusUnknown}
 	}
 	return nil
+}
+
+// turnLeaves reports that a turn (working, then idle or done) leaves u's
+// target states: they hold the working state or the resting ones, not
+// both.
+func turnLeaves(u Until) bool {
+	return stateMet(u, herdr.StatusWorking) != (stateMet(u, herdr.StatusIdle) || stateMet(u, herdr.StatusDone))
 }
 
 func stateMet(u Until, s herdr.AgentStatus) bool {
@@ -380,10 +431,21 @@ func (w *waiter) check(ctx context.Context) (Result, bool) {
 	if w.req.Until == UntilComplete {
 		return w.completion(a)
 	}
-	if stateMet(w.req.Until, a.AgentStatus) && (!w.req.AfterOp || after) {
+	met := stateMet(w.req.Until, a.AgentStatus)
+	if w.inTarget && !w.left {
+		turn := a.CompletionSeq != nil && *a.CompletionSeq > w.base.StateChangeSeq
+		w.left = !met || turn && turnLeaves(w.req.Until)
+		if !w.left {
+			return Result{}, false
+		}
+	}
+	if met && (!w.req.AfterOp || after) {
 		o := Outcome(w.req.Until)
-		if w.req.Until == UntilIdle || w.req.Until == UntilDone {
+		switch w.req.Until {
+		case UntilIdle, UntilDone, UntilWaiting:
 			o = Outcome(a.AgentStatus)
+		case UntilUnblocked:
+			o = Healthy
 		}
 		return w.finish(o, ""), true
 	}
@@ -454,8 +516,9 @@ func transient(err error) bool {
 }
 
 // All waits for every target at once. With anyN > 0 it stops when anyN
-// targets met the condition; the rest are Pending. Results keep the
-// targets' order.
+// targets met the condition; the rest are Pending. With req.FailFast it
+// stops at the first target that cannot meet it; the rest are Pending.
+// Results keep the targets' order.
 func All(ctx context.Context, env Env, targets []Target, req Request, anyN int) []Result {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -471,11 +534,14 @@ func All(ctx context.Context, env Env, targets []Target, req Request, anyN int) 
 			mu.Lock()
 			defer mu.Unlock()
 			out[i] = r
-			if r.Outcome.Met() {
+			switch {
+			case r.Outcome.Met():
 				met++
 				if anyN > 0 && met >= anyN {
 					cancel(errEnough)
 				}
+			case req.FailFast && r.Outcome.Lost():
+				cancel(errLost)
 			}
 		}()
 	}
