@@ -313,10 +313,20 @@ func ActivityFor(m *Model, ws Workspace, format string, now time.Time) robot.Act
 // ntm's screen check is; a working agent has not hit one. herdr's unknown
 // is ntm's unclassified pane: healthy, at confidence 0.5. herdr gives no
 // time of last output, so idle_since_seconds stays 0. The rows come in
-// pane order.
-func HealthFor(m *Model, ws Workspace, reads map[string]herdr.PaneRead, errs map[string]error, format string, now time.Time) robot.SessionHealthOutput {
+// pane order. live gives this call's quota observations; HealthFor asks
+// for them once, and only when an agent is rate-limited.
+func HealthFor(m *Model, ws Workspace, reads map[string]herdr.PaneRead, errs map[string]error, live func() []quota.Observation,
+	format string, now time.Time) robot.SessionHealthOutput {
 	out := robot.SessionHealthOutput{RobotResponse: robot.NewResponse(true, format, now), Session: sessionName(ws),
 		CheckedAt: now.UTC(), Agents: []robot.SessionAgentHealth{}}
+	var obs []quota.Observation
+	asked := false
+	observed := func() []quota.Observation {
+		if !asked && live != nil {
+			obs, asked = live(), true
+		}
+		return obs
+	}
 	type row struct {
 		slot string
 		h    robot.SessionAgentHealth
@@ -349,7 +359,7 @@ func HealthFor(m *Model, ws Workspace, reads map[string]herdr.PaneRead, errs map
 		case limit != "":
 			// As ntm: a count and the wait, no last_error.
 			h.Health, h.RateLimitCount = robot.HealthRateLimited, 1
-			h.BackoffRemaining = backoff(m, a.Kind, now)
+			h.BackoffRemaining = backoff(observed(), a.Kind, now)
 			if x != nil {
 				x["limit"] = limit
 			}
@@ -402,21 +412,33 @@ func compareSlots(a, b string) int {
 	return sa.Pane - sb.Pane
 }
 
-// backoff is the seconds until the kind's quota pool resets: the latest
-// reset of its limited windows, as the agent waits for all of them; 0
-// when no limited window names a reset time in the future.
-func backoff(m *Model, kind string, now time.Time) int {
+// backoff is the seconds until the kind's quota pool resets, from the
+// provider's own record (ntm reads the wait from the screen): the latest
+// reset of its full windows (used 100 % or more, not yet reset), as the
+// agent waits for all of them. With a fresh limit-reached record and no
+// full window, the latest reset of its windows. 0 when the record names no
+// reset in the future.
+func backoff(obs []quota.Observation, kind string, now time.Time) int {
 	pool := kinds.Lookup(kind).QuotaPool
 	wait := 0
-	for _, q := range m.Quota {
-		if q.PoolID != pool || !q.Limited || q.ResetsAt == "" {
+	for _, o := range obs {
+		if o.Pool != pool {
 			continue
 		}
-		t, err := time.Parse(time.RFC3339, q.ResetsAt)
-		if err != nil || !t.After(now) {
-			continue
+		var full []*quota.Window
+		for _, w := range []*quota.Window{o.FiveHour, o.Weekly} {
+			if w != nil && !w.Reset && w.UsedPct != nil && *w.UsedPct >= 100 {
+				full = append(full, w)
+			}
 		}
-		wait = max(wait, int(t.Sub(now).Seconds()))
+		if len(full) == 0 && o.LimitReached != nil && !o.LimitReached.Stale {
+			full = []*quota.Window{o.FiveHour, o.Weekly}
+		}
+		for _, w := range full {
+			if w != nil && w.ResetsAt != nil && w.ResetsAt.After(now) {
+				wait = max(wait, int(w.ResetsAt.Sub(now).Seconds()))
+			}
+		}
 	}
 	return wait
 }

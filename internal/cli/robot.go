@@ -15,6 +15,7 @@ import (
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
+	"github.com/arosl/nhm/internal/integrations/quota"
 	"github.com/arosl/nhm/internal/robot"
 )
 
@@ -147,7 +148,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 			read.Text = stripControl(read.Text)
 			reads[a.PaneID] = read
 		}
-		return robotWrite(stdout, snapshot.HealthFor(one, *ws, reads, errs, *format, now), robotOK)
+		// The quota sources nhm quota reads, live, for a rate limit's wait.
+		live := func() []quota.Observation { return quota.Collect(quota.DefaultEnv(), now, nil) }
+		return robotWrite(stdout, snapshot.HealthFor(one, *ws, reads, errs, live, *format, now), robotOK)
 	}
 	reads, errs := map[string]herdr.PaneRead{}, map[string]error{}
 	for _, a := range one.Agents {

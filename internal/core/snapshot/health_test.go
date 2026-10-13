@@ -7,6 +7,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/quota"
 	"github.com/arosl/nhm/internal/robot"
 )
 
@@ -36,24 +37,23 @@ func TestHealthFor(t *testing.T) {
 			{ID: "bnd-7", WorkspaceID: "w1", PaneID: "w1:p8", Slot: "0.8", Kind: "codex"},
 			{ID: "bnd-8", WorkspaceID: "w2", PaneID: "w2:p8", Kind: "codex"}},
 		panes: map[string]bool{"w1:p9": true, "w2:p8": true},
-		// The rate-limited claude waits for the later reset of its
-		// pool's limited windows; an open window, a past reset and
-		// another pool do not count.
-		Quota: []Quota{
-			{PoolID: "claude", Window: "five_hour", Limited: true, ResetsAt: "2026-10-13T20:00:00Z"},
-			{PoolID: "claude", Window: "seven_day", Limited: true, ResetsAt: "2026-10-13T21:00:00Z"},
-			{PoolID: "claude", Window: "seven_day_opus", Limited: false, ResetsAt: "2026-10-14T19:00:00Z"},
-			{PoolID: "claude", Window: "old", Limited: true, ResetsAt: "2026-10-13T18:00:00Z"},
-			{PoolID: "codex", Window: "five_hour", Limited: true, ResetsAt: "2026-10-14T19:00:00Z"},
-		},
+	}
+	// The rate-limited claude waits for its full five-hour window, as the
+	// provider's record says; the weekly window is not full.
+	now := time.Date(2026, 10, 13, 19, 0, 0, 0, time.UTC)
+	asked := 0
+	live := func() []quota.Observation {
+		asked++
+		return []quota.Observation{{Pool: "claude", Kind: "claude",
+			FiveHour: &quota.Window{UsedPct: pct(100), ResetsAt: at(now.Add(2 * time.Hour))},
+			Weekly:   &quota.Window{UsedPct: pct(40), ResetsAt: at(now.Add(72 * time.Hour))}}}
 	}
 	reads := map[string]herdr.PaneRead{
 		"w1:p2": {Text: limitScreen}, "w1:p3": {Text: limitScreen}, "w1:p4": {Text: limitScreen},
 		"w1:p1": {Text: "❯ \n"}, "w1:p6": {Text: "❯ \n"},
 	}
 	errs := map[string]error{"w1:p7": errors.New("agent_not_found")}
-	now := time.Date(2026, 10, 13, 19, 0, 0, 0, time.UTC)
-	out := HealthFor(m, Workspace{ID: "w1", Label: "swarm"}, reads, errs, "json", now)
+	out := HealthFor(m, Workspace{ID: "w1", Label: "swarm"}, reads, errs, live, "json", now)
 	want := []struct {
 		target, health string
 		conf           float64
@@ -83,5 +83,47 @@ func TestHealthFor(t *testing.T) {
 	s := out.Summary
 	if s.Total != 8 || s.Healthy != 5 || s.Blocked != 1 || s.RateLimited != 1 || s.Degraded != 0 || s.Unhealthy != 1 {
 		t.Errorf("summary = %+v", s)
+	}
+	// The quota sources are read once, and not at all without a limit.
+	HealthFor(m, Workspace{ID: "w2"}, nil, nil, live, "json", now)
+	if asked != 1 {
+		t.Errorf("the live quota was read %d times", asked)
+	}
+}
+
+func pct(v float64) *float64    { return &v }
+func at(t time.Time) *time.Time { return &t }
+func ago(d time.Duration) *time.Time {
+	return at(time.Date(2026, 10, 13, 19, 0, 0, 0, time.UTC).Add(-d))
+}
+
+// A rate limit's wait comes from the provider's record: the latest reset
+// of the full windows; with a fresh limit-reached record and no full
+// window, the latest reset of any window; else 0 (review of af6ef1a).
+func TestBackoff(t *testing.T) {
+	now := time.Date(2026, 10, 13, 19, 0, 0, 0, time.UTC)
+	in := func(d time.Duration) *time.Time { return at(now.Add(d)) }
+	fresh := &quota.Limit{Type: "five_hour", ObservedAt: now}
+	for _, c := range []struct {
+		name string
+		obs  quota.Observation
+		want int
+	}{
+		{"the full window", quota.Observation{Pool: "claude",
+			FiveHour: &quota.Window{UsedPct: pct(100), ResetsAt: in(time.Hour)}, Weekly: &quota.Window{UsedPct: pct(10), ResetsAt: in(48 * time.Hour)}}, 3600},
+		{"both full: the later", quota.Observation{Pool: "claude",
+			FiveHour: &quota.Window{UsedPct: pct(100), ResetsAt: in(time.Hour)}, Weekly: &quota.Window{UsedPct: pct(100), ResetsAt: in(2 * time.Hour)}}, 7200},
+		{"a reset window does not count", quota.Observation{Pool: "claude",
+			FiveHour: &quota.Window{UsedPct: pct(100), ResetsAt: ago(time.Minute), Reset: true}}, 0},
+		{"limit reached, no full window", quota.Observation{Pool: "claude", LimitReached: fresh,
+			FiveHour: &quota.Window{UsedPct: pct(80), ResetsAt: in(time.Hour)}, Weekly: &quota.Window{ResetsAt: in(3 * time.Hour)}}, 10800},
+		{"a stale limit record", quota.Observation{Pool: "claude", LimitReached: &quota.Limit{Stale: true},
+			FiveHour: &quota.Window{UsedPct: pct(80), ResetsAt: in(time.Hour)}}, 0},
+		{"another pool", quota.Observation{Pool: "codex",
+			FiveHour: &quota.Window{UsedPct: pct(100), ResetsAt: in(time.Hour)}}, 0},
+	} {
+		if got := backoff([]quota.Observation{c.obs}, "claude", now); got != c.want {
+			t.Errorf("%s: backoff = %d, want %d", c.name, got, c.want)
+		}
 	}
 }
