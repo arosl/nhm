@@ -30,7 +30,7 @@ func fakeJobs(t *testing.T, sock string, code, msg, result string) runner.Client
 job="$3"; dir=$(dirname "$job"); id=$(basename "$job" .job.json)
 cp "$job" "$dir/$id.seen"
 [ "$FAKE_CODE" = none ] && exit 0
-printf '{"version":1,"id":"%s","verb":"x","code":%s,"error":"%s","result":%s}\n' "$id" "$FAKE_CODE" "$FAKE_ERROR" "$FAKE_RESULT" > "$dir/$id.tmp"
+printf '{"version":1,"id":"%s","verb":"x","code":%s,"error":"%s","unknown":%s,"result":%s}\n' "$id" "$FAKE_CODE" "$FAKE_ERROR" "${FAKE_UNKNOWN:-false}" "$FAKE_RESULT" > "$dir/$id.tmp"
 mv "$dir/$id.tmp" "$dir/$id.result.json"
 `
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
@@ -93,6 +93,19 @@ func TestUIJobLostAndNotStarted(t *testing.T) {
 	res, err = uiRun(context.Background(), jobs, runner.VerbSend, "op-gone", send.Request{}, nil, func(r *send.Result) *string { return &r.OperationID })
 	if err == nil || errors.As(err, &lost) || errors.Is(err, actions.ErrNoAnswer) || res.OperationID != "" {
 		t.Fatalf("a job that did not start = %+v %v", res, err)
+	}
+}
+
+// A job that stopped after its claim (a panic or a signal) is unknown
+// under its id, never "nothing ran" (the palette review's row 4).
+func TestUIJobStopped(t *testing.T) {
+	jobs := fakeJobs(t, "/run/herdr.sock", "1", "send stopped on an internal error", "null")
+	jobs.Env = append(jobs.Env, "FAKE_UNKNOWN=true")
+	res, err := uiRun(context.Background(), jobs, runner.VerbSend, "op-stop", send.Request{}, nil, func(r *send.Result) *string { return &r.OperationID })
+	var lost *uiLostError
+	if !errors.As(err, &lost) || res.OperationID != "op-stop" || !errors.Is(err, actions.ErrNoAnswer) ||
+		!strings.Contains(err.Error(), "internal error") {
+		t.Fatalf("stopped job = %+v %v", res, err)
 	}
 }
 

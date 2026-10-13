@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,8 +50,38 @@ func runJob(path string, stdout, stderr io.Writer) int {
 	// pane that started it.
 	signal.Ignore(syscall.SIGHUP)
 	res := runner.Result{ID: j.ID, Verb: j.Verb, StartedAt: time.Now().UTC()}
-	v, code, err := runJobVerb(j)
-	res.Code = code
+	// One result per job: the verb's, or the one a signal writes.
+	var once sync.Once
+	finish := func(r runner.Result) (err error) {
+		err = errors.New("the job's result was written before")
+		once.Do(func() { err = runner.Finish(dir, r) })
+		return err
+	}
+	// A signal that stops the job after its claim ends it with an unknown
+	// outcome: some of its effects may have happened.
+	// The handler ends with runJob (in tests it runs in process).
+	sigs, ended := make(chan os.Signal, 1), make(chan struct{})
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
+	defer func() {
+		signal.Stop(sigs)
+		close(ended)
+	}()
+	go func(r runner.Result) {
+		var s os.Signal
+		select {
+		case s = <-sigs:
+		case <-ended:
+			return
+		}
+		r.Code, r.Unknown, r.EndedAt = exitError, true, time.Now().UTC()
+		r.Error = fmt.Sprintf("%s stopped on %v after its claim; its outcome is unknown: recent operations shows its record", j.Verb, s)
+		if err := finish(r); err == nil {
+			fmt.Fprintf(stderr, "nhm ui run: %s\n", r.Error)
+		}
+		os.Exit(exitError)
+	}(res)
+	v, code, unknown, err := runJobVerb(j)
+	res.Code, res.Unknown = code, unknown
 	if err != nil {
 		res.Error = err.Error()
 	}
@@ -61,7 +93,7 @@ func runJob(path string, stdout, stderr io.Writer) int {
 		res.Result = data
 	}
 	res.EndedAt = time.Now().UTC()
-	if err := runner.Finish(dir, res); err != nil {
+	if err := finish(res); err != nil {
 		fmt.Fprintf(stderr, "nhm ui run: %s: %v\n", j.ID, err)
 		return exitError
 	}
@@ -73,26 +105,29 @@ func runJob(path string, stdout, stderr io.Writer) int {
 }
 
 // runJobVerb runs the job's verb in the job's directory, with the nhm
-// instance of the job's socket. A panic ends the job with an error, so
-// its result is still written.
-func runJobVerb(j runner.Job) (v any, code int, err error) {
+// instance of the job's socket. A panic in the verb ends the job with an
+// error and an unknown outcome (some effects may have happened), so its
+// result is still written and never reads as "nothing ran".
+func runJobVerb(j runner.Job) (v any, code int, unknown bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			v, code, err = nil, exitError, fmt.Errorf("%s stopped on an internal error: %v", j.Verb, r)
+			v, code, unknown = nil, exitError, true
+			err = fmt.Errorf("%s stopped on an internal error: %v; its outcome is unknown: recent operations shows its record", j.Verb, r)
 		}
 	}()
 	f, ok := jobVerbs[j.Verb]
 	if !ok {
-		return nil, exitRefused, fmt.Errorf("this nhm runs no %q job", j.Verb)
+		return nil, exitRefused, false, fmt.Errorf("this nhm runs no %q job", j.Verb)
 	}
 	// Verbs find their project from the cwd, as when typed in the pane.
 	if err := os.Chdir(j.Dir); err != nil {
-		return nil, exitRefused, fmt.Errorf("the job's directory: %w", err)
+		return nil, exitRefused, false, fmt.Errorf("the job's directory: %w", err)
 	}
 	ie, err := openInstance(j.Socket)
 	if err != nil {
-		return nil, exitError, err
+		return nil, exitError, false, err
 	}
 	defer ie.db.Close()
-	return f(context.Background(), ie, j)
+	v, code, err = f(context.Background(), ie, j)
+	return v, code, false, err
 }

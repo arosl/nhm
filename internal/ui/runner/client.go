@@ -60,7 +60,10 @@ func (c Client) Run(ctx context.Context, verb, id string, req any) (Result, erro
 	return c.Wait(ctx, id)
 }
 
-// Wait waits for a job's result.
+// Wait waits for a job's result. A claimed job whose process ended
+// without one is ErrGone. A job that nhm ui run did not claim within
+// ClaimTimeout of its creation is voided, and Wait returns that result:
+// nothing ran.
 func (c Client) Wait(ctx context.Context, id string) (Result, error) {
 	t := time.NewTicker(WaitPoll)
 	defer t.Stop()
@@ -71,6 +74,9 @@ func (c Client) Wait(ctx context.Context, id string) (Result, error) {
 		}
 		if ok {
 			return r, nil
+		}
+		if r, done, err := c.check(id); done {
+			return r, err
 		}
 		select {
 		case <-ctx.Done():

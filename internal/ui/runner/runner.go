@@ -139,6 +139,10 @@ type Result struct {
 	// Code is the CLI verb's exit code: 0 done, 1 an error, 2 refused.
 	Code  int    `json:"code"`
 	Error string `json:"error,omitempty"`
+	// Unknown is a job that stopped after its claim (a panic or a signal):
+	// some of its effects may have happened, so its outcome is unknown
+	// until its record is read.
+	Unknown bool `json:"unknown,omitempty"`
 	// Result is the core's result, as the verb's --json prints it.
 	Result    json.RawMessage `json:"result,omitempty"`
 	StartedAt time.Time       `json:"started_at"`
@@ -259,7 +263,7 @@ func Claim(dir, id string) error {
 	if err != nil {
 		return fmt.Errorf("runner: claim %s: %w", id, err)
 	}
-	_, err = fmt.Fprintf(f, "%d\n", os.Getpid())
+	_, err = f.WriteString(claimLine())
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -305,6 +309,9 @@ type Entry struct {
 	Claimed bool
 	// Result is nil while the job has none.
 	Result *Result
+	// Gone is a claimed job with no result whose process has ended: its
+	// outcome is unknown.
+	Gone bool
 }
 
 // List lists the newest jobs, newest first; limit <= 0 is 20. A file
@@ -327,12 +334,16 @@ func List(dir string, limit int) ([]Entry, error) {
 		if json.Unmarshal(data, &j) != nil || j.Check() != nil {
 			continue
 		}
-		e := Entry{Job: j}
-		if _, err := os.Stat(claimPath(dir, j.ID)); err == nil {
-			e.Claimed = true
-		}
+		e := Entry{Job: j, Claimed: Claimed(dir, j.ID)}
 		if r, ok, err := Read(dir, j.ID); err == nil && ok {
 			e.Result = &r
+		} else if e.Claimed && Gone(dir, j.ID) {
+			// It may have written its result just before it ended.
+			if r, ok, err := Read(dir, j.ID); err == nil && ok {
+				e.Result = &r
+			} else {
+				e.Gone = true
+			}
 		}
 		out = append(out, e)
 	}

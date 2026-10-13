@@ -216,6 +216,10 @@ func uiJob(ctx context.Context, jobs runner.Client, verb, id string, req, out an
 			return &uiLostError{ID: id, Err: fmt.Errorf("its result cannot be read: %w", err)}
 		}
 	}
+	if r.Unknown {
+		// It stopped after its claim: some effects may have happened.
+		return &uiLostError{ID: id, Err: errors.New(r.Error)}
+	}
 	if r.Error == "" {
 		return nil
 	}
@@ -242,7 +246,7 @@ type uiLostError struct {
 }
 
 func (e *uiLostError) Error() string {
-	return fmt.Sprintf("operation %s: no answer (%v); it may run on: recent operations shows its record", e.ID, e.Err)
+	return fmt.Sprintf("operation %s: its outcome is unknown (%v): recent operations shows its record", e.ID, e.Err)
 }
 
 func (e *uiLostError) Unwrap() error { return e.Err }

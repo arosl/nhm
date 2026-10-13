@@ -217,6 +217,8 @@ func rowsOf(ops []lifecycle.RecentOperation, jobs []runner.Entry, now time.Time,
 				if op.Completed == nil {
 					r.State = OpUnknown
 				}
+			} else if e.Gone && op.Completed == nil {
+				r.State, r.Detail = OpUnknown, goneDetail
 			}
 		}
 		for _, t := range op.Targets {
@@ -236,11 +238,19 @@ func rowsOf(ops []lifecycle.RecentOperation, jobs []runner.Entry, now time.Time,
 	return rows
 }
 
+// goneDetail is a job whose process ended without a result.
+const goneDetail = "its job ended without a result: a kill, a crash or a full disk; its outcome is unknown"
+
 // jobRow is a UI job with no record of its own.
 func jobRow(e runner.Entry, now time.Time) OperationRow {
 	r := OperationRow{ID: e.Job.ID, Verb: clean(e.Job.Verb), Created: e.Job.CreatedAt, Updated: e.Job.CreatedAt,
 		Workspace: workspaceOf(e.Job.Request), Job: e.Result}
 	switch {
+	case e.Result != nil && e.Result.Unknown:
+		// It stopped after its claim: some effects may have happened.
+		r.State, r.Status, r.Updated, r.Detail = OpUnknown, "stopped", e.Result.EndedAt, clean(e.Result.Error)
+	case e.Gone:
+		r.State, r.Status, r.Detail = OpUnknown, "no result", goneDetail
 	case e.Result != nil:
 		r.State, r.Completed, r.Updated, r.Detail = OpFinal, &e.Result.EndedAt, e.Result.EndedAt, clean(e.Result.Error)
 		switch e.Result.Code {

@@ -96,6 +96,36 @@ func TestOperationsRows(t *testing.T) {
 	}
 }
 
+// A job that stopped after its claim, or whose process ended without a
+// result, is unknown: with an open record of its own, and without one
+// (the review's M2).
+func TestOperationsGone(t *testing.T) {
+	now := time.Now()
+	ops := []lifecycle.RecentOperation{{OperationID: "op-s", Verb: "send", Status: "dispatching",
+		CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+	stopped := runner.Result{ID: "op-w", Code: runner.CodeError, Unknown: true, Error: "wake stopped on terminated", EndedAt: now}
+	jobs := []runner.Entry{
+		{Job: runner.Job{ID: "op-s", Verb: runner.VerbSend, CreatedAt: now.Add(-time.Minute)}, Claimed: true, Gone: true},
+		{Job: runner.Job{ID: "op-w", Verb: runner.VerbWake, CreatedAt: now.Add(-2 * time.Minute)}, Claimed: true, Result: &stopped},
+		{Job: runner.Job{ID: "op-r", Verb: runner.VerbReap, CreatedAt: now.Add(-3 * time.Minute)}, Claimed: true, Gone: true},
+	}
+	v := NewOperationsView(&fakeOps{answers: [][]lifecycle.RecentOperation{ops}, jobs: jobs}, 0, func() time.Time { return now })
+	v.Update(do(t, v.Init()))
+	byID := map[string]OperationRow{}
+	for _, r := range v.Rows() {
+		byID[r.ID] = r
+	}
+	if r := byID["op-s"]; r.State != OpUnknown || r.Status != "dispatching" || r.Detail != goneDetail {
+		t.Fatalf("send whose job is gone = %+v", r)
+	}
+	if r := byID["op-w"]; r.State != OpUnknown || r.Status != "stopped" || r.Detail != stopped.Error || r.Completed != nil {
+		t.Fatalf("stopped wake = %+v", r)
+	}
+	if r := byID["op-r"]; r.State != OpUnknown || r.Status != "no result" || r.Detail != goneDetail {
+		t.Fatalf("reap whose job is gone = %+v", r)
+	}
+}
+
 // The selection follows the operation when a newer one arrives; a stale
 // tick is dropped; one read runs at a time.
 func TestOperationsRefresh(t *testing.T) {

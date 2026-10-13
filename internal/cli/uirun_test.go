@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -81,6 +83,64 @@ func TestUIRunRunsAJobOnce(t *testing.T) {
 	}
 	if again := jobResult(t, path, j); again.Code != 0 || !again.EndedAt.Equal(r.EndedAt) {
 		t.Fatalf("the second run changed the result: %+v", again)
+	}
+}
+
+// A verb that panics after the claim ends its job with an unknown
+// outcome: some effects may have happened, so it never reads as
+// "nothing ran" (the palette review's row 4).
+func TestUIRunPanicIsUnknown(t *testing.T) {
+	t.Chdir(t.TempDir())
+	s, _, _ := newSendInstance(t)
+	jobVerbs["test.panic"] = func(context.Context, *instanceEnv, runner.Job) (any, int, error) { panic("boom") }
+	t.Cleanup(func() { delete(jobVerbs, "test.panic") })
+	j, path := writeJob(t, "test.panic", s.SocketPath, t.TempDir(), nil)
+	if code, _, _ := run("ui", "run", path); code != exitError {
+		t.Fatalf("ui run = %d", code)
+	}
+	if r := jobResult(t, path, j); !r.Unknown || r.Code != exitError || !strings.Contains(r.Error, "boom") || !strings.Contains(r.Error, "unknown") {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+// A job that SIGTERM stops after its claim writes a result with an
+// unknown outcome before it exits. The test binary runs the job in a
+// child process, whose verb blocks once it has started.
+func TestUIRunSignalIsUnknown(t *testing.T) {
+	if path := os.Getenv("NHM_TEST_UIRUN_SIGNAL"); path != "" {
+		jobVerbs["test.block"] = func(context.Context, *instanceEnv, runner.Job) (any, int, error) {
+			_ = os.WriteFile(path+".started", nil, 0o600)
+			time.Sleep(time.Minute)
+			return nil, exitOK, nil
+		}
+		os.Exit(runJob(path, os.Stdout, os.Stderr))
+	}
+	t.Chdir(t.TempDir())
+	s, _, _ := newSendInstance(t)
+	j, path := writeJob(t, "test.block", s.SocketPath, t.TempDir(), nil)
+	child := exec.Command(os.Args[0], "-test.run=^TestUIRunSignalIsUnknown$")
+	child.Env = append(os.Environ(), "NHM_TEST_UIRUN_SIGNAL="+path)
+	var out strings.Builder
+	child.Stdout, child.Stderr = &out, &out
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		if _, err := os.Stat(path + ".started"); err == nil {
+			break
+		}
+		if i == 100 {
+			_ = child.Process.Kill()
+			t.Fatalf("the job's verb did not start: %s", out.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	_ = child.Wait()
+	if r := jobResult(t, path, j); !r.Unknown || r.Code != exitError || !strings.Contains(r.Error, "terminated") {
+		t.Fatalf("result = %+v\n%s", r, out.String())
 	}
 }
 
