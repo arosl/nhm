@@ -212,6 +212,30 @@ func TestOpenForHookNeverMigratesAndWaitsBriefly(t *testing.T) {
 	}
 }
 
+// A step's id is a valid operation id even when its parent's is as long
+// as allowed (nhm-ceu: kill --op-id of 128 characters made each retire's
+// id too long), and the same parent and step give the same id.
+func TestChildOperationID(t *testing.T) {
+	if got := ChildOperationID("op-kill-1", 2); got != "op-kill-1.2" {
+		t.Errorf("short = %q", got)
+	}
+	long := "op-" + strings.Repeat("k", maxOperationID-3)
+	other := long[:maxOperationID-1] + "x"
+	seen := map[string]bool{}
+	for _, parent := range []string{long, other} {
+		if !operationIDPattern.MatchString(parent) {
+			t.Fatalf("test parent %q is not a valid id", parent)
+		}
+		for i := range 12 {
+			id := ChildOperationID(parent, i)
+			if !operationIDPattern.MatchString(id) || id != ChildOperationID(parent, i) || seen[id] {
+				t.Errorf("ChildOperationID(%d chars, %d) = %q (%d chars)", len(parent), i, id, len(id))
+			}
+			seen[id] = true
+		}
+	}
+}
+
 func TestBindingUniqueness(t *testing.T) {
 	inst := enroll(t)
 	db, err := Open(inst.Dir)

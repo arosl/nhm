@@ -488,7 +488,7 @@ func KillWith(ctx context.Context, env Env, req KillRequest) (KillResult, error)
 		// The generation the checks saw: an agent recycled since is
 		// refused, never retired unchecked.
 		r, err := Retire(ctx, env, RetireRequest{Target: b.ID, Reason: "kill", NoBeads: noBeads || b.Role == spawn.RoleReviewer,
-			OperationID: fmt.Sprintf("%s.%d", opID, i), ExpectedGeneration: b.Generation})
+			OperationID: store.ChildOperationID(opID, i), ExpectedGeneration: b.Generation})
 		res.Agents = append(res.Agents, r)
 		status := KillRetired
 		switch {

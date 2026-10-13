@@ -49,6 +49,25 @@ func TestKillWithACallersOperationID(t *testing.T) {
 	}
 }
 
+// A kill id as long as an operation id may be still gives each retire a
+// valid id (nhm-ceu), so kill retires every agent and closes.
+func TestKillWithTheLongestOperationID(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
+	w.bind(t, "BlueLake", "w1:p2", herdr.StatusIdle)
+	id := "op-" + strings.Repeat("m", 125)
+	res, err := KillWith(ctx, w.env, KillRequest{WorkspaceID: "w1", Yes: true, OperationID: id})
+	if err != nil || !res.Closed || len(res.Agents) != 2 || len(w.h.closed) != 2 {
+		t.Fatalf("kill = %+v %v", res, err)
+	}
+	for i, r := range res.Agents {
+		if r.OperationID != store.ChildOperationID(id, i) {
+			t.Errorf("retire %d ran as %q", i, r.OperationID)
+		}
+	}
+}
+
 // An id that another verb holds is refused, and nothing runs.
 func TestKillRefusesAnIDInUse(t *testing.T) {
 	w := newWorld(t)

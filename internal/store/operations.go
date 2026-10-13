@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -51,7 +52,25 @@ type Claim struct {
 	Existing  bool
 }
 
+// maxOperationID is the longest operation id (operationIDPattern).
+const maxOperationID = 128
+
 var operationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+
+// ChildOperationID is the id of an operation that a valid operation id
+// parent runs as its step i (kill retires each agent under one): parent.i,
+// or, when that would be too long, a prefix of parent, the first 16 hex
+// digits of parent's SHA-256, and i. The same parent and i give the same
+// id, so a retry finds its steps.
+func ChildOperationID(parent string, i int) string {
+	id := parent + "." + strconv.Itoa(i)
+	if len(id) <= maxOperationID {
+		return id
+	}
+	sum := sha256.Sum256([]byte(parent))
+	tail := "." + hex.EncodeToString(sum[:])[:16] + "." + strconv.Itoa(i)
+	return parent[:maxOperationID-len(tail)] + tail
+}
 
 // NewOperationID returns a fresh, sortable operation id.
 func NewOperationID(now time.Time) (string, error) {

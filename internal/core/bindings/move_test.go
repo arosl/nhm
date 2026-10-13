@@ -3,6 +3,7 @@ package bindings
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/arosl/nhm/internal/herdr"
@@ -141,9 +142,12 @@ func TestMovedFindsTheSameProcess(t *testing.T) {
 	}
 }
 
-// Without a recorded process, the native session decides; two panes
-// with it are ambiguous.
-func TestMovedBySessionAndAmbiguity(t *testing.T) {
+// Without a recorded process nothing proves a move: a pane with the
+// binding's session may hold a resume in a new process (nhm-ceu), so it
+// is named for adopt --handoff-from and the binding stays. Two panes
+// with the binding's process are ambiguous.
+func TestMovedNeedsTheProcess(t *testing.T) {
+	fakeProcStart(t, map[int64]int64{300: 77})
 	_, s := openStore(t)
 	ctx := context.Background()
 	n := newBinding("IcyKnoll", "/p", "w1", "w1:t1", "w1:p1")
@@ -152,17 +156,18 @@ func TestMovedBySessionAndAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a, ok, err := Moved(ctx, moveSession(), s, b); err != nil || !ok || a.PaneID != "w2:p1" {
-		t.Fatalf("by session = %+v %v %v", a, ok, err)
+	_, ok, err := Moved(ctx, moveSession(), s, b)
+	if ok || !errors.Is(err, ErrUnprovenMove) || !strings.Contains(err.Error(), "w2:p1") || !strings.Contains(err.Error(), "--handoff-from "+b.ID) {
+		t.Fatalf("session only: %v %v", ok, err)
 	}
-	h := moveSession(herdr.AgentInfo{PaneID: "w3:p1", TabID: "w3:t1", WorkspaceID: "w3", Agent: "claude",
-		AgentSession: &herdr.AgentSession{Value: "sess-9"}})
-	if _, ok, err := Moved(ctx, h, s, b); ok || !errors.Is(err, ErrAmbiguousMove) {
-		t.Fatalf("two candidates: %v %v", ok, err)
-	}
-	// A binding with neither process nor session proves nothing.
 	b.NativeSession = nil
 	if _, ok, err := Moved(ctx, moveSession(), s, b); ok || err != nil {
 		t.Fatalf("no evidence: %v %v", ok, err)
+	}
+	b.ForegroundPID, b.ForegroundStart = 300, 77
+	h := moveSession(herdr.AgentInfo{PaneID: "w3:p1", TabID: "w3:t1", WorkspaceID: "w3", Agent: "claude"})
+	h.procs["w3:p1"] = []herdr.Process{{PID: 300, Name: "claude"}}
+	if _, ok, err := Moved(ctx, h, s, b); ok || !errors.Is(err, ErrAmbiguousMove) {
+		t.Fatalf("two candidates: %v %v", ok, err)
 	}
 }

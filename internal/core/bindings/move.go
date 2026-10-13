@@ -14,6 +14,11 @@ import (
 // agent, so nhm moves the binding to none of them.
 var ErrAmbiguousMove = errors.New("bindings: more than one pane holds the moved agent")
 
+// ErrUnprovenMove means a binding with no recorded process lost its
+// pane while another pane holds its native session: that may be a move
+// or a resume in a new process, and only the process tells them apart.
+var ErrUnprovenMove = errors.New("bindings: no recorded process to prove a move")
+
 // Location is where a binding's agent lives in herdr.
 type Location struct {
 	WorkspaceID string
@@ -73,11 +78,12 @@ func (s *Store) Relocate(ctx context.Context, id string, expected int64, to Loca
 // Moved finds an active binding's agent after herdr moved its pane to
 // another workspace, which gives the pane a new id (nhm-p1o). It answers
 // only when the binding's pane has left herdr's session and exactly one
-// pane with no active binding holds the same agent: the same kind, and
-// the same process (pid and start time), or, when the binding has no
-// process, the same native session. A new process is a new occupant
-// (adopt --handoff-from), never a move. ok is false when the pane is
-// still there (its agent left) or no pane matches.
+// pane with no active binding holds the same agent: the same kind and
+// the same process (pid and start time). A new process is a new occupant
+// (adopt --handoff-from), never a move. A binding with no recorded
+// process proves no move (nhm-ceu): a pane with its native session gives
+// ErrUnprovenMove, naming the panes. ok is false when the pane is still
+// there (its agent left) or no pane matches.
 func Moved(ctx context.Context, h Herdr, s *Store, b Binding) (agent herdr.AgentInfo, ok bool, err error) {
 	snap, err := h.Snapshot(ctx)
 	if err != nil {
@@ -101,15 +107,18 @@ func Moved(ctx context.Context, h Herdr, s *Store, b Binding) (agent herdr.Agent
 			found = append(found, a)
 		}
 	}
-	switch len(found) {
-	case 0:
-		return herdr.AgentInfo{}, false, nil
-	case 1:
-		return found[0], true, nil
-	}
 	panes := make([]string, len(found))
 	for i, a := range found {
 		panes[i] = a.PaneID
+	}
+	switch {
+	case len(found) == 0:
+		return herdr.AgentInfo{}, false, nil
+	case b.ForegroundPID == 0:
+		return herdr.AgentInfo{}, false, fmt.Errorf("%w: %s holds %s's session; if it is the same agent, nhm adopt %s --pane PANE --handoff-from %s",
+			ErrUnprovenMove, strings.Join(panes, ", "), b.MailName, b.MailName, b.ID)
+	case len(found) == 1:
+		return found[0], true, nil
 	}
 	return herdr.AgentInfo{}, false, fmt.Errorf("%w: %s could be in %s", ErrAmbiguousMove, b.MailName, strings.Join(panes, ", "))
 }
