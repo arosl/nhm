@@ -17,7 +17,6 @@ import (
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
-	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/runner"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
@@ -153,7 +152,10 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 	}
 
 	ws := c.WorkspaceID
-	sub := palette.NewSubmitter(paletteSender(core), paletteReader(ie.db, jobs), paletteMemory(base.ProjectRoot),
+	// uiCore's send keeps the outcome honest: a lost answer names the
+	// operation (uiLostError), so the palette shows "unknown"; a job that
+	// did not start, or the core's refusal before its claim, names none.
+	sub := palette.NewSubmitter(core.Send, paletteReader(ie.db, jobs), paletteMemory(base.ProjectRoot),
 		func() (string, error) { return store.NewOperationID(time.Now()) })
 	model := palette.NewWithOptions(label, cmds, palette.Options{
 		PaletteState: state,
@@ -191,23 +193,6 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return exitOK
-}
-
-// paletteSender is the palette's send: uiCore's, as a runner job. When
-// the job's answer does not come back (the wait ended, the result file
-// does not read), the send may have happened: the result names the
-// operation, so the palette shows it as unknown, never as "nothing was
-// sent". A job that answered with an error (uiJobError) keeps the core's
-// own result: no operation id means the core refused before its claim.
-func paletteSender(core actions.Core) palette.Sender {
-	return func(ctx context.Context, req send.Request) (send.Result, error) {
-		res, err := core.Send(ctx, req)
-		var jerr *uiJobError
-		if err != nil && res.OperationID == "" && !errors.As(err, &jerr) {
-			res.OperationID = req.OperationID
-		}
-		return res, err
-	}
 }
 
 // paletteReader reads what the core recorded for a send. With no record

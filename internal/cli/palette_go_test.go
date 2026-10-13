@@ -14,32 +14,30 @@ import (
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/store"
-	"github.com/arosl/nhm/internal/ui/actions"
+	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/runner"
 )
 
-// A job that answered keeps the core's result; an answer that did not
-// come back names the operation, so the palette shows it as unknown.
-func TestPaletteSenderKeepsALostAnswerUnknown(t *testing.T) {
-	answer := func(res send.Result, err error) actions.Core {
-		return actions.Core{Send: func(context.Context, send.Request) (send.Result, error) { return res, err }}
-	}
-	req := send.Request{OperationID: "op-1"}
+// uiCore's send answers in the shapes the palette classifies: a lost
+// answer names the operation (unknown, never resent); a job that did not
+// start, or the core's refusal before its claim, names none (nothing was
+// sent); an unfilled variable is read from the refusal's text.
+func TestPaletteOutcomesOfUICoresSend(t *testing.T) {
 	cases := []struct {
-		name   string
-		core   actions.Core
-		wantID string
+		name string
+		res  send.Result
+		err  error
+		want palette.Outcome
 	}{
-		{"refused before the claim", answer(send.Result{}, &uiJobError{Code: exitRefused, Message: "no agent matches"}), ""},
-		{"the wait ended", answer(send.Result{}, context.DeadlineExceeded), "op-1"},
-		{"the result did not read", answer(send.Result{}, errors.New("runner: result op-1: bad json")), "op-1"},
-		{"claimed, then failed", answer(send.Result{OperationID: "op-1"}, &uiJobError{Code: exitError, Message: "receipt"}), "op-1"},
-		{"answered", answer(send.Result{OperationID: "op-1"}, nil), "op-1"},
+		{"answered", send.Result{OperationID: "op-1"}, nil, palette.Answered},
+		{"the wait ended", send.Result{OperationID: "op-1"}, &uiLostError{ID: "op-1", Err: context.DeadlineExceeded}, palette.Unknown},
+		{"the job did not start", send.Result{}, errors.New("runner: start: no such file"), palette.Refused},
+		{"refused before the claim", send.Result{}, &uiJobError{Code: exitRefused, Message: "no agent matches the selection"}, palette.Refused},
+		{"claimed, then failed", send.Result{OperationID: "op-1"}, &uiJobError{Code: exitError, Message: "receipt"}, palette.Unknown},
 	}
 	for _, c := range cases {
-		res, _ := paletteSender(c.core)(context.Background(), req)
-		if res.OperationID != c.wantID {
-			t.Errorf("%s: operation id %q, want %q", c.name, res.OperationID, c.wantID)
+		if got := (palette.SubmitMsg{Result: c.res, Err: c.err}).Outcome(); got != c.want {
+			t.Errorf("%s: outcome %v, want %v", c.name, got, c.want)
 		}
 	}
 }
