@@ -87,7 +87,8 @@ func runKill(ctx context.Context, core Core, req Request) (Result, error) {
 		case len(a.Refusals) > 0:
 			tr.Status, tr.Reason = "refused", strings.Join(a.Refusals, "; ")
 		case a.DryRun:
-			tr.Status, tr.Reason = "checked", strings.Join(a.Actions, "; ")
+			// nhm retire --dry-run's word: the checks passed.
+			tr.Status, tr.Reason = "would retire", strings.Join(a.Actions, "; ")
 		case a.Done:
 			tr.Status = "retired"
 		default:

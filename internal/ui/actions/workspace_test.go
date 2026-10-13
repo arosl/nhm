@@ -69,7 +69,7 @@ func TestKillReviewThenTypedLabel(t *testing.T) {
 		Agents: []lifecycle.RetireResult{{MailName: "IcyKnoll", BindingID: "b1", DryRun: true, Actions: []string{"close pane w1:p1"}}}},
 		err: fmt.Errorf("%w: give --yes", lifecycle.ErrRefused)}
 	res, err := do(t, "workspace.kill", w.core(), Request{Context: ctxKill, Params: map[string]string{ParamDryRun: "1"}})
-	if err != nil || res.Status != "checked" || len(res.Targets) != 1 || res.Targets[0].Status != "checked" {
+	if err != nil || res.Status != "checked" || len(res.Targets) != 1 || res.Targets[0].Status != "would retire" {
 		t.Fatalf("review = %+v %v", res, err)
 	}
 	if k := w.kills[0]; k.Yes || k.OperationID != "" || k.WorkspaceID != "w1" {

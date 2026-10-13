@@ -214,7 +214,7 @@ func TestKillThroughTheMenu(t *testing.T) {
 	if _, ok := m.open.(*killScreen); !ok || len(fc.kills) != 1 || fc.kills[0].Yes {
 		t.Fatalf("kill review: open=%T kills=%+v", m.open, fc.kills)
 	}
-	if v := m.View(); !strings.Contains(v, `Type the workspace's label, "proj-a"`) || !strings.Contains(v, "IcyKnoll: checked") {
+	if v := m.View(); !strings.Contains(v, `Type the workspace's label, "proj-a"`) || !strings.Contains(v, "IcyKnoll: would retire") {
 		t.Fatalf("review view:\n%s", v)
 	}
 	press(m, "proj-b", "enter")
