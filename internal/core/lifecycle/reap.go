@@ -33,14 +33,29 @@ type ReapRequest struct {
 	ProjectKey    string
 	Keep          []string
 	DryRun        bool
+	// Only limits the sweep to a reviewed set: the would_retire items of
+	// a dry run (the menu). Reap then looks at no other binding, and
+	// refuses one that is gone or at another generation; every other
+	// check runs again. nil sweeps every binding in scope; an empty set
+	// is refused.
+	Only []ReapTarget
+}
+
+// ReapTarget is one agent of a reviewed set: the binding and the
+// generation the review saw.
+type ReapTarget struct {
+	BindingID  string `json:"binding_id"`
+	Generation int64  `json:"generation"`
 }
 
 // ReapItem is one agent the sweep looked at.
 type ReapItem struct {
-	MailName  string        `json:"mail_name"`
-	BindingID string        `json:"binding_id"`
-	PaneID    string        `json:"pane_id,omitempty"`
-	IdleFor   time.Duration `json:"idle_ns"`
+	MailName  string `json:"mail_name"`
+	BindingID string `json:"binding_id"`
+	// Generation is the binding's generation as the sweep saw it.
+	Generation int64         `json:"generation"`
+	PaneID     string        `json:"pane_id,omitempty"`
+	IdleFor    time.Duration `json:"idle_ns"`
 	// Action: retired, would_retire, kept, refused.
 	Action string        `json:"action"`
 	Reason string        `json:"reason,omitempty"`
@@ -67,6 +82,9 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 	if !req.AllWorkspaces && req.WorkspaceID == "" {
 		return nil, errors.New("name the session, or give --all-workspaces")
 	}
+	if req.Only != nil && len(req.Only) == 0 {
+		return nil, fmt.Errorf("%w: the reviewed set is empty: nothing to reap", ErrRefused)
+	}
 	snap, err := env.Herdr.Snapshot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("herdr: %w", err)
@@ -83,17 +101,49 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 	if err != nil {
 		return nil, err
 	}
+	var items []ReapItem
+	reviewed := map[string]int64{}
+	if req.Only != nil {
+		for _, t := range req.Only {
+			reviewed[t.BindingID] = t.Generation
+		}
+		var in []bindings.Binding
+		for _, b := range list {
+			if _, ok := reviewed[b.ID]; ok {
+				in = append(in, b)
+			}
+		}
+		// A reviewed binding the sweep no longer finds is refused by name,
+		// never swapped for another.
+		for _, t := range req.Only {
+			if slices.ContainsFunc(in, func(b bindings.Binding) bool { return b.ID == t.BindingID }) {
+				continue
+			}
+			item := ReapItem{BindingID: t.BindingID, Generation: t.Generation, Action: "refused",
+				Reason: "it is no longer an active binding in this sweep's scope"}
+			if b, err := env.Bindings.Get(ctx, t.BindingID); err == nil {
+				item.MailName, item.PaneID = b.MailName, b.PaneID
+			}
+			items = append(items, item)
+		}
+		list = in
+	}
 	idlePath := filepath.Join(env.InstanceDir, IdleFile)
 	idle := readIdle(idlePath)
 	now := env.now()
 	seen := map[string]bool{}
-	var items []ReapItem
 	keep := map[string]bool{}
 	for _, k := range req.Keep {
 		keep[strings.ToLower(k)] = true
 	}
 	for _, b := range list {
-		item := ReapItem{MailName: b.MailName, BindingID: b.ID, PaneID: b.PaneID, Action: "kept"}
+		item := ReapItem{MailName: b.MailName, BindingID: b.ID, Generation: b.Generation, PaneID: b.PaneID, Action: "kept"}
+		if want, ok := reviewed[b.ID]; ok && want != b.Generation {
+			item.Action = "refused"
+			item.Reason = fmt.Sprintf("it changed since it was reviewed: expected generation %d, the binding is at generation %d", want, b.Generation)
+			items = append(items, item)
+			continue
+		}
 		a, ok := agents[b.PaneID]
 		switch {
 		case !ok:
@@ -147,9 +197,10 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 			continue
 		}
 		// A reviewer works no beads: only an agent spawned with --role
-		// reviewer may have none in the databases searched.
+		// reviewer may have none in the databases searched. Retire checks
+		// the generation the sweep saw under its lock.
 		rr, err := Retire(ctx, env, RetireRequest{Target: b.ID, KeepIdentity: false, DryRun: req.DryRun, Reason: "reap",
-			NoBeads: b.Role == spawn.RoleReviewer})
+			NoBeads: b.Role == spawn.RoleReviewer, ExpectedGeneration: b.Generation})
 		r := rr
 		item.Retire = &r
 		switch {
@@ -277,7 +328,25 @@ type KillResult struct {
 	OperationID string         `json:"operation_id,omitempty"`
 	WorkspaceID string         `json:"workspace_id"`
 	Agents      []RetireResult `json:"agents"`
-	Closed      bool           `json:"closed"`
+	// Refusals are the checks' refusals; empty when the checks pass. A
+	// kill without yes that passes its checks has none.
+	Refusals []string `json:"refusals"`
+	Closed   bool     `json:"closed"`
+}
+
+// KillRequest is one kill of a workspace.
+type KillRequest struct {
+	WorkspaceID string
+	// Yes closes the workspace; without it kill only reports.
+	Yes bool
+	// NoBeads passes retire's --no-beads to every agent: the workspace
+	// holds agents that worked no beads (reviewers).
+	NoBeads bool
+	// OperationID is the id of the kill's record (--op-id); "" is a new
+	// one. A caller that starts the kill in another process (the menu)
+	// picks it first, to find the record. An id claimed before is
+	// refused: kill never runs twice under one id.
+	OperationID string
 }
 
 // VerbKill is the operation verb of a workspace kill; each agent's
@@ -317,8 +386,9 @@ func killReceipt(ctx context.Context, env Env, opID string, i int, status string
 }
 
 // claimKill records the kill and one pending receipt per agent before
-// any effect, so the record outlives the process that runs it.
-func claimKill(ctx context.Context, env Env, workspaceID string, list []bindings.Binding, noBeads bool) (string, error) {
+// any effect, so the record outlives the process that runs it. An id
+// claimed before refuses: its record shows how that kill went.
+func claimKill(ctx context.Context, env Env, req KillRequest, list []bindings.Binding) (string, error) {
 	type target struct {
 		BindingID  string `json:"binding_id"`
 		Generation int64  `json:"generation"`
@@ -327,13 +397,19 @@ func claimKill(ctx context.Context, env Env, workspaceID string, list []bindings
 	for i, b := range list {
 		targets[i] = target{b.ID, b.Generation}
 	}
-	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{Verb: VerbKill,
-		Scope:   map[string]string{"workspace_id": workspaceID},
-		Request: map[string]any{"workspace_id": workspaceID, "targets": targets, "no_beads": noBeads}}, env.now())
+	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: VerbKill,
+		Scope:   map[string]string{"workspace_id": req.WorkspaceID},
+		Request: map[string]any{"workspace_id": req.WorkspaceID, "targets": targets, "no_beads": req.NoBeads}}, env.now())
+	if errors.Is(err, store.ErrOperationIDConflict) {
+		return claim.Operation.ID, fmt.Errorf("%w: %w; kill does not run it again", ErrRefused, err)
+	}
 	if err != nil {
 		return "", err
 	}
 	id := claim.Operation.ID
+	if claim.Existing {
+		return id, fmt.Errorf("%w: operation %s exists (%s); kill does not run it again", ErrRefused, id, claim.Operation.Status)
+	}
 	now := store.FormatTime(env.now())
 	for i, b := range list {
 		js, err := json.Marshal(map[string]string{"mail_name": b.MailName})
@@ -348,13 +424,17 @@ func claimKill(ctx context.Context, env Env, workspaceID string, list []bindings
 	return id, env.DB.SetOperationStatus(ctx, id, KillDispatching, false, env.now())
 }
 
-// Kill closes a workspace. It runs retire's checks for every bound agent
-// first and never bypasses them: one refusal refuses the kill, and
-// nothing is closed. Without yes it only reports.
-// noBeads passes retire's --no-beads to every agent: the workspace holds
-// agents that worked no beads (reviewers).
+// Kill closes a workspace: KillWith with a new operation id.
 func Kill(ctx context.Context, env Env, workspaceID string, yes, noBeads bool) (KillResult, error) {
-	res := KillResult{WorkspaceID: workspaceID, Agents: []RetireResult{}}
+	return KillWith(ctx, env, KillRequest{WorkspaceID: workspaceID, Yes: yes, NoBeads: noBeads})
+}
+
+// KillWith closes a workspace. It runs retire's checks for every bound
+// agent first and never bypasses them: one refusal refuses the kill, and
+// nothing is closed. Without Yes it only reports.
+func KillWith(ctx context.Context, env Env, req KillRequest) (KillResult, error) {
+	workspaceID, noBeads := req.WorkspaceID, req.NoBeads
+	res := KillResult{WorkspaceID: workspaceID, Agents: []RetireResult{}, Refusals: []string{}}
 	list, err := env.Bindings.List(ctx, bindings.Filter{WorkspaceID: workspaceID, Statuses: []bindings.Status{bindings.Active}})
 	if err != nil {
 		return res, err
@@ -373,7 +453,8 @@ func Kill(ctx context.Context, env Env, workspaceID string, yes, noBeads bool) (
 	}
 	unchecked, err := uncheckedPanes(ctx, env, workspaceID, checked)
 	if err != nil {
-		return res, fmt.Errorf("%w: the workspace's panes cannot be read: %v", ErrRefused, err)
+		res.Refusals = []string{"the workspace's panes cannot be read: " + err.Error()}
+		return res, fmt.Errorf("%w: %s", ErrRefused, res.Refusals[0])
 	}
 	refusals = append(refusals, unchecked...)
 	for _, b := range list {
@@ -387,12 +468,13 @@ func Kill(ctx context.Context, env Env, workspaceID string, yes, noBeads bool) (
 		}
 	}
 	if len(refusals) > 0 {
+		res.Refusals = refusals
 		return res, fmt.Errorf("%w: %s", ErrRefused, strings.Join(refusals, " | "))
 	}
-	if !yes {
+	if !req.Yes {
 		return res, fmt.Errorf("%w: kill closes the workspace and retires its agents: give --yes", ErrRefused)
 	}
-	opID, err := claimKill(ctx, env, workspaceID, list, noBeads)
+	opID, err := claimKill(ctx, env, req, list)
 	res.OperationID = opID
 	if err != nil {
 		return res, fmt.Errorf("kill: record the operation: %w", err)

@@ -382,7 +382,7 @@ func keepPaths() []string {
 	return paths
 }
 
-const killUsage = `Usage: nhm kill <session> [--yes | -f | --force] [--no-beads] [--socket PATH] [--json]
+const killUsage = `Usage: nhm kill <session> [--yes | -f | --force] [--no-beads] [--op-id ID] [--socket PATH] [--json]
 
 Close a workspace. It runs the retire checks for every bound agent first
 and never bypasses them: one refusal refuses the kill and nothing closes.
@@ -391,6 +391,8 @@ retired) and closes the workspace. Without --yes it only reports. -f and
 --force are ntm's spelling of --yes: they skip no check.
 --no-beads is retire's, for every agent: the workspace's agents worked no
 beads (agents spawned with --role reviewer never need it).
+--op-id names the kill's operation record. An id used before is refused:
+the kill does not run again (nhm menu's recent operations shows it).
 `
 
 func runKill(args []string, stdout, stderr io.Writer) int {
@@ -403,6 +405,7 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(yes, "force", false, "ntm's spelling of --yes")
 	fs.BoolVar(yes, "f", false, "ntm's spelling of --yes")
 	noBeads := fs.Bool("no-beads", false, "the agents worked no beads; do not require any")
+	opID := fs.String("op-id", "", "the id of the kill's operation record")
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args)
@@ -430,9 +433,12 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	var res lifecycle.KillResult
 	code, err := underOwner(ctx, ie, func() error {
 		var kerr error
-		res, kerr = lifecycle.Kill(ctx, lenv, ws, *yes, *noBeads)
+		res, kerr = lifecycle.KillWith(ctx, lenv, lifecycle.KillRequest{WorkspaceID: ws, Yes: *yes, NoBeads: *noBeads, OperationID: *opID})
 		return kerr
 	})
+	if res.OperationID != "" {
+		env.OperationID = res.OperationID
+	}
 	// Only a rule's refusal exits 2; herdr or Agent Mail failing is 1.
 	if errors.Is(err, lifecycle.ErrRefused) {
 		code = exitRefused
