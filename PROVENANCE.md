@@ -126,6 +126,13 @@ The same rules apply to code from pt and dcg.
 | `internal/integrations/cass/LICENSE` | `LICENSE` | none |
 | `internal/integrations/cass/keywords_ntm.go` | `internal/cass/inject.go` (in part) | provenance header; only `ExtractKeywords` and its helpers (`tokenize`, `removeCodeBlocks`, the stop words), unchanged; nhm joins the keywords with OR (`KeywordQuery` in `cass.go`), where ntm's `QueryCASS` joins them with spaces |
 | `internal/integrations/cass/keywords_ntm_test.go` | `internal/cass/inject_test.go` (in part) | provenance header; only the tests of those functions, unchanged |
+| `internal/ui/dashboard/LICENSE` | `LICENSE` | none |
+| `internal/ui/dashboard/keymap.go` | `internal/tui/dashboard/keymap.go` | provenance header; import path; behaviour: the keys with no nhm action are gone (c, ctrl+s, e, u, ctrl+k, ctrl+x, n, w, v, o, a: no dead keys, plan-v4 section 2); nhm's board keys space (actions), x (mark), / (filter) and esc (back) are added, with a help group of their own |
+| `internal/ui/dashboard/overlay.go` | `internal/tui/dashboard/overlay.go` | provenance header; import path |
+| `internal/ui/dashboard/panels/LICENSE` | `LICENSE` | none |
+| `internal/ui/dashboard/panels/panel.go` | `internal/tui/dashboard/panels/panel.go` | provenance header |
+| `internal/ui/dashboard/panels/panel_base_test.go` | `internal/tui/dashboard/panels/panel_base_test.go` | provenance header |
+| `internal/ui/dashboard/panels/height_helpers_test.go` | `internal/tui/dashboard/panels/height_helpers_test.go` | provenance header |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
