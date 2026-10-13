@@ -119,8 +119,10 @@ expect 5 recent operations
 expect 5 kill_workspace closed
 key esc esc
 note last, the client disconnects: the board in w1 lives on, the same pane and pid
-run kill "$PTY_CLIENT_PID"
+check kill "$PTY_CLIENT_PID"
 sleep 2
+note the client ended: ptyclient reaps it only at the end, so it is a zombie now (kill -0 succeeds on a zombie)
+check ps -o stat= -p "$PTY_CLIENT_PID" | grep -q '^Z'
 check herdr workspace list >/dev/null
 check test "$(jq -r '"\(.pane_id) \(.pid)"' $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json)" = "$(cat "$HERDR_WORK/board-w1.first")"
 check kill -0 "$(jq -r .pid $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json)"
