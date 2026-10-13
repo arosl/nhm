@@ -40,7 +40,7 @@ const spawnLockWait = 10 * time.Second
 
 const spawnUsage = `Usage: nhm spawn <session> [--cc=N[:MODEL]] [--cod=N[:MODEL]] [--agy=N] [--pi=N] [--omp=N] [--oc=N] [--grok=N]
                  [--agent KIND=N[:MODEL]]… [--label L] [--group G] [--per-tab N]
-                 [--prompt T | --prompt-file F | --no-kickoff] [--assign [--yes]]
+                 [--prompt T | --prompt-file F | --no-kickoff] [--assign [--yes]] [--no-user]
                  [--stagger-mode fixed|smart] [--stagger-delay D] [--ready-timeout D]
                  [--trust-folder] [--force] [--allow-unguarded] [--require-observations]
                  [--project DIR] [--op-id ID] [--dry-run] [--socket PATH] [--json]
@@ -109,6 +109,9 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.BoolVar(&f.noKickoff, "no-kickoff", false, "send no kickoff")
 	fs.BoolVar(&f.assign, "assign", false, "append the next_bead prompt (asks for your yes)")
 	fs.BoolVar(&f.yes, "yes", false, "with --assign: the yes, for a non-interactive call")
+	// ntm's --no-user keeps no pane for the user. nhm keeps none
+	// anyway, so the flag changes nothing (ru's spawn, nhm-hir).
+	fs.Bool("no-user", false, "ntm's flag; nhm keeps no pane for the user")
 	fs.StringVar(&f.staggerMode, "stagger-mode", "", "fixed or smart")
 	fs.DurationVar(&f.staggerDelay, "stagger-delay", 0, "the delay between starts")
 	fs.DurationVar(&f.readyWait, "ready-timeout", 60*time.Second, "the wait for each agent to be ready")
