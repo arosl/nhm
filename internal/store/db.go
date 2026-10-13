@@ -27,12 +27,26 @@ const TimeFormat = time.RFC3339Nano
 // FormatTime renders t for a TEXT column.
 func FormatTime(t time.Time) string { return t.UTC().Format(TimeFormat) }
 
+// databasePath is the database file of an instance directory, absolute:
+// in a file: URI the first part of a relative path reads as the URI's
+// authority ("invalid uri authority", nhm-mwo).
+func databasePath(instanceDir string) (string, error) {
+	path, err := filepath.Abs(filepath.Join(instanceDir, DatabaseFile))
+	if err != nil {
+		return "", fmt.Errorf("store: %w", err)
+	}
+	return path, nil
+}
+
 // Open opens (and creates or migrates) the database in an instance
 // directory. It uses WAL mode, a five-second busy timeout, foreign keys
 // and immediate transactions, so a read-check-write cannot interleave with
 // another writer.
 func Open(instanceDir string) (*DB, error) {
-	path := filepath.Join(instanceDir, DatabaseFile)
+	path, err := databasePath(instanceDir)
+	if err != nil {
+		return nil, err
+	}
 	dsn := sqliteutil.ImmediateTransactionFileDSN(path,
 		"busy_timeout(5000)",
 		"foreign_keys(1)",
@@ -61,7 +75,10 @@ var ErrSchemaOld = errors.New("store: the database schema is older than this nhm
 // another writer before it fails with SQLITE_BUSY. It refuses a schema
 // other than this build's.
 func OpenForHook(ctx context.Context, instanceDir string, busy time.Duration) (*DB, error) {
-	path := filepath.Join(instanceDir, DatabaseFile)
+	path, err := databasePath(instanceDir)
+	if err != nil {
+		return nil, err
+	}
 	dsn := sqliteutil.ImmediateTransactionFileDSN(path,
 		fmt.Sprintf("busy_timeout(%d)", busy.Milliseconds()),
 		"foreign_keys(1)",
