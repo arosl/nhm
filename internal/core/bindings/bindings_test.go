@@ -211,6 +211,7 @@ type fakeHerdr struct {
 	procs      map[string][]herdr.Process
 	renamed    map[string]string
 	paneLabels map[string]string
+	paneTokens map[string]map[string]string
 	// moved maps a moved pane's old id to its new one, as herdr's pane
 	// calls answer it.
 	moved map[string]string
@@ -245,6 +246,14 @@ func (f *fakeHerdr) PaneRename(_ context.Context, pane, label string) (herdr.Pan
 	}
 	f.paneLabels[pane] = label
 	return herdr.PaneInfo{PaneID: pane}, nil
+}
+
+func (f *fakeHerdr) PaneReportMetadata(_ context.Context, p herdr.ReportMetadataParams) error {
+	if f.paneTokens == nil {
+		f.paneTokens = map[string]map[string]string{}
+	}
+	f.paneTokens[p.PaneID] = p.Tokens
+	return nil
 }
 
 func (f *fakeHerdr) TabGet(_ context.Context, tab string) (herdr.TabInfo, error) {

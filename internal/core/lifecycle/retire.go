@@ -30,6 +30,8 @@ type Herdr interface {
 	AgentPrompt(ctx context.Context, p herdr.AgentPromptParams) (herdr.AgentInfo, error)
 	AgentRename(ctx context.Context, target, name string) (herdr.AgentInfo, error)
 	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
+	PaneGet(ctx context.Context, paneID string) (herdr.PaneInfo, error)
+	PaneRename(ctx context.Context, paneID, label string) (herdr.PaneInfo, error)
 	PaneReportMetadata(ctx context.Context, p herdr.ReportMetadataParams) error
 	PaneClose(ctx context.Context, paneID string) error
 	WorkspaceClose(ctx context.Context, workspaceID string) error

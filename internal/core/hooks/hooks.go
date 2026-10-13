@@ -38,6 +38,7 @@ import (
 type Herdr interface {
 	bindings.EnvHerdr
 	AgentGet(ctx context.Context, target string) (herdr.AgentInfo, error)
+	PaneGet(ctx context.Context, paneID string) (herdr.PaneInfo, error)
 }
 
 // Env is an enrolled instance, opened, and the hook's environment.
@@ -593,6 +594,7 @@ func keepTrue(ctx context.Context, env Env, st paneState, b *bindings.Binding, r
 		r.act("%s restarted in %s as pid %d", b.MailName, b.PaneID, pid)
 	}
 	keepName(ctx, env, st, b, r)
+	keepMarks(ctx, env, b, r)
 	if env.TabLabels {
 		keepTabLabel(ctx, env, st, b, r)
 	}
@@ -660,8 +662,27 @@ func relocate(ctx context.Context, env Env, b *bindings.Binding, a herdr.AgentIn
 	}
 	st := paneState{agent: a, hasAgent: true}
 	keepName(ctx, env, st, b, r)
+	keepMarks(ctx, env, b, r)
 	keepTabLabel(ctx, env, st, b, r)
 	return nil
+}
+
+// keepMarks gives the binding's pane the marks it lacks: the label and
+// the sidebar tokens (bindings.KeepMarks). A spawn that stopped at a
+// dialog never set them (nhm-hae).
+func keepMarks(ctx context.Context, env Env, b *bindings.Binding, r *Reconcile) {
+	p, err := env.Herdr.PaneGet(ctx, b.PaneID)
+	if err != nil {
+		r.warn("marks of %s not read: %v", b.PaneID, err)
+		return
+	}
+	done, warnings := bindings.KeepMarks(ctx, env.Herdr, *b, p)
+	if len(done) > 0 {
+		r.act("marked %s for %s: %s", b.PaneID, b.MailName, strings.Join(done, ", "))
+	}
+	for _, w := range warnings {
+		r.warn("marks of %s: %s", b.PaneID, w)
+	}
 }
 
 // keepName applies the binding's herdr name when herdr shows another.

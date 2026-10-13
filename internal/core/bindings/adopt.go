@@ -290,19 +290,13 @@ func decorate(ctx context.Context, env Env, b Binding, agent herdr.AgentInfo) []
 	return nil
 }
 
-// Label names a new binding's pane "<Name> <model>", and its tab
+// Label gives a new binding's pane its marks (Mark: the label
+// "<Name> <model>" and the sidebar tokens), and its tab the label
 // "<Name>" when the tab holds only that pane, as spawn does. Adopt and
 // the hooks' bind call it. Failures come back as warnings: the binding
 // holds either way.
 func Label(ctx context.Context, h Labeler, b Binding) []string {
-	var warnings []string
-	label := b.MailName
-	if b.Model != "" {
-		label += " " + b.Model
-	}
-	if _, err := h.PaneRename(ctx, b.PaneID, label); err != nil {
-		warnings = append(warnings, "pane label: "+err.Error())
-	}
+	_, warnings := Mark(ctx, h, b)
 	if b.TabID == "" {
 		return warnings
 	}

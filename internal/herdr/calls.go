@@ -229,6 +229,13 @@ func (c *Client) PaneProcessInfo(ctx context.Context, paneID string) (ProcessInf
 	return r.ProcessInfo, err
 }
 
+// PaneGet reads one pane: its label and its sidebar tokens among the rest.
+func (c *Client) PaneGet(ctx context.Context, paneID string) (PaneInfo, error) {
+	var r paneResult
+	err := c.call(ctx, "pane.get", paneParams{PaneID: paneID}, &r, 0)
+	return r.Pane, err
+}
+
 // PaneRename sets a pane's label; "" clears it.
 func (c *Client) PaneRename(ctx context.Context, paneID, label string) (PaneInfo, error) {
 	var r paneResult

@@ -43,9 +43,9 @@ func Restore(ctx context.Context, env Env) ([]RestoreItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("herdr: %w", err)
 	}
-	panes := map[string]bool{}
+	panes := map[string]herdr.PaneInfo{}
 	for _, p := range snap.Panes {
-		panes[p.PaneID] = true
+		panes[p.PaneID] = p
 	}
 	agents := map[string]herdr.AgentInfo{}
 	for _, a := range snap.Agents {
@@ -59,8 +59,9 @@ func Restore(ctx context.Context, env Env) ([]RestoreItem, error) {
 	for _, b := range list {
 		item := RestoreItem{MailName: b.MailName, BindingID: b.ID, PaneID: b.PaneID}
 		a, hasAgent := agents[b.PaneID]
+		pane, paneBack := panes[b.PaneID]
 		switch {
-		case b.PaneID == "" || !panes[b.PaneID]:
+		case b.PaneID == "" || !paneBack:
 			item.Reason = "the pane did not come back"
 		case !hasAgent:
 			item.Reason = "the pane holds no agent"
@@ -86,13 +87,10 @@ func Restore(ctx context.Context, env Env) ([]RestoreItem, error) {
 				item.Reason = "herdr name: " + err.Error()
 			}
 		}
-		tokens := map[string]string{"mail": b.MailName}
-		if b.Model != "" {
-			tokens["model"] = b.Model
-		}
-		if err := env.Herdr.PaneReportMetadata(ctx, herdr.ReportMetadataParams{PaneID: b.PaneID, Source: "nhm", Agent: b.Kind, Tokens: tokens}); err == nil {
-			item.Redone = append(item.Redone, "sidebar tokens")
-		}
+		// herdr drops the tokens when it restarts; a label that the user
+		// set stays.
+		done, _ := bindings.KeepMarks(ctx, env.Herdr, b, pane)
+		item.Redone = append(item.Redone, done...)
 		if env.MailConfigHome != "" {
 			if _, err := agentmail.WriteIdentity(env.MailConfigHome, b.MailProjectKey, b.PaneID, b.MailName, env.now()); err == nil {
 				item.Redone = append(item.Redone, "Agent Mail identity file")
@@ -260,9 +258,13 @@ func Resume(ctx context.Context, env Env, target string, run bool) (ResumePlan, 
 	occ := bindings.Occupant{WorkspaceID: b.WorkspaceID, TabID: b.TabID, PaneID: b.PaneID, HerdrAlias: alias, Kind: b.Kind,
 		Model: b.Model, Effort: b.Effort, LaunchID: b.LaunchID, NativeSession: b.NativeSession,
 		Evidence: []bindings.Evidence{{Kind: "resume", Detail: "nhm admin recover resume --run"}}}
-	if _, err := env.Bindings.Occupy(ctx, b.ID, b.Generation, occ); err != nil {
+	nb, err := env.Bindings.Occupy(ctx, b.ID, b.Generation, occ)
+	if err != nil {
 		return p, fmt.Errorf("binding: %w", err)
 	}
+	// The marks, as recycle keeps them; a failure is cosmetic, and the
+	// reconcile tries again.
+	_ = keepMarks(ctx, env, nb)
 	p.Started = true
 	return p, nil
 }

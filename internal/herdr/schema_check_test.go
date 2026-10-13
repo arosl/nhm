@@ -40,6 +40,7 @@ var paramTypes = map[string]any{
 	"pane.zoom":                 paneZoomParams{},
 	"pane.process_info":         paneParams{},
 	"pane.layout":               paneParams{},
+	"pane.get":                  paneParams{},
 	"pane.rename":               paneRenameParams{},
 	"pane.read":                 PaneReadParams{},
 	"pane.report_agent_session": ReportAgentSessionParams{},

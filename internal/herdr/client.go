@@ -79,6 +79,9 @@ var methodResults = map[string][]string{
 	"tab.focus": {"tab_info"},
 	// nhm-4c4: spawn splits the biggest pane of a project's tab.
 	"pane.layout": {"pane_layout"},
+	// nhm-hae: the reconcile reads a pane's label and tokens (observed in
+	// the sandbox on herdr 0.9.3).
+	"pane.get": {"pane_info"},
 	// From the pinned schema's response results, not yet observed
 	// (acfs-9hkh.70; the rehearsal, acfs-9hkh.31, runs it against herdr).
 	"workspace.focus":      {"workspace_info", "ok"},

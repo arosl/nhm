@@ -33,14 +33,17 @@ func u64(v uint64) *uint64 { return &v }
 // fakeHerdr holds agents by pane and the panes whose shell is at its
 // prompt.
 type fakeHerdr struct {
-	mu        sync.Mutex
-	agents    map[string]herdr.AgentInfo
-	panes     map[string]bool
-	closed    []string
-	wsClosed  []string
-	prompts   []string
-	starts    []string
-	renamed   []string
+	mu       sync.Mutex
+	agents   map[string]herdr.AgentInfo
+	panes    map[string]bool
+	closed   []string
+	wsClosed []string
+	prompts  []string
+	starts   []string
+	renamed  []string
+	// labels and tokens are the panes' marks (nhm-hae).
+	labels    map[string]string
+	tokens    map[string]map[string]string
 	exitOnCmd bool
 	// jobs are panes whose foreground runs a process that is no agent.
 	jobs map[string]bool
@@ -61,7 +64,7 @@ func (f *fakeHerdr) Snapshot(context.Context) (herdr.SessionSnapshot, error) {
 	defer f.mu.Unlock()
 	var s herdr.SessionSnapshot
 	for p := range f.panes {
-		s.Panes = append(s.Panes, herdr.PaneInfo{PaneID: p, WorkspaceID: "w1", TabID: "w1:t1"})
+		s.Panes = append(s.Panes, herdr.PaneInfo{PaneID: p, WorkspaceID: "w1", TabID: "w1:t1", Label: f.labels[p], Tokens: f.tokens[p]})
 	}
 	for _, a := range f.agents {
 		s.Agents = append(s.Agents, a)
@@ -127,7 +130,34 @@ func (f *fakeHerdr) PaneProcessInfo(_ context.Context, pane string) (herdr.Proce
 	return info, nil
 }
 
-func (f *fakeHerdr) PaneReportMetadata(context.Context, herdr.ReportMetadataParams) error { return nil }
+func (f *fakeHerdr) PaneGet(_ context.Context, pane string) (herdr.PaneInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.panes[pane] {
+		return herdr.PaneInfo{}, errors.New("pane_not_found: " + pane)
+	}
+	return herdr.PaneInfo{PaneID: pane, Label: f.labels[pane], Tokens: f.tokens[pane]}, nil
+}
+
+func (f *fakeHerdr) PaneRename(_ context.Context, pane, label string) (herdr.PaneInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.labels == nil {
+		f.labels = map[string]string{}
+	}
+	f.labels[pane] = label
+	return herdr.PaneInfo{PaneID: pane, Label: label}, nil
+}
+
+func (f *fakeHerdr) PaneReportMetadata(_ context.Context, p herdr.ReportMetadataParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tokens == nil {
+		f.tokens = map[string]map[string]string{}
+	}
+	f.tokens[p.PaneID] = p.Tokens
+	return nil
+}
 
 func (f *fakeHerdr) PaneClose(_ context.Context, pane string) error {
 	f.mu.Lock()

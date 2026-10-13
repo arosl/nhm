@@ -20,7 +20,7 @@ type Herdr interface {
 
 // Labeler is what Label needs from herdr; *herdr.Client has it.
 type Labeler interface {
-	PaneRename(ctx context.Context, paneID, label string) (herdr.PaneInfo, error)
+	Marker
 	TabGet(ctx context.Context, tabID string) (herdr.TabInfo, error)
 	TabRename(ctx context.Context, tabID, label string) (herdr.TabInfo, error)
 }

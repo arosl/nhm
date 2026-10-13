@@ -144,6 +144,22 @@ func TestRenameWithEmptyNameClears(t *testing.T) {
 	assertJSON(t, *paneParams, `{"pane_id":"w1:p2","label":"side"}`)
 }
 
+// pane.get answers the pane's label and its sidebar tokens (nhm-hae).
+func TestPaneGetReadsLabelAndTokens(t *testing.T) {
+	s, c := newStub(t)
+	pane := paneFixture("w1:p2")
+	pane["label"], pane["tokens"] = "IcyKnoll opus", map[string]any{"mail": "IcyKnoll", "model": "opus"}
+	params := answer(s, "pane.get", map[string]any{"type": "pane_info", "pane": pane})
+	p, err := c.PaneGet(context.Background(), "w1:p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, *params, `{"pane_id":"w1:p2"}`)
+	if p.PaneID != "w1:p2" || p.Label != "IcyKnoll opus" || p.Tokens["mail"] != "IcyKnoll" || p.Tokens["model"] != "opus" {
+		t.Fatalf("pane = %+v", p)
+	}
+}
+
 func TestPluginPaneOpen(t *testing.T) {
 	s, c := newStub(t)
 	params := answer(s, "plugin.pane.open", map[string]any{"type": "ok"})

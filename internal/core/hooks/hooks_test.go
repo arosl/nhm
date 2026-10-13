@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,9 @@ type pane struct {
 	pid     int
 	cwd     string
 	ws, tab string // "" means w1 and w1:t1
+	// label and tokens are the pane's marks (nhm-hae).
+	label  string
+	tokens map[string]string
 }
 
 // where is the pane's workspace and tab.
@@ -101,8 +105,50 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.calls = append(w.calls, "pane.rename "+p.PaneID+" "+p.Label)
+		if pn := w.panes[p.PaneID]; pn != nil {
+			pn.label = p.Label
+		}
 		return map[string]any{"type": "pane_info", "pane": map[string]any{"pane_id": p.PaneID, "tab_id": "w1:t1",
 			"workspace_id": "w1", "terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1}}, nil
+	})
+	s.Handle("pane.get", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			PaneID string `json:"pane_id"`
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		pn, ok := w.panes[p.PaneID]
+		if !ok {
+			return nil, &herdrtest.Error{Code: "pane_not_found", Message: "pane " + p.PaneID + " not found"}
+		}
+		ws, tb := pn.where()
+		pane := map[string]any{"pane_id": p.PaneID, "tab_id": tb, "workspace_id": ws, "terminal_id": "term_1",
+			"agent_status": "idle", "focused": false, "revision": 1, "tokens": pn.tokens}
+		if pn.label != "" {
+			pane["label"] = pn.label
+		}
+		return map[string]any{"type": "pane_info", "pane": pane}, nil
+	})
+	s.Handle("pane.report_metadata", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p herdr.ReportMetadataParams
+		_ = json.Unmarshal(r.Params, &p)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		keys := make([]string, 0, len(p.Tokens))
+		for k := range p.Tokens {
+			keys = append(keys, k+"="+p.Tokens[k])
+		}
+		slices.Sort(keys)
+		w.calls = append(w.calls, "pane.report_metadata "+p.PaneID+" "+p.Source+" "+strings.Join(keys, " "))
+		if pn := w.panes[p.PaneID]; pn != nil {
+			// herdr merges a report's tokens into the pane's by name.
+			if pn.tokens == nil {
+				pn.tokens = map[string]string{}
+			}
+			maps.Copy(pn.tokens, p.Tokens)
+		}
+		return map[string]any{"type": "ok"}, nil
 	})
 	s.Handle("tab.rename", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var p struct {

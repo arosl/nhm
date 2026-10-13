@@ -297,6 +297,9 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 		return fail(StageStart, fmt.Errorf("binding: %w", err))
 	}
 	res.Generation = nb.Generation
+	// The predecessor's marks may never have been set (a spawn that
+	// stopped at a dialog, nhm-hae).
+	res.Warnings = append(res.Warnings, keepMarks(ctx, env, nb)...)
 	unlock()
 	locked = false
 
@@ -319,6 +322,19 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	}
 	res.Stage = StageDone
 	return res, env.DB.SetOperationStatus(ctx, res.OperationID, "done", true, env.now())
+}
+
+// keepMarks gives the pane of b's new occupant the marks it lacks
+// (bindings.KeepMarks): herdr keeps a pane's label and tokens while one
+// agent exits and the next starts, so a label that the user set stays.
+// It returns the warnings.
+func keepMarks(ctx context.Context, env Env, b bindings.Binding) []string {
+	p, err := env.Herdr.PaneGet(ctx, b.PaneID)
+	if err != nil {
+		return []string{fmt.Sprintf("marks of %s not read: %v", b.PaneID, err)}
+	}
+	_, warnings := bindings.KeepMarks(ctx, env.Herdr, b, p)
+	return warnings
 }
 
 // waitExit waits until the pane's shell holds the foreground again and
