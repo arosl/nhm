@@ -167,9 +167,10 @@ func TestSendSubmitsOnceWithBaselineAndReceipt(t *testing.T) {
 			t.Fatalf("receipt = %+v", rc)
 		}
 	}
-	// A plain prompt goes out as typed, with herdr's five-second gate.
+	// A plain prompt goes out as typed, with a second over herdr's
+	// five-second gate, so herdr answers a stall as a stall (nhm-0li).
 	if w.fake.promptCount() != 2 || w.fake.prompts[0].text != "Review {{file}} please." ||
-		*w.fake.prompts[0].wait.TimeoutMS != 5000 || len(w.fake.prompts[0].wait.Until) != 2 {
+		*w.fake.prompts[0].wait.TimeoutMS != 6000 || len(w.fake.prompts[0].wait.Until) != 2 {
 		t.Fatalf("prompts = %+v", w.fake.prompts)
 	}
 	digest, n := Digest("Review {{file}} please.")
@@ -301,23 +302,27 @@ func TestNeverPromptsOutsideTheWorkspace(t *testing.T) {
 }
 
 func TestStallWithACompletionStaysPossible(t *testing.T) {
-	w := newWorld(t)
-	ctx := context.Background()
-	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
-	w.fake.promptErr["w1:p1"] = &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentPromptStalled}
-	// The turn ran and ended inside herdr's five seconds (exp.3).
-	w.fake.onErr = func(pane string) {
-		a := w.fake.agents[pane]
-		a.AgentStatus, a.StateChangeSeq, a.CompletionSeq = herdr.StatusDone, u64(12), u64(12)
-		w.fake.agents[pane] = a
-	}
-	res, err := Send(ctx, w.env, base(Request{Message: "hi"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc := res.Targets[0]
-	if rc.Status != StatusPossiblySubmitted || !strings.Contains(rc.Result.Reason, "completion_seq 12 > 10") || rc.Result.StateAfter != "done" {
-		t.Fatalf("stall = %+v", rc)
+	// herdr's stall, and its timeout (nhm-0li), get the same note.
+	for _, code := range []string{herdr.CodeAgentPromptStalled, herdr.CodeTimeout} {
+		w := newWorld(t)
+		ctx := context.Background()
+		w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+		w.fake.promptErr["w1:p1"] = &herdr.Error{Method: "agent.prompt", Code: code}
+		// The turn ran and ended inside herdr's five seconds (exp.3).
+		w.fake.onErr = func(pane string) {
+			a := w.fake.agents[pane]
+			a.AgentStatus, a.StateChangeSeq, a.CompletionSeq = herdr.StatusDone, u64(12), u64(12)
+			w.fake.agents[pane] = a
+		}
+		res, err := Send(ctx, w.env, base(Request{Message: "hi"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rc := res.Targets[0]
+		if rc.Status != StatusPossiblySubmitted || rc.ErrorCode != code || !strings.Contains(rc.Result.Reason, "completion_seq 12 > 10") ||
+			rc.Result.StateAfter != "done" {
+			t.Fatalf("%s: stall = %+v", code, rc)
+		}
 	}
 }
 

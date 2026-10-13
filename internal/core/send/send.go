@@ -39,6 +39,12 @@ const Parallel = 4
 // sees working or blocked, or stalls after five seconds.
 const promptGateMS int64 = 5000
 
+// promptCallMS is agent.prompt's timeout: a second over herdr's gate, so
+// that herdr answers agent_prompt_stalled, not timeout, when it saw no
+// working or blocked state. With the same five seconds, herdr 0.9.3
+// answered timeout (nhm-0li, probed in the sandbox).
+const promptCallMS = promptGateMS + 1000
+
 // lockWait bounds the wait for a target's lock.
 const lockWait = 10 * time.Second
 
@@ -567,7 +573,7 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 	if err := finish(StatusAttemptStarted, "", ""); err != nil {
 		return err
 	}
-	ms := promptGateMS
+	ms := promptCallMS
 	after, err := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: cur.PaneID, Text: payload,
 		Wait: &herdr.PromptWait{Until: []herdr.AgentStatus{herdr.StatusWorking, herdr.StatusBlocked}, TimeoutMS: &ms}})
 	status, code := classify(err)
@@ -576,10 +582,12 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 		return finish(status, "", "")
 	}
 	reason = err.Error()
-	if code == herdr.CodeAgentPromptStalled && rc.Baseline != nil {
+	if (code == herdr.CodeAgentPromptStalled || code == herdr.CodeTimeout) && rc.Baseline != nil {
 		// exp.3: a fast turn can end inside herdr's five seconds. A
 		// completion past the baseline makes delivery likely, but a person
-		// or another writer could have caused it, so the status stays.
+		// or another writer could have caused it, so the status stays. A
+		// turn too short for herdr to see moves no sequence, so it gets no
+		// such note (nhm-0li).
 		if now, gerr := env.Herdr.AgentGet(ctx, cur.PaneID); gerr == nil && now.CompletionSeq != nil &&
 			*now.CompletionSeq > rc.Baseline.StateChangeSeq {
 			rc.Result.StateAfter = string(now.AgentStatus)
