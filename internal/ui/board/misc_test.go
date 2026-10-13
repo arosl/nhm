@@ -160,6 +160,77 @@ func TestUnwatchedBinaryIsFrozen(t *testing.T) {
 	}
 }
 
+// The running board watches its launch path only while it resolves to
+// the running binary: an install that switched it as the board started
+// leaves the board unwatched, never watching the new release.
+func TestWatchRunningNeedsTheRunningBinary(t *testing.T) {
+	// The test binary, as it was started, is the running binary.
+	if _, err := WatchRunning(""); err != nil {
+		t.Fatalf("WatchRunning of this test = %v", err)
+	}
+	dir := t.TempDir()
+	old, next := filepath.Join(dir, "nhm-0.1.6"), filepath.Join(dir, "nhm-0.1.7")
+	for _, p := range []string{old, next} {
+		if err := os.WriteFile(p, []byte(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	launch := filepath.Join(dir, "nhm")
+	if err := os.Symlink(old, launch); err != nil {
+		t.Fatal(err)
+	}
+	saved := selfExe
+	t.Cleanup(func() { selfExe = saved })
+	selfExe = old // the board runs 0.1.6
+	if w, err := WatchRunning(launch); err != nil || w.Path() != old {
+		t.Fatalf("WatchRunning = %v, %v", w, err)
+	}
+	relink(t, next, launch) // the install switches the link before the watch
+	if w, err := WatchRunning(launch); err == nil || !strings.Contains(err.Error(), "no longer the running nhm") {
+		t.Fatalf("WatchRunning after the switch = %v, %v", w, err)
+	}
+}
+
+// A check that fails for another reason than a missing file fails
+// closed, and names that cause, not an upgrade.
+func TestFailedCheckIsUnchecked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory without permission")
+	}
+	dir := filepath.Join(t.TempDir(), "release")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "nhm")
+	if err := os.WriteFile(path, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w, err := WatchBinary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	err = w.Check()
+	if !errors.Is(err, ErrUnchecked) || errors.Is(err, ErrUpgraded) || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("Check = %v", err)
+	}
+}
+
+// A bare name that PATH does not resolve is an error, not the running
+// executable: that file never changes, so the board would never freeze.
+func TestLaunchPathNeedsPATH(t *testing.T) {
+	arg0 := os.Args[0]
+	t.Cleanup(func() { os.Args[0] = arg0 })
+	t.Setenv("PATH", t.TempDir())
+	os.Args[0] = "nhm"
+	if got, err := LaunchPath(); err == nil {
+		t.Fatalf("LaunchPath = %q with nhm not on PATH", got)
+	}
+}
+
 // The launch path is os.Args[0] made absolute, a relative one too.
 func TestLaunchPathIsAbsolute(t *testing.T) {
 	arg0 := os.Args[0]

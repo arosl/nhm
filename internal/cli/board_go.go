@@ -163,7 +163,7 @@ func runGoBoard(stderr io.Writer) int {
 	// A board that cannot see an upgrade takes no actions (it fails closed).
 	var bin *board.Binary
 	if launchErr == nil {
-		bin, launchErr = board.WatchBinary(launch)
+		bin, launchErr = board.WatchRunning(launch)
 	}
 	if launchErr != nil {
 		fmt.Fprintf(stderr, "nhm board: %v; the board takes no actions\n", launchErr)

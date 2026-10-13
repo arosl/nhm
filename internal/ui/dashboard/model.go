@@ -189,6 +189,11 @@ func New(cfg Config) (*Model, error) {
 	if cfg.CallTimeout <= 0 {
 		cfg.CallTimeout = 5 * time.Second
 	}
+	// Every spawn the board starts (the wizard's) checks the binary at the
+	// call, so a wizard opened before an upgrade spawns nothing after it.
+	if cfg.Core.Spawn != nil {
+		cfg.Core.Spawn = frozenSpawn(cfg.Binary, cfg.Core.Spawn)
+	}
 	t := theme.Current()
 	m := &Model{cfg: cfg, b: cfg.Board, keys: dashKeys, help: newHelpModel(t), theme: t,
 		attention: panels.NewAttentionPanel()}
@@ -777,8 +782,9 @@ func (m *Model) openForm(a actions.Action, tg board.Targets) tea.Cmd {
 
 // Frozen returns why the board takes no new mutations, else nil:
 // board.ErrUpgraded after an upgrade on disk, board.ErrUnwatched when it
-// cannot watch its binary. It checks the binary each time (a stat), so a
-// confirm right after an upgrade is refused too. Every mutation the board
+// cannot watch its binary, board.ErrUnchecked when a check failed for
+// another reason. It checks the binary each time (a stat), so a confirm
+// right after an upgrade is refused too. Every mutation the board
 // starts, and every surface it hands a selection to, checks it first.
 func (m *Model) Frozen() error {
 	if m.frozen == nil && m.cfg.Binary != nil {

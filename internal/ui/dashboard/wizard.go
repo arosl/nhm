@@ -53,10 +53,9 @@ func (m *Model) openWizard() tea.Cmd {
 		m.say(true, a.Label+": "+why)
 		return nil
 	}
-	core := m.cfg.Core
-	core.Spawn = frozenSpawn(m.cfg.Binary, core.Spawn)
+	// m.cfg.Core's spawn checks the binary at the call (New).
 	w, h := m.wizardSize()
-	m.wizard = forms.NewSpawnWizard(forms.Runner{Action: a, Core: core, Guard: m.guard}, m.cfg.Context, m.cfg.Kinds, w, h)
+	m.wizard = forms.NewSpawnWizard(forms.Runner{Action: a, Core: m.cfg.Core, Guard: m.guard}, m.cfg.Context, m.cfg.Kinds, w, h)
 	m.view = viewWizard
 	return m.wizard.Init()
 }

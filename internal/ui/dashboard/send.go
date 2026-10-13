@@ -128,6 +128,14 @@ func (m *Model) sendUpdate(msg tea.Msg) tea.Cmd {
 		m.view = viewMain
 		return nil
 	case palette.ComposedMsg:
+		if m.view != viewSend {
+			// esc closed the composer before its text came: the user left
+			// it, so nothing is sent.
+			if !m.send.running && !m.send.done {
+				m.say(false, "the composer closed first: nothing was sent")
+			}
+			return nil
+		}
 		return m.submitSend(msg.Text)
 	case sentMsg:
 		if msg.opID == m.send.opID {

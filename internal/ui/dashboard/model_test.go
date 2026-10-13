@@ -438,6 +438,72 @@ func TestUpgradeFreezes(t *testing.T) {
 	}
 }
 
+// watchedBinary is a binary the board watches, and the install that
+// replaces it.
+func watchedBinary(t *testing.T) (*board.Binary, func()) {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "nhm")
+	if err := os.WriteFile(bin, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w, err := board.WatchBinary(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w, func() {
+		t.Helper()
+		if err := os.WriteFile(bin+".new", []byte("v2"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(bin+".new", bin); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A form opened before an upgrade refuses its confirm after it: the
+// board's form checks the binary at the confirm (finding 5's case).
+func TestUpgradeRefusesAnOpenFormsConfirm(t *testing.T) {
+	w, upgrade := watchedBinary(t)
+	ic := &interruptCore{}
+	m := newModel(t, Config{Binary: w, Core: ic.core(), NewOperationID: opIDs()})
+	press(m, "space", "x")
+	if m.view != viewForm {
+		t.Fatalf("no form:\n%s", plain(m))
+	}
+	upgrade()
+	runAll(m, press(m, "right", "enter"))
+	if len(ic.asked) != 0 || !strings.Contains(plain(m), "reopen the board") {
+		t.Fatalf("the confirm after an upgrade: asked %v\n%s", ic.asked, plain(m))
+	}
+}
+
+// After an upgrade, ctrl+w opens no wizard; and a wizard opened before it
+// spawns nothing: the board's core checks the binary at the spawn.
+func TestUpgradeFreezesTheWizard(t *testing.T) {
+	w, upgrade := watchedBinary(t)
+	spawns := 0
+	core := actions.Core{Spawn: func(context.Context, actions.SpawnRequest, string) (spawn.Result, error) {
+		spawns++
+		return spawn.Result{}, nil
+	}}
+	m := newModel(t, Config{Binary: w, Core: core, NewOperationID: opIDs(), Kinds: kinds.All()})
+	runAll(m, press(m, "ctrl+w"))
+	if m.view != viewWizard {
+		t.Fatalf("ctrl+w: view %d\n%s", m.view, plain(m))
+	}
+	upgrade()
+	// The wizard runs on m.cfg.Core; its spawn is refused at the call.
+	if _, err := m.cfg.Core.Spawn(context.Background(), actions.SpawnRequest{}, "op-1"); !errors.Is(err, board.ErrUpgraded) || spawns != 0 {
+		t.Fatalf("the open wizard's spawn: %v, %d spawns", err, spawns)
+	}
+	runAll(m, press(m, "esc"))
+	runAll(m, press(m, "ctrl+w"))
+	if m.view != viewMain || m.wizard != nil || !strings.Contains(plain(m), "reopen the board") {
+		t.Fatalf("ctrl+w on a frozen board: view %d\n%s", m.view, plain(m))
+	}
+}
+
 // A board that cannot watch its binary is frozen from the start, and
 // says why.
 func TestUnwatchedBoardTakesNoActions(t *testing.T) {
@@ -856,8 +922,10 @@ func TestSendSubmitsOnceAndSettles(t *testing.T) {
 	sc := &sendCore{}
 	m := newModel(t, Config{Core: sc.core(), NewOperationID: opIDs()})
 	press(m, "space", "s", "h", "i")
+	// Other text the second time: the guard alone would refuse the same
+	// text, so only the composer's one submission refuses this one.
 	_, first := m.Update(palette.ComposedMsg{Text: "hi"})
-	_, second := m.Update(palette.ComposedMsg{Text: "hi"})
+	_, second := m.Update(palette.ComposedMsg{Text: "hi!"})
 	if first == nil || second != nil {
 		t.Fatalf("submits: first %v, second %v", first != nil, second != nil)
 	}
@@ -871,6 +939,21 @@ func TestSendSubmitsOnceAndSettles(t *testing.T) {
 	m.Update(again())
 	if len(sc.reqs) != 2 || sc.reqs[0].OperationID != "op-1" || sc.reqs[1].OperationID != "op-2" {
 		t.Fatalf("sends = %+v", sc.reqs)
+	}
+}
+
+// ctrl+s and esc in one burst, their answers in reverse order: the
+// composer closed first, so its text is not sent.
+func TestComposedTextAfterEscSendsNothing(t *testing.T) {
+	sc := &sendCore{}
+	m := newModel(t, Config{Core: sc.core(), NewOperationID: opIDs()})
+	press(m, "space", "s", "h", "i")
+	m.Update(palette.ComposeCanceledMsg{})
+	if _, cmd := m.Update(palette.ComposedMsg{Text: "hi"}); cmd != nil || m.view != viewMain {
+		t.Fatalf("a closed composer submitted (view %d)", m.view)
+	}
+	if len(sc.reqs) != 0 || !strings.Contains(plain(m), "nothing was sent") {
+		t.Fatalf("sends %+v\n%s", sc.reqs, plain(m))
 	}
 }
 
