@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/herdr"
 )
 
@@ -117,6 +118,21 @@ func TestSelection(t *testing.T) {
 		if pick1 != pick2 || !errors.Is(err2, err1) {
 			t.Fatalf("selection changed on the trip: %v %v / %v %v", pick1, err1, pick2, err2)
 		}
+	}
+}
+
+// TestAgentTarget: a bound agent is its binding at the snapshot's
+// generation; an unbound one is its pane and agent session.
+func TestAgentTarget(t *testing.T) {
+	sess := &herdr.AgentSession{Kind: "id", Value: "s-1"}
+	b := AgentTarget(snapshot.Agent{PaneID: "w1:p1", Kind: "claude", Session: sess,
+		Binding: &snapshot.BindingRef{ID: "bnd-1", Generation: 2}})
+	u := AgentTarget(snapshot.Agent{PaneID: "w1:p2", Kind: "codex", Session: sess})
+	if !b.Bound() || b.Key() != "binding:bnd-1@2" || b.PaneID != "w1:p1" {
+		t.Fatalf("bound = %+v %s", b, b.Key())
+	}
+	if u.Bound() || u.Key() != "pane:w1:p2#id:s-1" || u.Kind != "codex" {
+		t.Fatalf("unbound = %+v %s", u, u.Key())
 	}
 }
 

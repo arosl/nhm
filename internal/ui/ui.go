@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/herdr"
 )
 
@@ -114,6 +115,20 @@ func (t Target) check() error {
 		return errors.New("ui: a target names neither a binding nor a pane")
 	}
 	return nil
+}
+
+// AgentTarget is the target of an agent in a snapshot: its binding at the
+// snapshot's generation, or, unbound, its pane and agent session
+// ("kind:value", as the board keys it).
+func AgentTarget(a snapshot.Agent) Target {
+	t := Target{PaneID: a.PaneID, Kind: a.Kind}
+	if a.Binding != nil {
+		t.BindingID, t.Generation = a.Binding.ID, a.Binding.Generation
+	}
+	if a.Session != nil {
+		t.Session = a.Session.Kind + ":" + a.Session.Value
+	}
+	return t
 }
 
 // Expect is the bound targets' generations by binding id: the map that
