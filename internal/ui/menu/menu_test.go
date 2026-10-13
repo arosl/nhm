@@ -2,6 +2,8 @@ package menu
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"reflect"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arosl/nhm/internal/core/ensemble"
 	"github.com/arosl/nhm/internal/core/lifecycle"
@@ -73,6 +76,10 @@ func press(m *Model, keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 		case "esc":
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
+		case "down":
+			msg = tea.KeyMsg{Type: tea.KeyDown}
+		case "up":
+			msg = tea.KeyMsg{Type: tea.KeyUp}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -286,33 +293,218 @@ func TestViewOpensAFormAndComesBack(t *testing.T) {
 	}
 }
 
-// At a small client the menu keeps its header and keys, and its list
-// scrolls with the cursor (PearlKnoll's 40x12 check).
-func TestSmallClient(t *testing.T) {
-	m := newMenu(ctxW, &fakeCore{})
-	m.env.Surface = func(id string) *exec.Cmd { return exec.Command("true") }
-	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
-	rows := m.Rows("")
-	for i := 0; i < len(rows)-1; i++ {
-		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+// herdr sizes the menu to the popup's inside: 21 or 22 by 4 at a 40x12
+// client, 54x20 at 120x40. At each size the view fits, and the cursor
+// row shows for every row of every level (PearlKnoll's surfaces check).
+func TestPopupSizes(t *testing.T) {
+	levels := []string{""}
+	for _, a := range newMenu(ctxW, &fakeCore{}).Rows("") {
+		if a.Kind == actions.KindGroup {
+			levels = append(levels, a.ID)
+		}
 	}
-	v := m.View()
-	lines := strings.Split(v, "\n")
-	last := rows[len(rows)-1]
-	if len(lines) > 12 || !strings.HasPrefix(lines[0], "nhm") || !strings.Contains(v, "▶ "+last.Menu.Key) ||
-		!strings.Contains(lines[len(lines)-1], "q close") {
-		t.Fatalf("40x12, cursor on %s:\n%s", last.ID, v)
+	for _, size := range [][2]int{{22, 4}, {21, 4}, {54, 20}, {22, 3}, {22, 2}, {22, 1}} {
+		w, h := size[0], size[1]
+		for _, level := range levels {
+			m := newMenu(ctxW, &fakeCore{})
+			m.env.Surface = func(id string) *exec.Cmd { return exec.Command("true") }
+			m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+			m.level = level
+			rows := m.Rows(level)
+			for i, a := range rows {
+				m.cursor = i
+				v := m.View()
+				lines := strings.Split(v, "\n")
+				bad := len(lines) > h || !strings.Contains(v, "▶ "+a.Menu.Key)
+				if h >= 3 {
+					// The header and the keys stay too.
+					bad = bad || !strings.HasPrefix(lines[0], "nhm") || !strings.Contains(lines[len(lines)-1], "q close")
+				}
+				for _, l := range lines {
+					bad = bad || lipgloss.Width(l) > w
+				}
+				if bad {
+					t.Fatalf("%dx%d, level %q, cursor on %s:\n%s", w, h, level, a.ID, v)
+				}
+			}
+		}
+	}
+	// A compact menu shows its group on the header line.
+	m := newMenu(ctxW, &fakeCore{})
+	m.Update(tea.WindowSizeMsg{Width: 22, Height: 4})
+	press(m, "x")
+	if v := m.View(); !strings.HasPrefix(v, "nhm › diagnostics") {
+		t.Fatalf("22x4 diagnostics:\n%s", v)
 	}
 	// A long label keeps a gap before its help text.
-	m.level, m.cursor = "diagnostics", 0
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	if v := m.View(); !strings.Contains(v, "unfinished operations  operations with no final") {
-		t.Fatalf("diagnostics:\n%s", v)
+	m.Update(tea.WindowSizeMsg{Width: 54, Height: 20})
+	if v := m.View(); !strings.Contains(v, "unfinished operations  operations") {
+		t.Fatalf("54x20 diagnostics:\n%s", v)
+	}
+	// The help text wraps to the popup and scrolls to its last line; up
+	// goes back to its first.
+	m.Update(tea.WindowSizeMsg{Width: 22, Height: 4})
+	press(m, "?")
+	help := m.helpLines()
+	for range help {
+		press(m, "down")
+	}
+	v := m.View()
+	for _, l := range strings.Split(v, "\n") {
+		if lipgloss.Width(l) > 22 {
+			t.Fatalf("22x4 help:\n%s", v)
+		}
+	}
+	if !strings.Contains(v, strings.TrimSpace(help[len(help)-1])) || !strings.Contains(v, "esc back") || m.cursor != 0 {
+		t.Fatalf("22x4 help at its end (cursor %d):\n%s", m.cursor, v)
+	}
+	for range help {
+		press(m, "up")
+	}
+	if v := m.View(); !strings.Contains(v, strings.TrimSpace(help[0])) {
+		t.Fatalf("22x4 help at its top:\n%s", v)
+	}
+	// An open screen gets the height below the header line, and the view
+	// keeps the header, the selected operation and the keys.
+	m = newMenu(ctxW, &fakeCore{})
+	m.Update(tea.WindowSizeMsg{Width: 21, Height: 4})
+	press(m, "o")
+	if v := m.View(); m.screenHeight() != 3 || len(strings.Split(v, "\n")) != 4 || !strings.HasPrefix(v, "nhm") ||
+		!strings.Contains(v, "▶ ") || !strings.Contains(v, "esc back") {
+		t.Fatalf("21x4 operations (screen height %d):\n%s", m.screenHeight(), v)
 	}
 	// A screen taller than the popup keeps its top.
-	if got := fit(strings.Repeat("x\n", 30)+"end", 12); len(strings.Split(got, "\n")) != 12 || !strings.HasPrefix(got, "x") ||
-		!strings.Contains(got, "more below") {
+	if got := fit(strings.Repeat("x\n", 30)+"end", 22, 12); len(strings.Split(got, "\n")) != 12 || !strings.HasPrefix(got, "x") ||
+		!strings.Contains(got, "more below") || lipgloss.Width(strings.Split(got, "\n")[11]) > 22 {
 		t.Fatalf("fit = %q", got)
+	}
+}
+
+// opsBase is the newest operation's time in manyOps.
+var opsBase = time.Date(2026, 10, 13, 4, 0, 0, 0, time.UTC)
+
+// manyOps has n kill records a minute apart, the newest first, and the
+// newest has targets. With fail, every read after the first fails.
+type manyOps struct {
+	n, targets int
+	reads      *int
+	fail       bool
+}
+
+func (o manyOps) RecentOperations(context.Context, int) ([]lifecycle.RecentOperation, error) {
+	*o.reads++
+	if o.fail && *o.reads > 1 {
+		return nil, errors.New("database is locked")
+	}
+	var out []lifecycle.RecentOperation
+	for i := range o.n {
+		at := opsBase.Add(-time.Duration(i) * time.Minute)
+		op := lifecycle.RecentOperation{OperationID: fmt.Sprintf("op-%02d", i), Verb: lifecycle.VerbKill, Status: lifecycle.KillClosed,
+			CreatedAt: at, UpdatedAt: at, Completed: &at}
+		if i == 0 {
+			for k := range o.targets {
+				op.Targets = append(op.Targets, lifecycle.OperationTarget{Index: k, Status: "retired",
+					Result: json.RawMessage(fmt.Sprintf(`{"mail_name":"Agent%02d"}`, k))})
+			}
+		}
+		out = append(out, op)
+	}
+	return out, nil
+}
+
+func (manyOps) RecentJobs(int) ([]runner.Entry, error) { return nil, nil }
+
+// Recent operations fits the popup too: the list scrolls with the
+// selection, the selected row shows beside a read error, and an
+// operation's page scrolls to its last target and back.
+func TestOperationsFit(t *testing.T) {
+	reads := 0
+	m := newMenu(ctxW, &fakeCore{})
+	m.env.Operations = manyOps{n: 20, targets: 30, reads: &reads, fail: true}
+	m.Update(tea.WindowSizeMsg{Width: 21, Height: 4})
+	press(m, "o")
+	check := func(what string, w, h int, want ...string) {
+		t.Helper()
+		v := m.View()
+		lines := strings.Split(v, "\n")
+		bad := len(lines) > h
+		for _, l := range lines {
+			bad = bad || lipgloss.Width(l) > w
+		}
+		for _, s := range want {
+			bad = bad || !strings.Contains(v, s)
+		}
+		if bad {
+			t.Fatalf("%s at %dx%d:\n%s", what, w, h, v)
+		}
+	}
+	for range 19 {
+		press(m, "down")
+	}
+	last := "▶ " + opsBase.Add(-19*time.Minute).Local().Format("15:04:05")
+	check("the last row", 21, 4, last, "esc back")
+	press(m, "r")
+	check("a read error", 21, 4, last, "read failed")
+	m.Update(tea.WindowSizeMsg{Width: 54, Height: 20})
+	for range 19 {
+		press(m, "up")
+	}
+	press(m, "enter")
+	check("op-00's page", 54, 20, "▶ "+opsBase.Local().Format("15:04:05"), "    op-00", "Agent00", "esc: the list")
+	for range 40 {
+		press(m, "down")
+	}
+	check("op-00's page, scrolled", 54, 20, "Agent29")
+	for range 40 {
+		press(m, "up")
+	}
+	check("op-00's page, back up", 54, 20, "    op-00")
+	press(m, "esc")
+	check("the list again", 54, 20, "enter: targets")
+}
+
+// While the help shows, a row's key does nothing; after a resize the help
+// scrolls back at once.
+func TestHelpKeys(t *testing.T) {
+	m := newMenu(ctxW, &fakeCore{})
+	m.Update(tea.WindowSizeMsg{Width: 22, Height: 4})
+	press(m, "?", "enter", "x")
+	if m.open != nil || m.level != "" || !m.help {
+		t.Fatalf("help: open %T, level %q, help %v", m.open, m.level, m.help)
+	}
+	for range m.helpLines() {
+		press(m, "down")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 4})
+	if m.helpTop != m.helpMax() {
+		t.Fatalf("after a resize: help top %d, max %d", m.helpTop, m.helpMax())
+	}
+	before := m.helpTop
+	press(m, "up")
+	if m.helpTop != before-1 {
+		t.Fatalf("up after a resize: help top %d, want %d", m.helpTop, before-1)
+	}
+}
+
+func TestWindow(t *testing.T) {
+	lines := []string{"0", "1", "2", "3", "4", "5"}
+	for _, c := range []struct {
+		first, last, n int
+		want           string
+	}{
+		{0, 0, 3, "012"}, // at the top
+		{4, 4, 3, "234"}, // the cursor at the bottom
+		{2, 4, 3, "234"}, // a row and its details
+		{1, 5, 3, "123"}, // too long: its first line stays
+		{0, 0, 9, "012345"},
+		{3, 3, 0, "3"}, // at least the cursor
+	} {
+		if got := strings.Join(window(lines, c.first, c.last, c.n), ""); got != c.want {
+			t.Errorf("window(%d, %d, %d) = %q, want %q", c.first, c.last, c.n, got, c.want)
+		}
+	}
+	if got := window(nil, 0, 0, 3); len(got) != 0 {
+		t.Errorf("window(nil) = %q", got)
 	}
 }
 

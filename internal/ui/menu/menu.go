@@ -60,7 +60,10 @@ type Model struct {
 	cursor int
 	note   string
 	help   bool
-	open   screen
+	// helpTop is the first help line shown: the help scrolls in a short
+	// popup.
+	helpTop int
+	open    screen
 	// stack holds the screens under the open one: a form a view opened
 	// returns to that view.
 	stack []screen
@@ -153,12 +156,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		if m.open != nil {
-			// The open screen gets the size below the menu's header.
-			cmd, _ := m.open.Update(tea.WindowSizeMsg{Width: msg.Width, Height: msg.Height - 2})
-			return m, cmd
+		m.helpTop = min(m.helpTop, m.helpMax())
+		// Every screen gets the size below the menu's header: the open one
+		// and those under it, which come back at this size.
+		size := tea.WindowSizeMsg{Width: msg.Width, Height: m.screenHeight()}
+		var cmds []tea.Cmd
+		for _, s := range append(slices.Clone(m.stack), m.open) {
+			if s != nil {
+				cmd, _ := s.Update(size)
+				cmds = append(cmds, cmd)
+			}
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 	case openScreen:
 		return m, m.show(msg.s)
 	case pushScreen:
@@ -199,7 +208,7 @@ func (m *Model) show(s screen) tea.Cmd {
 	if s == nil {
 		return nil
 	}
-	size, _ := s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height - 2})
+	size, _ := s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.screenHeight()})
 	return tea.Batch(size, s.Init())
 }
 
@@ -220,15 +229,28 @@ func (m *Model) key(k tea.KeyMsg) tea.Cmd {
 		m.cursor, m.level, m.note = m.parentIndex(), "", ""
 		return nil
 	case "?":
-		m.help = !m.help
+		m.help, m.helpTop = !m.help, 0
 		return nil
 	case "up":
+		if m.help {
+			m.helpTop = max(0, min(m.helpTop, m.helpMax())-1)
+			return nil
+		}
 		m.cursor = max(0, m.cursor-1)
 		return nil
 	case "down":
-		m.cursor = min(len(rows)-1, m.cursor+1)
+		if m.help {
+			m.helpTop = min(m.helpTop+1, m.helpMax())
+			return nil
+		}
+		m.cursor = max(0, min(len(rows)-1, m.cursor+1))
 		return nil
-	case "enter":
+	}
+	if m.help {
+		// The help hides the rows: a row's key does not open it.
+		return nil
+	}
+	if k.String() == "enter" {
 		if len(rows) > 0 {
 			return m.run(rows[m.cursor])
 		}
@@ -286,81 +308,190 @@ func (m *Model) unavailable(a actions.Action) string {
 	return a.Unavailable(m.env.Context, m.env.Core)
 }
 
+// compactHeight is the popup height under which the menu drops its blank
+// lines and shows the breadcrumb on the header line. herdr sizes the
+// menu to the popup's inside: 22x4 at a 40x12 client.
+const compactHeight = 8
+
+func (m *Model) compact() bool { return m.height < compactHeight }
+
+// chrome is the number of lines the menu shows above an open screen.
+func (m *Model) chrome() int {
+	if m.compact() {
+		return 1
+	}
+	return 2
+}
+
+// screenHeight is the height an open screen gets.
+func (m *Model) screenHeight() int { return max(1, m.height-m.chrome()) }
+
+// head is the header line. crumb is the open group's label, which a
+// compact menu shows on it.
+func (m *Model) head(crumb string) string {
+	t := m.theme
+	h := lipgloss.NewStyle().Foreground(t.Primary).Bold(true).Render("nhm")
+	used := 3
+	if crumb != "" {
+		crumb = clip("› "+crumb, max(1, m.width-4))
+		h += " " + lipgloss.NewStyle().Foreground(t.Overlay).Render(crumb)
+		used += 1 + len([]rune(crumb))
+	}
+	if room := m.width - used - 2; room >= 4 || crumb == "" {
+		h += "  " + lipgloss.NewStyle().Foreground(t.Subtext).Render(clip(m.env.Context.Header(), max(4, room)))
+	}
+	return h
+}
+
 // View implements tea.Model.
 func (m *Model) View() string {
-	t := m.theme
-	head := lipgloss.NewStyle().Foreground(t.Primary).Bold(true).Render("nhm") + "  " +
-		lipgloss.NewStyle().Foreground(t.Subtext).Render(clip(m.env.Context.Header(), max(10, m.width-6)))
 	if m.open != nil {
-		return fit(head+"\n\n"+m.open.View(m.width, m.height-2), m.height)
-	}
-	top := []string{head}
-	if m.level != "" {
-		if g, ok := actions.ByID(m.level); ok {
-			top = append(top, lipgloss.NewStyle().Foreground(t.Overlay).Render("› "+g.Label))
+		sep := "\n\n"
+		if m.compact() {
+			sep = "\n"
 		}
+		return fit(m.head("")+sep+m.open.View(m.width, m.screenHeight()), m.width, m.height)
 	}
-	top = append(top, "")
-	var bottom []string
+	top, bottom := m.frame()
+	n := m.bodyHeight()
+	var body []string
+	if m.help {
+		lines := m.helpLines()
+		start := min(m.helpTop, m.helpMax())
+		body = lines[start:min(len(lines), start+n)]
+	} else {
+		// A list taller than the popup scrolls with the cursor; the header
+		// and the keys stay.
+		body = window(m.rowLines(), m.cursor, m.cursor, n)
+	}
+	return fit(strings.Join(append(append(top, body...), bottom...), "\n"), m.width, m.height)
+}
+
+// frame is what the menu shows above and below its list or its help. In
+// a very short popup the keys and then the header give way, so the
+// cursor row always shows.
+func (m *Model) frame() (top, bottom []string) {
+	t := m.theme
+	crumb := ""
+	if g, ok := actions.ByID(m.level); ok && m.level != "" {
+		crumb = g.Label
+	}
+	// gap is the blank line between the parts, which a compact menu drops.
+	var gap []string
+	if !m.compact() {
+		gap = []string{""}
+	}
+	if m.compact() {
+		top = []string{m.head(crumb)}
+	} else {
+		top = []string{m.head("")}
+		if crumb != "" {
+			top = append(top, lipgloss.NewStyle().Foreground(t.Overlay).Render("› "+crumb))
+		}
+		top = append(top, gap...)
+	}
 	if m.note != "" {
-		bottom = append(bottom, "", lipgloss.NewStyle().Foreground(t.Warning).Render(clip(m.note, max(10, m.width-2))))
+		bottom = append(append(bottom, gap...), lipgloss.NewStyle().Foreground(t.Warning).Render(clip(m.note, max(10, m.width-2))))
 	}
 	keys := "letter or enter: open · ↑/↓ · ?: help · q: close"
 	switch {
+	case m.help && m.width < 40:
+		keys = "↑/↓ more · esc back"
+	case m.help:
+		keys = "↑/↓: more · esc: back"
+	case m.width < 40:
+		keys = "? help · q close"
 	case m.width < 64:
 		keys = "enter · esc back · ? help · q close"
 	case m.level != "":
 		keys = "letter or enter: open · ↑/↓ · esc: back · ?: help · q: close"
 	}
-	bottom = append(bottom, "", lipgloss.NewStyle().Foreground(t.Overlay).Render(clip(keys, max(10, m.width-2))))
-	var body []string
-	if m.help {
-		body = strings.Split(strings.TrimRight(helpText, "\n"), "\n")
-	} else {
-		rows := m.Rows(m.level)
-		labels := make([]string, len(rows))
-		col := 0
-		for i, a := range rows {
-			labels[i] = a.Label
-			if a.Kind == actions.KindGroup {
-				labels[i] += " ›"
-			}
-			col = max(col, len([]rune(labels[i])))
-		}
-		lines := make([]string, len(rows))
-		for i, a := range rows {
-			// The label column fits the level's longest label, so a help
-			// text never runs into a label.
-			line := fmt.Sprintf("%s  %-*s  %s", a.Menu.Key, col, labels[i], a.Help)
-			style := lipgloss.NewStyle()
-			if why := m.unavailable(a); why != "" {
-				style = style.Foreground(t.Overlay)
-			}
-			cursor := "  "
-			if i == m.cursor {
-				cursor, style = "▶ ", style.Bold(true)
-			}
-			lines[i] = cursor + style.Render(clip(line, max(10, m.width-4)))
-		}
-		// A list taller than the popup scrolls with the cursor; the header
-		// and the keys stay.
-		avail := max(1, m.height-len(top)-len(bottom))
-		start := max(0, m.cursor-avail+1)
-		body = lines[start:min(len(lines), start+avail)]
+	bottom = append(append(bottom, gap...), lipgloss.NewStyle().Foreground(t.Overlay).Render(clip(keys, max(10, m.width-2))))
+	if m.height-len(top)-len(bottom) < 1 {
+		bottom = nil
 	}
-	return fit(strings.Join(append(append(top, body...), bottom...), "\n"), m.height)
+	if m.height-len(top) < 1 {
+		top = nil
+	}
+	return top, bottom
+}
+
+// bodyHeight is the number of list or help lines the menu shows.
+func (m *Model) bodyHeight() int {
+	top, bottom := m.frame()
+	return max(1, m.height-len(top)-len(bottom))
+}
+
+// helpMax is the last first line the help can show.
+func (m *Model) helpMax() int { return max(0, len(m.helpLines())-m.bodyHeight()) }
+
+// helpLines is the help text, wrapped to the popup.
+func (m *Model) helpLines() []string {
+	wrapped := lipgloss.NewStyle().Width(max(10, m.width-2)).Render(strings.TrimRight(helpText, "\n"))
+	return strings.Split(wrapped, "\n")
+}
+
+// rowLines are the level's rows. The label column fits the level's
+// longest label, so a help text never runs into a label; a popup too
+// narrow for the help texts shows the labels alone.
+func (m *Model) rowLines() []string {
+	t := m.theme
+	rows := m.Rows(m.level)
+	labels := make([]string, len(rows))
+	col := 0
+	for i, a := range rows {
+		labels[i] = a.Label
+		if a.Kind == actions.KindGroup {
+			labels[i] += " ›"
+		}
+		col = max(col, len([]rune(labels[i])))
+	}
+	width := max(10, m.width-4)
+	bare := width < 3+col+2+8
+	lines := make([]string, len(rows))
+	for i, a := range rows {
+		line := fmt.Sprintf("%s  %-*s  %s", a.Menu.Key, col, labels[i], a.Help)
+		if bare {
+			line = a.Menu.Key + "  " + labels[i]
+		}
+		style := lipgloss.NewStyle()
+		if why := m.unavailable(a); why != "" {
+			style = style.Foreground(t.Overlay)
+		}
+		cursor := "  "
+		if i == m.cursor {
+			cursor, style = "▶ ", style.Bold(true)
+		}
+		lines[i] = cursor + style.Render(clip(line, width))
+	}
+	return lines
+}
+
+// window is the part of lines, at most n long, that holds the lines from
+// first to last (the cursor's), with last at its bottom once they are
+// below the top. When they do not all fit, first stays.
+func window(lines []string, first, last, n int) []string {
+	n = max(1, n)
+	start := min(max(0, last-n+1), first)
+	return lines[start:min(len(lines), start+n)]
 }
 
 // fit keeps a view within height lines, from the top: what a screen
-// shows first (its title, its review) stays, and a cut view says so.
-// bubbletea would keep the tail instead.
-func fit(s string, height int) string {
+// shows first (its title, its review) stays, and a cut view of three
+// lines or more says so. bubbletea would keep the tail instead.
+func fit(s string, width, height int) string {
 	lines := strings.Split(s, "\n")
 	if height <= 0 || len(lines) <= height {
 		return s
 	}
 	lines = lines[:height]
-	lines[height-1] = "… more below: make the popup taller"
+	if height >= 3 {
+		more := "… more below: make the popup taller"
+		if width < 36 {
+			more = "… more below"
+		}
+		lines[height-1] = clip(more, max(4, width))
+	}
 	return strings.Join(lines, "\n")
 }
 

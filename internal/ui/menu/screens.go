@@ -225,16 +225,26 @@ func (s *wizardScreen) View(int, int) string { return s.w.View() }
 
 // opsScreen is recent operations: the core's records and the UI's jobs,
 // newest first; enter shows the selected one's targets.
+// opsScreen is recent operations: a list, and enter opens the selected
+// operation's page with its targets.
 type opsScreen struct {
 	v      *forms.OperationsView
 	detail bool
+	// scroll is the first line the operation's page shows.
+	scroll        int
+	width, height int
 }
 
 func (s *opsScreen) Init() tea.Cmd { return s.v.Init() }
 
 func (s *opsScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
-	if k, ok := msg.(tea.KeyMsg); ok {
-		switch k.String() {
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		s.width, s.height = m.Width, m.Height
+		s.scroll = min(s.scroll, s.maxScroll())
+		return nil, false
+	case tea.KeyMsg:
+		switch m.String() {
 		case "esc", "q", "backspace", "left":
 			if s.detail {
 				s.detail = false
@@ -242,11 +252,19 @@ func (s *opsScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 			}
 			return nil, true
 		case "up":
-			s.v.Move(-1)
+			if s.detail {
+				s.scroll = max(0, min(s.scroll, s.maxScroll())-1)
+			} else {
+				s.v.Move(-1)
+			}
 		case "down":
-			s.v.Move(1)
+			if s.detail {
+				s.scroll = min(s.scroll+1, s.maxScroll())
+			} else {
+				s.v.Move(1)
+			}
 		case "enter":
-			s.detail = !s.detail
+			s.detail, s.scroll = !s.detail, 0
 		case "r":
 			return s.v.Refresh(), false
 		}
@@ -255,43 +273,91 @@ func (s *opsScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return s.v.Update(msg), false
 }
 
-func (s *opsScreen) View(width, height int) string {
-	var b strings.Builder
-	b.WriteString("recent operations\n\n")
+// layout is the screen at a size: the lines above and below the body;
+// the body, which is the list or the selected operation's page; and the
+// selected row's line in the list. The selected row always shows: the
+// keys and then the lines above give way to it.
+func (s *opsScreen) layout(width, height int) (top, bottom, body []string, selected int) {
+	var gap []string
+	if height >= compactHeight {
+		gap = []string{""}
+	}
+	top = append([]string{"recent operations"}, gap...)
 	if err := s.v.Err(); err != nil {
-		b.WriteString("read failed (the list is as last read): " + clip(err.Error(), width-2) + "\n")
+		top = append(top, clip("read failed: "+forms.Clean(err.Error())+" (the list is as last read)", width-2))
+	}
+	keys := "↑/↓ · enter: targets · r: read again · esc: back"
+	switch {
+	case s.detail && width < 40:
+		keys = "↑/↓ · esc list"
+	case s.detail:
+		keys = "↑/↓: scroll · r: read again · esc: the list"
+	case width < 32:
+		keys = "enter · esc back"
+	case width < 52:
+		keys = "↑/↓ · enter · r read · esc back"
+	}
+	bottom = append(append([]string{}, gap...), clip(keys, width))
+	if height-len(top)-len(bottom) < 1 {
+		bottom = nil
+	}
+	for len(top) > 0 && height-len(top) < 1 {
+		top = top[:len(top)-1]
 	}
 	rows := s.v.Rows()
 	if len(rows) == 0 {
-		b.WriteString("none yet\n")
+		return top, bottom, []string{"none yet"}, 0
 	}
 	for _, r := range rows {
-		mark := "  "
-		if r.ID == s.v.Selected() {
-			mark = "▶ "
-		}
-		line := fmt.Sprintf("%s %-14s %-12s %-8s %s", r.Created.Local().Format("15:04:05"), r.Verb, r.Status, r.State, r.Workspace)
-		b.WriteString(mark + clip(line, width-2) + "\n")
-		if r.ID != s.v.Selected() || !s.detail {
+		sel := r.ID == s.v.Selected()
+		if s.detail && !sel {
 			continue
 		}
-		fmt.Fprintf(&b, "    %s\n", r.ID)
+		mark := "  "
+		if sel {
+			mark, selected = "▶ ", len(body)
+		}
+		line := fmt.Sprintf("%s %-14s %-12s %-8s %s", r.Created.Local().Format("15:04:05"), r.Verb, r.Status, r.State, r.Workspace)
+		body = append(body, mark+clip(line, width-2))
+		if !s.detail {
+			continue
+		}
+		body = append(body, clip("    "+r.ID, width))
 		if r.Detail != "" {
-			b.WriteString("    " + clip(r.Detail, width-4) + "\n")
+			body = append(body, "    "+clip(r.Detail, width-4))
 		}
 		if r.State == forms.OpUnknown || r.State == forms.OpQuiet {
-			b.WriteString("    no final outcome: diagnostics › unfinished operations lists it; nothing replays it\n")
+			body = append(body, clip("    no final outcome: diagnostics › unfinished operations lists it; nothing replays it", width))
 		}
 		for _, t := range r.Targets {
 			line := fmt.Sprintf("    %s: %s", t.Name, t.Status)
 			if t.Detail != "" {
 				line += ": " + t.Detail
 			}
-			b.WriteString(clip(line, width-2) + "\n")
+			body = append(body, clip(line, width-2))
 		}
 	}
-	b.WriteString("\n↑/↓ · enter: targets · r: read again · esc: back")
-	return b.String()
+	return top, bottom, body, selected
+}
+
+// maxScroll is the last first line the operation's page can show.
+func (s *opsScreen) maxScroll() int {
+	top, bottom, body, _ := s.layout(s.width, s.height)
+	return max(0, len(body)-max(1, s.height-len(top)-len(bottom)))
+}
+
+// View shows the list around the selected operation, or the selected
+// operation's page from its scroll line.
+func (s *opsScreen) View(width, height int) string {
+	top, bottom, body, selected := s.layout(width, height)
+	n := max(1, height-len(top)-len(bottom))
+	if s.detail {
+		start := min(s.scroll, max(0, len(body)-n))
+		body = body[start:min(len(body), start+n)]
+	} else {
+		body = window(body, selected, selected, n)
+	}
+	return strings.Join(append(append(top, body...), bottom...), "\n")
 }
 
 // sendScreen is "send text": the palette's composer for the frozen
