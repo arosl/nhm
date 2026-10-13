@@ -48,6 +48,11 @@ type RecycleRequest struct {
 	BeadID      string
 	NoHandoff   bool
 	OperationID string
+	// WaitTurn, when not 0, is how long recycle waits for the agent to end
+	// its turn (idle or done) before its check: nhm recycle --self, where
+	// the agent asks for its own recycle as its last step (nhm-abn). 0
+	// refuses a working agent at once.
+	WaitTurn time.Duration
 	// ExpectedGeneration is the generation the caller reviewed; 0 is
 	// unset. When set, recycle stops at its check, under the binding's
 	// lock and before any effect, when the binding is at another one.
@@ -102,16 +107,14 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 		return res, fmt.Errorf("recycle stopped at %s: %w", stage, err)
 	}
 	a := kinds.Lookup(b.Kind)
-	switch {
-	case b.Status != bindings.Active:
-		return fail(StageCheck, fmt.Errorf("%s is %s", b.MailName, b.Status))
-	case a.ExitCommand == "":
-		return fail(StageCheck, fmt.Errorf("nhm knows no exit command for %s; retire it and spawn anew", b.Kind))
-	case env.Caller != "" && b.PaneID == env.Caller:
-		return fail(StageCheck, fmt.Errorf("%s runs in this pane", b.MailName))
-	}
-	kick, err := recycleKickoff(ctx, env, req, b)
+	kick, err := recycleStatic(ctx, env, req, b)
 	if err != nil {
+		return fail(StageCheck, err)
+	}
+	if env.Caller != "" && b.PaneID == env.Caller {
+		return fail(StageCheck, fmt.Errorf("%s runs in this pane: stopping it would stop this recycle (nhm recycle --self runs it as a job of its own)", b.MailName))
+	}
+	if err := waitTurn(ctx, env, req, b); err != nil {
 		return fail(StageCheck, err)
 	}
 	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -291,6 +294,49 @@ func waitExit(ctx context.Context, env Env, b bindings.Binding) bool {
 		env.sleep(ctx, 250*time.Millisecond)
 	}
 	return false
+}
+
+// CheckRecycle runs recycle's checks that need neither the agent's turn
+// nor its lock: the binding is active, nhm knows its kind's exit
+// command, and the kickoff renders. nhm recycle --self runs them before
+// it hands the recycle to a job of its own, so a bad -t or a missing bead
+// is refused while the agent can still read the answer.
+func CheckRecycle(ctx context.Context, env Env, req RecycleRequest) (bindings.Binding, error) {
+	b, err := find(ctx, env, req.Target, req.ProjectKey)
+	if err != nil {
+		return bindings.Binding{}, err
+	}
+	_, err = recycleStatic(ctx, env, req, b)
+	return b, err
+}
+
+// recycleStatic checks the binding and its kind and renders the kickoff.
+func recycleStatic(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) (string, error) {
+	switch {
+	case b.Status != bindings.Active:
+		return "", fmt.Errorf("%s is %s", b.MailName, b.Status)
+	case kinds.Lookup(b.Kind).ExitCommand == "":
+		return "", fmt.Errorf("nhm knows no exit command for %s; retire it and spawn anew", b.Kind)
+	}
+	return recycleKickoff(ctx, env, req, b)
+}
+
+// waitTurn waits up to req.WaitTurn for the agent to end its turn: idle
+// or done. 0 does not wait.
+func waitTurn(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) error {
+	if req.WaitTurn <= 0 {
+		return nil
+	}
+	ms := req.WaitTurn.Milliseconds()
+	info, err := env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: b.PaneID,
+		Until: []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone}, TimeoutMS: &ms})
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s did not end its turn within %s: %w", b.MailName, req.WaitTurn, err)
+	case info.AgentStatus != herdr.StatusIdle && info.AgentStatus != herdr.StatusDone:
+		return fmt.Errorf("%s did not end its turn within %s (it is %s)", b.MailName, req.WaitTurn, info.AgentStatus)
+	}
+	return nil
 }
 
 // recycleKickoff is the successor's prompt: --prompt as typed, a

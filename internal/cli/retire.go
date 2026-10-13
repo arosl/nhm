@@ -201,6 +201,7 @@ func printRetire(w io.Writer, res lifecycle.RetireResult) {
 
 const recycleUsage = `Usage: nhm recycle <Name> [-t KEY [--bead ID] | --prompt T] [--no-handoff]
                    [--project DIR] [--op-id ID] [--socket PATH] [--json]
+       nhm recycle --self [-t KEY [--bead ID] | --prompt T] [--no-handoff] [--wait D] [--json]
 
 Give the same agent a fresh session in the same pane, with the same name,
 tab and slot: preserve its transcript, compose a handoff (the bead's
@@ -213,6 +214,14 @@ it reports the stage and starts nothing twice.
 A kickoff template's bead_* placeholders come from --bead, as with nhm
 send, else from the agent's bead in progress (the one the handoff
 reads); with neither, recycle refuses before it stops anything.
+
+--self is an agent's request for its own fresh session, as the last
+step of its turn: the agent of the calling pane. Recycle refuses to run
+in the agent's own pane, because stopping the agent would stop it; with
+--self it runs as a job of its own instead. The job waits up to --wait
+(default 5m) for the agent to end its turn, then recycles it. nhm
+recycle --self checks the request first, prints the operation id and
+returns at once; the menu's recent operations show how it ended.
 
 Exit codes: 0 recycled; 1 stopped at a stage; 2 refused.
 `
@@ -227,16 +236,26 @@ func runRecycle(args []string, stdout, stderr io.Writer) int {
 	prompt := fs.String("prompt", "", "the kickoff prompt")
 	bead := fs.String("bead", "", "the bead of the template's bead_* placeholders")
 	noHandoff := fs.Bool("no-handoff", false, "send no handoff")
+	selfRecycle := fs.Bool("self", false, "recycle the calling pane's agent, as a job of its own, when its turn ends")
+	wait := fs.Duration("wait", 5*time.Minute, "with --self: how long the job waits for the agent to end its turn")
 	project := fs.String("project", "", "the name's project")
 	opID := fs.String("op-id", "", "operation id, for an idempotent retry")
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args)
-	if err != nil || len(pos) != 1 {
+	names := 1
+	if *selfRecycle {
+		names = 0
+	}
+	if err != nil || len(pos) != names || *wait <= 0 || *selfRecycle && (*opID != "" || *project != "") {
 		if err == nil {
 			fmt.Fprint(stderr, recycleUsage)
 		}
 		return exitRefused
+	}
+	if *selfRecycle {
+		return recycleSelf(lifecycle.RecycleRequest{Template: tmpl, Prompt: *prompt, BeadID: strings.TrimSpace(*bead),
+			NoHandoff: *noHandoff, WaitTurn: *wait}, *socket, *asJSON, stdout, stderr)
 	}
 	env := envelope{Command: "recycle"}
 	ctx := context.Background()
