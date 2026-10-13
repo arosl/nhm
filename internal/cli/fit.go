@@ -253,9 +253,17 @@ func gone(pid int) bool {
 	return pid > 0 && errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
 }
 
+// running reports whether the probe started and still runs. herdr closes
+// a popup when its program ends, so while the probe runs, the popup that
+// is open is the probe's.
+func running(ev []fitEvent) bool {
+	start, ok := lastOf(ev, "start")
+	return ok && !exited(ev) && !gone(start.PID)
+}
+
 // popup opens the throwaway popup, sees the probe start in it, and closes
-// it with popup.close. It never closes a popup it did not open: when one
-// is open already (ui_busy), it skips.
+// it with popup.close. It closes a popup only while the probe runs in it:
+// when one is open already (ui_busy), it skips.
 func (e fitEnv) popup(ctx context.Context) doctorCheck {
 	c := doctorCheck{Name: "popup", Result: checkFail}
 	r, err := e.open(ctx, herdr.PluginPaneOpenParams{Placement: "popup"})
@@ -269,14 +277,26 @@ func (e fitEnv) popup(ctx context.Context) doctorCheck {
 	}
 	ev, ok := e.until(ctx, r, e.wait, started)
 	if !ok {
-		// The popup herdr opened is ours: one is open at a time.
-		_ = e.h.PopupClose(ctx)
-		c.Detail = fmt.Sprintf("the probe did not start in %s", e.wait)
+		// A probe that failed has closed its popup, and the popup open
+		// now may be the user's: close it only while the probe runs. A
+		// probe that starts late quits by itself.
+		if running(ev) {
+			_ = e.h.PopupClose(ctx)
+		}
+		c.Detail = fmt.Sprintf("the probe did not start in %s (if it starts late, it quits on q or after %s)", e.wait, fitProbeTTL)
 		c.Fix = "herdr plugin log list --plugin nhm says why"
 		return c
 	}
 	start, _ := lastOf(ev, "start")
 	size, _ := lastOf(ev, "size")
+	// The probe may have ended since: someone pressed q or closed the
+	// popup, and may have opened another one.
+	if !running(r.events()) {
+		c.Result = checkWarn
+		c.Detail = fmt.Sprintf("a bubbletea program ran in a popup at %dx%d (%s, TERM=%s), but it ended before popup.close; run the check again",
+			size.Width, size.Height, start.Profile, start.Term)
+		return c
+	}
 	if err := e.h.PopupClose(ctx); err != nil {
 		c.Detail = "popup.close: " + err.Error()
 		return c

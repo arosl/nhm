@@ -58,6 +58,9 @@ jobs:
     # nhm's interactive surfaces rely on, then the surfaces themselves
     # through an attached client in a pty (nhm-qbi.11).
     runs-on: ubuntu-24.04
+    # A hung herdr, client or download must not hold the runner for
+    # GitHub's 6 hours.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

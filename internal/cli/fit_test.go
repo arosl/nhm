@@ -26,6 +26,8 @@ type fitWorld struct {
 	plugins     []map[string]any
 	busy        bool // a popup is open already
 	silent      bool // the probe never starts
+	noSize      bool // the probe in the popup starts, but reads no size
+	quits       bool // the probe in the popup ends at once (q), and herdr closes the popup
 	loseKeys    bool // send_keys reaches no probe
 	guardBroken bool // the shell is not the foreground group
 	stays       bool // a pane stays after its program ends
@@ -88,15 +90,23 @@ func newFitWorld(t *testing.T) *fitWorld {
 			return nil, &herdrtest.Error{Code: "plugin_pane_not_found", Message: p.Entrypoint}
 		}
 		out := probeOut{file: p.Env[fitOutEnv], nonce: p.Env[fitNonceEnv]}
-		if !w.silent {
-			out.write(t, fitEvent{Event: "start", PID: 1 << 22, Term: "xterm-256color", Profile: "truecolor"},
-				fitEvent{Event: "size", Width: 72, Height: 25})
+		popup := p.Placement == "popup"
+		if popup && (w.busy || w.popup != nil) {
+			return nil, &herdrtest.Error{Code: herdr.CodeUIBusy, Message: "a popup is open"}
 		}
-		if p.Placement == "popup" {
-			if w.busy || w.popup != nil {
-				return nil, &herdrtest.Error{Code: herdr.CodeUIBusy, Message: "a popup is open"}
+		if !w.silent {
+			// The probe's pid is one that lives: this test's.
+			out.write(t, fitEvent{Event: "start", PID: os.Getpid(), Term: "xterm-256color", Profile: "truecolor"})
+			if !popup || !w.noSize {
+				out.write(t, fitEvent{Event: "size", Width: 72, Height: 25})
 			}
-			w.popup = &out
+		}
+		if popup {
+			if w.quits {
+				out.write(t, fitEvent{Event: "key", Key: "q"}, fitEvent{Event: "exit", Reason: "q"})
+			} else {
+				w.popup = &out
+			}
 			return map[string]any{"type": "ok"}, nil
 		}
 		w.next++
@@ -267,6 +277,8 @@ func TestHerdrFitFindsMisfits(t *testing.T) {
 		{"old plugin", func(w *fitWorld) { w.plugins = []map[string]any{nhmPlugin("menu")} }, "nhm plugin", checkFail, `no "fit" pane`},
 		{"busy", func(w *fitWorld) { w.busy = true }, "popup", checkSkip, "a popup is open already"},
 		{"silent", func(w *fitWorld) { w.silent = true }, "popup", checkFail, "did not start"},
+		{"no size", func(w *fitWorld) { w.noSize = true }, "popup", checkFail, "did not start"},
+		{"quits", func(w *fitWorld) { w.quits = true }, "popup", checkWarn, "72x25 (truecolor, TERM=xterm-256color), but it ended before popup.close"},
 		{"keys", func(w *fitWorld) { w.loseKeys = true }, "tab", checkFail, `the probe saw [], not ["a" "esc" " "]`},
 		{"guard", func(w *fitWorld) { w.guardBroken = true }, "kill guard", checkFail, "is not its foreground group"},
 		{"stays", func(w *fitWorld) { w.stays = true }, "split", checkWarn, "stayed after the program ended"},
@@ -292,9 +304,15 @@ func TestHerdrFitFindsMisfits(t *testing.T) {
 				if w.called("popup.close") != 0 {
 					t.Error("popup.close closed a popup the check did not open")
 				}
-			case "silent":
+			case "silent", "quits":
+				// No probe runs in the popup, so the popup open now
+				// may be the user's.
+				if w.called("popup.close") != 0 {
+					t.Error("popup.close ran without a probe in the popup")
+				}
+			case "no size":
 				if w.called("popup.close") != 1 {
-					t.Error("the check left its silent popup open")
+					t.Error("the check left the popup of a running probe open")
 				}
 			case "stays":
 				if w.called("plugin.pane.close") == 0 {
@@ -330,5 +348,23 @@ func TestDoctorFitFlags(t *testing.T) {
 	env := decodeEnvelope(t, out)
 	if code != exitOK || env["result"].(map[string]any)["failed"].(float64) != 0 {
 		t.Fatalf("doctor --herdr-fit = %d %s %s", code, out, errOut)
+	}
+
+	// --placements runs only in CI or in nhm's sandbox.
+	t.Setenv("CI", "")
+	t.Setenv("SANDBOX_INSIDE", "")
+	w = newFitWorld(t)
+	if code, _, errOut := runVerb(runDoctor, "--herdr-fit", "--placements", "--socket", w.s.SocketPath); code != exitRefused ||
+		!strings.Contains(errOut, "runs only in CI (CI=true) or in nhm's sandbox (SANDBOX_INSIDE=1)") || len(w.s.Requests()) != 0 {
+		t.Errorf("--placements outside CI = %d %s; requests %v", code, errOut, w.s.Requests())
+	}
+	for _, kv := range [][2]string{{"CI", "true"}, {"SANDBOX_INSIDE", "1"}} {
+		t.Setenv(kv[0], kv[1])
+		w = newFitWorld(t)
+		if code, out, errOut := runVerb(runDoctor, "--herdr-fit", "--placements", "--socket", w.s.SocketPath); code != exitOK ||
+			!strings.Contains(out, "overlay") {
+			t.Errorf("--placements with %s=%s = %d %s %s", kv[0], kv[1], code, out, errOut)
+		}
+		t.Setenv(kv[0], "")
 	}
 }

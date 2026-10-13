@@ -25,8 +25,11 @@ SCRIPT is a text file, one action per line:
   note TEXT            a line in stderr
 Each check, expect and refute prints "PASS line N: ..." or "FAIL line N: ..."
 (a FAIL prints the screen to stderr). The client's raw output is appended
-to RAWLOG. The client is killed after the last action. The exit status is
-1 when an expectation failed.
+to RAWLOG. The client gets SIGTERM after the last action, and SIGKILL
+when it has not exited 5 seconds later. A run or check that takes longer
+than PTY_CMD_TIMEOUT seconds (default 60) is killed, and a check fails
+then. When the client's output ends, an expect fails at once. The exit
+status is 1 when an expectation failed.
 """
 import codecs
 import fcntl
@@ -190,6 +193,10 @@ def main():
     screen = Screen(cols, rows)
     out = open(rawlog, "ab")
     failed = 0
+    cmd_timeout = float(os.environ.get("PTY_CMD_TIMEOUT", "60"))
+    # eof[0] is set when the client's output ends (EIO on Linux): select
+    # then always reports the pty readable, so pump only waits.
+    eof = [False]
 
     def pump(seconds):
         end = time.time() + seconds
@@ -197,14 +204,19 @@ def main():
             left = end - time.time()
             if left <= 0:
                 return
+            if eof[0]:
+                time.sleep(left)
+                return
             r, _, _ = select.select([fd], [], [], left)
             if r:
                 try:
                     data = os.read(fd, 65536)
                 except OSError:
-                    return
+                    data = b""
                 if not data:
-                    return
+                    eof[0] = True
+                    log("the client's output ended")
+                    continue
                 out.write(data)
                 out.flush()
                 screen.feed(data)
@@ -249,19 +261,24 @@ def main():
             pump(0.5)
         elif verb in ("run", "check"):
             log("%s %s" % (verb, arg))
-            p = subprocess.run(["bash", "-c", arg], capture_output=True, text=True)
-            sys.stderr.write(p.stdout + p.stderr)
-            log("exit %d" % p.returncode)
+            try:
+                p = subprocess.run(["bash", "-c", arg], capture_output=True, text=True, timeout=cmd_timeout)
+                sys.stderr.write(p.stdout + p.stderr)
+                code = p.returncode
+                log("exit %d" % code)
+            except subprocess.TimeoutExpired:
+                code = None
+                log("killed after %g seconds" % cmd_timeout)
             if verb == "check":
-                if p.returncode != 0:
+                if code != 0:
                     failed += 1
-                print("%s line %d: check %s" % ("PASS" if p.returncode == 0 else "FAIL", n, arg), flush=True)
+                print("%s line %d: check %s" % ("PASS" if code == 0 else "FAIL", n, arg), flush=True)
             pump(0.3)
         elif verb in ("expect", "refute"):
             secs, _, want = arg.partition(" ")
             end = time.time() + float(secs)
             if verb == "expect":
-                while want not in screen.text() and time.time() < end:
+                while want not in screen.text() and time.time() < end and not eof[0]:
                     pump(min(0.2, max(0.0, end - time.time())))
                 ok = want in screen.text()
             else:
@@ -284,7 +301,14 @@ def main():
     except ProcessLookupError:
         pass
     pump(0.5)
-    os.waitpid(pid, 0)
+    end = time.time() + 5
+    while os.waitpid(pid, os.WNOHANG) == (0, 0):
+        if time.time() > end:
+            log("the client did not exit on SIGTERM: SIGKILL")
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            break
+        time.sleep(0.1)
     sys.exit(1 if failed else 0)
 
 

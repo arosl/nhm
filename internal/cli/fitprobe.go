@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -98,7 +99,9 @@ func profileName(p termenv.Profile) string {
 
 // openFitOut opens the probe's event file for appending. Doctor makes it;
 // the probe never creates a file from its environment, and refuses
-// anything but a regular file.
+// anything but a regular file. The Lstat keeps it from opening a FIFO;
+// O_NOFOLLOW and the Stat of the open file refuse what was swapped in
+// after the Lstat.
 func openFitOut(path string) (*os.File, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -107,7 +110,15 @@ func openFitOut(path string) (*os.File, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	return os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return f, nil
 }
 
 func runFitProbe(stderr io.Writer) int {

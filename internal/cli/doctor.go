@@ -36,8 +36,9 @@ throwaway popup that runs a small program and closes. That popup is its
 only effect on the server; when a popup is open already, it skips it. Run
 it again after a herdr upgrade. --placements also opens the program as a
 tab, a split and an overlay in a throwaway workspace, sends keys to each,
-and reads the kill guard's fact: for the sandbox and CI, because the
-clients of a live server see those panes.
+and reads the kill guard's fact. The clients of a live server see those
+panes, so it runs only in CI (CI=true) or in nhm's sandbox
+(SANDBOX_INSIDE=1).
 `
 
 // Check results.
@@ -69,6 +70,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		if err == nil {
 			fmt.Fprint(stderr, doctorUsage)
 		}
+		return exitRefused
+	}
+	if *placements && os.Getenv("CI") != "true" && os.Getenv("SANDBOX_INSIDE") != "1" {
+		fmt.Fprintln(stderr, "nhm doctor: --placements opens panes that a live server's clients see; it runs only in CI (CI=true) or in nhm's sandbox (SANDBOX_INSIDE=1)")
 		return exitRefused
 	}
 	budget := 20 * time.Second
