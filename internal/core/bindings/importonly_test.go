@@ -157,3 +157,29 @@ func TestImportWritesAMissingIdentityFileOnlyWhileTheBashEvidenceHolds(t *testin
 		t.Fatalf("the identity file came back after the retire (%v)", err)
 	}
 }
+
+// A pane whose agent herdr names with a suffix (bluelake-2: a same-name
+// agent of another project holds bluelake) imports on identity-file
+// evidence, and the binding keeps herdr's name. A name that does not
+// fit is still skipped (nhm-4xt).
+func TestImportTakesASuffixedAlias(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct{ alias, want string }{{"bluelake-2", ActionImported}, {"bluelake-x", ActionSkipped}} {
+		project := t.TempDir()
+		projectOf := func(context.Context, string) (string, string, error) { return project, "proj", nil }
+		env, home := testEnv(t, session(paneSpec{pane: "w1:p1", kind: "claude", alias: c.alias, cwd: project}))
+		if _, err := agentmail.WriteIdentity(home, project, "w1:p1", "BlueLake", t0); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := ImportOnly(ctx, env, projectOf, ImportRequest{AcfsHome: t.TempDir()})
+		if err != nil || len(rep.Items) != 1 || rep.Items[0].Action != c.want {
+			t.Fatalf("%s: import = %+v %v", c.alias, rep.Items, err)
+		}
+		if c.want != ActionImported {
+			continue
+		}
+		if b, err := env.Bindings.ActiveByPane(ctx, "w1:p1"); err != nil || b.HerdrAlias != "bluelake-2" || b.MailName != "BlueLake" {
+			t.Fatalf("binding = %+v %v", b, err)
+		}
+	}
+}

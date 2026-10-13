@@ -734,7 +734,14 @@ func occupant(ctx context.Context, env Env, st paneState, mailName, model string
 	a := st.agent
 	occ := bindings.Occupant{WorkspaceID: a.WorkspaceID, TabID: a.TabID, PaneID: a.PaneID, Kind: a.Agent, Model: model,
 		LaunchID: env.getenv("NHM_LAUNCH_ID")}
-	if alias, err := bindings.Alias(mailName); err == nil {
+	// The name herdr shows when it fits (a suffixed one too), else a free
+	// one: a same-name agent of another project may hold the bare name
+	// (nhm-4xt). Without herdr's list, the bare name, as before.
+	var live []herdr.AgentInfo
+	if snap, err := env.Herdr.Snapshot(ctx); err == nil {
+		live = snap.Agents
+	}
+	if alias, err := bindings.FreeAlias(mailName, live, a.Name, a.PaneID); err == nil {
 		occ.HerdrAlias = alias
 	}
 	occ.Evidence = []bindings.Evidence{{Kind: "herdr_agent", Detail: fmt.Sprintf("%s agent in %s", a.Agent, a.PaneID)}}

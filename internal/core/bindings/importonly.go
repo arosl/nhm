@@ -255,7 +255,9 @@ func importOne(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequ
 	if err != nil {
 		return skip(err.Error())
 	}
-	if a.Name != "" && a.Name != alias {
+	// A suffixed name (bluelake-2) fits: spawn gives one when a same-name
+	// agent of another project holds the bare name (nhm-4xt).
+	if a.Name != "" && !AliasFits(a.Name, item.MailName) {
 		return skip(fmt.Sprintf("herdr's name %s does not fit %s", a.Name, item.MailName))
 	}
 	if b, err := env.Bindings.ActiveByName(ctx, projectKey, item.MailName); err == nil {

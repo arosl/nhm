@@ -999,3 +999,20 @@ func TestParsePluginEventSpellings(t *testing.T) {
 		t.Fatalf("empty = %+v %v", ev, err)
 	}
 }
+
+// A registration binds the pane under a free herdr name: while another
+// pane's agent (a same-name agent of another project) holds icyknoll,
+// the binding takes icyknoll-2, and herdr names the agent so. A name
+// herdr already shows that fits stays (nhm-4xt).
+func TestRegistrationTakesAFreeAlias(t *testing.T) {
+	for _, c := range []struct{ shown, want string }{{"", "icyknoll-2"}, {"icyknoll-3", "icyknoll-3"}} {
+		h := newHarness(t, core.OwnerNhm)
+		h.world.set("w2:p9", pane{kind: "claude", name: "icyknoll", session: "sess-z", pid: 900, ws: "w2", tab: "w2:t9"})
+		h.world.set("w1:p1", pane{kind: "claude", name: c.shown, session: "sess-a", pid: 500})
+		h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+		if b := h.binding("IcyKnoll"); b.HerdrAlias != c.want || h.world.get("w1:p1").name != c.want {
+			t.Errorf("shown %q: binding alias %q, herdr shows %q; want %s (calls %v)", c.shown, b.HerdrAlias,
+				h.world.get("w1:p1").name, c.want, h.world.calls)
+		}
+	}
+}
