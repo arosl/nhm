@@ -625,8 +625,8 @@ func watchVerb(v readVerb, args []string, stdout, stderr io.Writer, knobs func()
 
 // watchEvents subscribes to agent changes and signals on each event. It
 // subscribes again after a loss (and signals then too: the loss may hide
-// a change), at once after a stream that delivered events, else after a
-// growing wait (watchWait). It subscribes to every live agent pane, since
+// a change), at once after a stream that delivered events (and was not
+// ended at once), else after a growing wait (watchWait). It subscribes to every live agent pane, since
 // herdr's status subscription is per pane.
 func watchEvents(ctx context.Context, h *herdr.Client, events chan<- struct{}) {
 	signalOnce := func() {
@@ -684,10 +684,12 @@ var (
 )
 
 // watchWait is the wait before the next subscription: none after a
-// stream that delivered an event or lived watchBackoffMax, else the last
-// wait doubled, within watchBackoffMin and watchBackoffMax.
+// stream that lived watchBackoffMax, or that delivered an event and lived
+// watchBackoffMin; else the last wait doubled, within watchBackoffMin and
+// watchBackoffMax. A herdr that sends one event on each new stream and
+// ends it at once gets the backoff too.
 func watchWait(last time.Duration, delivered bool, lived time.Duration) time.Duration {
-	if delivered || lived >= watchBackoffMax {
+	if lived >= watchBackoffMax || delivered && lived >= watchBackoffMin {
 		return 0
 	}
 	return min(max(2*last, watchBackoffMin), watchBackoffMax)

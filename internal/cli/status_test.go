@@ -469,8 +469,9 @@ func TestRobotFormat(t *testing.T) {
 	}
 }
 
-// watchWait: no wait after a stream that delivered events or lived long;
-// else the wait doubles, from the minimum up to the maximum.
+// watchWait: no wait after a stream that lived long, or that delivered
+// events and lived the minimum; else the wait doubles, from the minimum
+// up to the maximum. One event and an end at once still backs off.
 func TestWatchWait(t *testing.T) {
 	for _, c := range []struct {
 		last      time.Duration
@@ -482,7 +483,8 @@ func TestWatchWait(t *testing.T) {
 		{watchBackoffMin, false, time.Second, 2 * watchBackoffMin},
 		{6 * time.Second, false, 0, watchBackoffMax},
 		{watchBackoffMax, false, 0, watchBackoffMax},
-		{watchBackoffMax, true, 0, 0},
+		{watchBackoffMax, true, watchBackoffMin, 0},
+		{watchBackoffMin, true, 0, 2 * watchBackoffMin},
 		{watchBackoffMax, false, watchBackoffMax, 0},
 	} {
 		if got := watchWait(c.last, c.delivered, c.lived); got != c.want {
