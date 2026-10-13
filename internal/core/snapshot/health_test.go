@@ -44,7 +44,9 @@ func TestHealthFor(t *testing.T) {
 			t.Errorf("agent %d = %s %s, want %s %s", i, a.PaneTarget, a.Health, w.target, w.health)
 		}
 	}
-	if a := out.Agents[3]; a.RateLimitCount != 1 || a.LastError != "You've hit your limit" || a.Pane != 4 {
+	// As ntm, a rate limit is a count, not an error; the line is under
+	// "_nhm" (review of ea6f0fc).
+	if a := out.Agents[3]; a.RateLimitCount != 1 || a.LastError != "" || a.NHM.(map[string]any)["limit"] != "You've hit your limit" || a.Pane != 4 {
 		t.Errorf("rate limited = %+v", a)
 	}
 	if a := out.Agents[5]; a.Restarts != 1 || a.AgentType != "codex" || a.Confidence != 0 {

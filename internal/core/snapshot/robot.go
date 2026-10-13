@@ -334,7 +334,12 @@ func HealthFor(m *Model, ws Workspace, format string, now time.Time) robot.Sessi
 		case a.State == herdr.StatusBlocked:
 			h.Health, h.LastError = robot.HealthBlocked, "the agent waits for a person (herdr: blocked)"
 		case a.Limit != "":
-			h.Health, h.LastError, h.RateLimitCount = robot.HealthRateLimited, a.Limit, 1
+			// As ntm: a count, no last_error. The line is free text with
+			// no reset time, so backoff_remaining stays 0.
+			h.Health, h.RateLimitCount = robot.HealthRateLimited, 1
+			if x, ok := h.NHM.(map[string]any); ok {
+				x["limit"] = a.Limit
+			}
 		case a.State != herdr.StatusIdle && a.State != herdr.StatusDone && a.State != herdr.StatusWorking:
 			h.Health = robot.HealthDegraded
 		}
