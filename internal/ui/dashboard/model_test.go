@@ -735,6 +735,28 @@ func TestReadView(t *testing.T) {
 	}
 }
 
+// A late read of the agent read before never shows under the next
+// agent's title: the reads' sequence goes on across opens.
+func TestReadViewDropsTheLastAgentsRead(t *testing.T) {
+	m := newModel(t, Config{Read: func(_ context.Context, pane string, _ int) (string, error) {
+		return "the screen of " + pane, nil
+	}})
+	first := press(m, "space", "r")
+	if m.view != viewRead || !strings.Contains(plain(m), "read IcyKnoll") || first == nil {
+		t.Fatalf("read A:\n%s", plain(m))
+	}
+	press(m, "esc", "j")
+	second := press(m, "space", "r")
+	if m.view != viewRead || !strings.Contains(plain(m), "read BlueLake") || second == nil {
+		t.Fatalf("read B:\n%s", plain(m))
+	}
+	m.Update(second())
+	m.Update(first()) // A's read answers last
+	if v := plain(m); !strings.Contains(v, "the screen of w1:p2") || strings.Contains(v, "the screen of w1:p1") {
+		t.Fatalf("B's read view:\n%s", v)
+	}
+}
+
 // sendCore is a core that sends, and records what it was asked.
 type sendCore struct {
 	mu   sync.Mutex

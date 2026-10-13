@@ -65,7 +65,9 @@ func (m *Model) openRead(tg board.Targets) tea.Cmd {
 		return nil
 	}
 	r := tg.Rows[0]
-	m.read = readState{name: rowName(r), pane: r.Agent.PaneID, follow: true}
+	// The sequence goes on: a read of the agent read before, still on its
+	// way, is dropped, never shown under this agent's title.
+	m.read = readState{seq: m.read.seq, name: rowName(r), pane: r.Agent.PaneID, follow: true}
 	m.view = viewRead
 	return m.readPane()
 }
