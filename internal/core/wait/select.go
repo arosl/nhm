@@ -34,15 +34,26 @@ type Lister interface {
 
 // Select returns the active bindings of a workspace that the selector
 // matches, in slot order. A named agent that has no active binding there
-// is an error, so a typo never shrinks the set without a word.
+// is an error, so a typo never shrinks the set without a word. A name
+// that matches two agents is an error too: a workspace can hold agents of
+// several projects, and an interrupt must not reach both (nhm-y2e).
 func Select(ctx context.Context, l Lister, workspaceID, projectKey string, sel Selector) ([]bindings.Binding, error) {
 	all, err := l.List(ctx, bindings.Filter{WorkspaceID: workspaceID, ProjectKey: projectKey, Statuses: []bindings.Status{bindings.Active}})
 	if err != nil {
 		return nil, err
 	}
 	for _, n := range sel.Names {
-		if !slices.ContainsFunc(all, func(b bindings.Binding) bool { return nameMatches(b, n) }) {
+		var hits []string
+		for _, b := range all {
+			if nameMatches(b, n) {
+				hits = append(hits, fmt.Sprintf("%s (slot %s, %s)", b.MailName, b.Slot, b.MailProjectKey))
+			}
+		}
+		switch {
+		case len(hits) == 0:
 			return nil, fmt.Errorf("%w: %s has no active binding in workspace %s", ErrNoTargets, n, workspaceID)
+		case len(hits) > 1:
+			return nil, fmt.Errorf("%w: %s in workspace %s: %s; name one by its slot", bindings.ErrAmbiguous, n, workspaceID, strings.Join(hits, ", "))
 		}
 	}
 	out := Filter(all, sel)
