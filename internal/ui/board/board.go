@@ -273,6 +273,61 @@ func (b *Board) Model() *snapshot.Model {
 	return s.Value
 }
 
+// Merged is the last agent state with the slower sources' last values
+// joined in by key: each bound agent's inbox and beads, and those
+// sources' health. Attention reads it. nil before the first state.
+func (b *Board) Merged() *snapshot.Model {
+	m := b.Model()
+	if m == nil {
+		return nil
+	}
+	c := *m
+	c.Agents = append([]snapshot.Agent(nil), m.Agents...)
+	c.Sources = make(map[string]snapshot.SourceHealth, len(m.Sources)+2)
+	for k, v := range m.Sources {
+		c.Sources[k] = v
+	}
+	if b.Mail != nil {
+		s := b.Mail.State()
+		c.Sources[snapshot.SourceMail] = sourceHealth(snapshot.SourceMail, s.Has, s.At, s.Err)
+		for i := range c.Agents {
+			a := &c.Agents[i]
+			if v, ok := s.Value[AgentKey(*a).Key()]; ok && s.Has && a.Binding != nil {
+				a.Mail = &v
+			}
+		}
+	}
+	if b.Beads != nil {
+		s := b.Beads.State()
+		c.Sources[snapshot.SourceBeads] = sourceHealth(snapshot.SourceBeads, s.Has, s.At, s.Err)
+		for i := range c.Agents {
+			a := &c.Agents[i]
+			if v, ok := s.Value[AgentKey(*a).Key()]; ok && s.Has && a.Binding != nil {
+				a.Beads = v
+				if len(v) > 0 {
+					a.Bead = &v[0]
+				}
+			}
+		}
+	}
+	return &c
+}
+
+// sourceHealth is a feed's state in the snapshot's terms: fresh, stale
+// (an error, and an older value shown) or unavailable (no value).
+func sourceHealth(name string, has bool, at time.Time, err error) snapshot.SourceHealth {
+	h := snapshot.SourceHealth{Source: name, Status: snapshot.Fresh, CollectedAt: at.UTC()}
+	switch {
+	case err != nil && has:
+		h.Status, h.Error = snapshot.Stale, err.Error()
+	case err != nil:
+		h.Status, h.Error = snapshot.Unavailable, err.Error()
+	case !has:
+		h.Status = snapshot.Unknown
+	}
+	return h
+}
+
 // Rows joins the sources' last values.
 func (b *Board) Rows() []Row {
 	var mail State[MailByKey]

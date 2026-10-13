@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,10 +22,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/agentform"
 	"github.com/arosl/nhm/internal/ui/board"
+	"github.com/arosl/nhm/internal/ui/dashboard/panels"
+	"github.com/arosl/nhm/internal/ui/tui/agent"
+	"github.com/arosl/nhm/internal/ui/tui/components"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
 )
 
@@ -48,6 +53,9 @@ type Config struct {
 	// NewOperationID makes the submission guard's operation ids
 	// (store.NewOperationID); nil leaves space out.
 	NewOperationID func() (string, error)
+	// History reads the recent send history (history.ReadRecent); nil
+	// leaves the history panel out.
+	History func() ([]history.HistoryEntry, error)
 	// Now is time.Now in production.
 	Now func() time.Time
 	// CallTimeout bounds each call a key starts (default 5 s).
@@ -105,6 +113,18 @@ type Model struct {
 	guard   *actions.Guard
 	form    *agentform.Form
 	pending []*agentform.Form
+
+	// The side panels and the focus between them (focus.go). The board
+	// runs no animations: dashboardSprings stays nil.
+	focusedPanel     PanelID
+	focusRing        FocusRing
+	dashboardSprings *components.SpringManager
+	attention        *panels.AttentionPanel
+	attnItems        []panels.AttentionItem
+	attnPanes        map[string]string
+	history          *panels.HistoryPanel
+	historySeq       uint64
+	historyAt        time.Time
 }
 
 // inboxState is the inbox view's request and its answer.
@@ -144,7 +164,11 @@ func New(cfg Config) (*Model, error) {
 		cfg.CallTimeout = 5 * time.Second
 	}
 	t := theme.Current()
-	m := &Model{cfg: cfg, b: cfg.Board, keys: dashKeys, help: newHelpModel(t), theme: t}
+	m := &Model{cfg: cfg, b: cfg.Board, keys: dashKeys, help: newHelpModel(t), theme: t,
+		attention: panels.NewAttentionPanel()}
+	if cfg.History != nil {
+		m.history = panels.NewHistoryPanel()
+	}
 	// Keys whose action this board does not have yet are not shown and do
 	// nothing (plan-v4 section 2: no dead keys).
 	m.keys.Zoom.SetEnabled(cfg.Zoom != nil)
@@ -159,18 +183,119 @@ func New(cfg Config) (*Model, error) {
 		}
 	}
 	m.keys.Actions.SetEnabled(len(m.menu) > 0)
-	for _, k := range []*key.Binding{&m.keys.SpawnWizard, &m.keys.NextPanel, &m.keys.PrevPanel,
-		&m.keys.Tab, &m.keys.ShiftTab, &m.keys.Num1, &m.keys.Num2, &m.keys.Num3, &m.keys.Num4, &m.keys.Num5,
-		&m.keys.Num6, &m.keys.Num7, &m.keys.Num8, &m.keys.Num9} {
+	for _, k := range []*key.Binding{&m.keys.SpawnWizard, &m.keys.Num1, &m.keys.Num2, &m.keys.Num3, &m.keys.Num4,
+		&m.keys.Num5, &m.keys.Num6, &m.keys.Num7, &m.keys.Num8, &m.keys.Num9} {
 		k.SetEnabled(false)
 	}
+	m.layoutChanged()
 	return m, nil
+}
+
+// layoutChanged rebuilds the focus ring for the panels the size shows;
+// tab moves between panels only when there is more than one.
+func (m *Model) layoutChanged() {
+	m.syncFocusRing()
+	many := len(m.visiblePanels()) > 1
+	for _, k := range []*key.Binding{&m.keys.NextPanel, &m.keys.PrevPanel, &m.keys.Tab, &m.keys.ShiftTab} {
+		k.SetEnabled(many)
+	}
+	m.focusPanels()
+}
+
+// focusPanels tells each side panel whether it has the focus.
+func (m *Model) focusPanels() {
+	if m.focusedPanel == PanelAttention {
+		m.attention.Focus()
+	} else {
+		m.attention.Blur()
+	}
+	if m.history != nil {
+		if m.focusedPanel == PanelHistory {
+			m.history.Focus()
+		} else {
+			m.history.Blur()
+		}
+	}
+}
+
+// historyEvery is how often the board reads the send history again.
+const historyEvery = 30 * time.Second
+
+// historyMsg is a read of the send history; seq drops an older read.
+type historyMsg struct {
+	seq     uint64
+	entries []history.HistoryEntry
+	err     error
+}
+
+// readHistory reads the send history in a command.
+func (m *Model) readHistory() tea.Cmd {
+	if m.history == nil {
+		return nil
+	}
+	m.historySeq++
+	m.historyAt = m.cfg.Now()
+	read, seq := m.cfg.History, m.historySeq
+	return func() tea.Msg {
+		entries, err := read()
+		return historyMsg{seq: seq, entries: entries, err: err}
+	}
+}
+
+// workspaceHistory keeps the entries of the board's workspace: a send
+// records its session as the caller named it, a label or an id.
+func (m *Model) workspaceHistory(entries []history.HistoryEntry) []history.HistoryEntry {
+	c := m.cfg.Context
+	var out []history.HistoryEntry
+	for _, e := range entries {
+		if e.Session != "" && (e.Session == c.WorkspaceID || e.Session == c.WorkspaceLabel) {
+			out = append(out, e)
+		}
+	}
+	// ntm's panel lists the newest first.
+	slices.Reverse(out)
+	return out
+}
+
+// historyPanes names the board's rows for the history panel: the target
+// keys nhm's send records (the slot, else the pane id).
+func (m *Model) historyPanes() []panels.HistoryPane {
+	var out []panels.HistoryPane
+	for _, r := range m.b.Sel.Rows() {
+		k := r.Slot()
+		if k == "" {
+			k = r.PaneID()
+		}
+		if k == "" {
+			continue
+		}
+		out = append(out, panels.HistoryPane{Key: k, Label: board.Clean(rowName(r)), Type: agent.AgentType(r.Kind()).Canonical()})
+	}
+	return out
+}
+
+// moveFocus moves the focus to the next (+1) or the previous panel.
+func (m *Model) moveFocus(dir int) {
+	if dir > 0 {
+		m.focusRing.Next()
+	} else {
+		m.focusRing.Prev()
+	}
+	m.setFocusedPanel(m.focusRing.Current().Panel)
+	m.focusPanels()
+}
+
+// syncAttention gives the attention panel the merged state's items.
+func (m *Model) syncAttention() {
+	merged := m.b.Merged()
+	m.attnItems, m.attnPanes = attentionItems(merged)
+	m.attention.SetData(m.attnItems, merged != nil)
 }
 
 // Init starts the first reads and the loops.
 func (m *Model) Init() tea.Cmd {
 	m.b.Refresh()
-	return tea.Batch(m.tick(), m.waitChanged())
+	return tea.Batch(m.tick(), m.waitChanged(), m.readHistory())
 }
 
 func (m *Model) tick() tea.Cmd {
@@ -196,6 +321,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.layoutChanged()
 		return m, nil
 	case tickMsg:
 		now := time.Time(msg)
@@ -204,9 +330,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastBinary = now
 			m.upgraded = m.cfg.Binary.Check() != nil
 		}
-		return m, m.tick()
+		cmds := []tea.Cmd{m.tick()}
+		if m.history != nil && !m.b.Paused() && now.Sub(m.historyAt) >= historyEvery {
+			cmds = append(cmds, m.readHistory())
+		}
+		return m, tea.Batch(cmds...)
+	case historyMsg:
+		if msg.seq == m.historySeq && m.history != nil {
+			m.history.SetEntries(m.workspaceHistory(msg.entries), msg.err)
+		}
+		return m, nil
 	case changedMsg:
 		m.b.Sync()
+		m.syncAttention()
+		if m.history != nil {
+			m.history.SetPanes(m.historyPanes())
+		}
 		return m, m.waitChanged()
 	case zoomMsg:
 		if msg.err != nil {
@@ -273,9 +412,24 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.focusedPanel == PanelHistory && m.history != nil && historyKey(msg, m.history.PreviewOpen()) {
+		// The history panel's own keys come first while it has the focus:
+		// moves, its preview (v; esc and q close it) and its filters (f,
+		// a, t). Its replay and copy are not the board's yet.
+		m.history.Update(msg)
+		return m, nil
+	}
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
+	case key.Matches(msg, m.keys.NextPanel):
+		m.moveFocus(1)
+	case key.Matches(msg, m.keys.PrevPanel):
+		m.moveFocus(-1)
+	case m.focusedPanel == PanelAttention && (key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) ||
+		msg.Type == tea.KeyHome || msg.Type == tea.KeyEnd):
+		// The focused side panel moves its own selection.
+		m.attention.Update(msg)
 	case key.Matches(msg, m.keys.Up):
 		m.b.Sel.Move(-1)
 		m.b.FollowCursor()
@@ -299,6 +453,7 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Refresh):
 		m.b.Refresh()
 		m.say(false, "refreshing")
+		return m, m.readHistory()
 	case key.Matches(msg, m.keys.Pause):
 		m.b.SetPaused(!m.b.Paused())
 		if m.b.Paused() {
@@ -368,14 +523,26 @@ func (m *Model) filterKey(msg tea.KeyMsg) {
 	m.b.FollowCursor()
 }
 
-// zoom zooms the cursor's agent, in a command.
+// zoom zooms the cursor's agent, or the pane of the attention item the
+// attention panel selects, in a command.
 func (m *Model) zoom() tea.Cmd {
-	r, ok := m.b.Sel.Cursor()
-	if !ok || r.Agent == nil {
-		m.say(true, "no agent pane under the cursor")
-		return nil
+	var pane, name string
+	if m.focusedPanel == PanelAttention {
+		it := m.attention.SelectedItem()
+		if it == nil || m.attnPanes[it.Cursor] == "" {
+			m.say(true, "this attention item names no pane")
+			return nil
+		}
+		pane, name = m.attnPanes[it.Cursor], it.SourcePane
+	} else {
+		r, ok := m.b.Sel.Cursor()
+		if !ok || r.Agent == nil {
+			m.say(true, "no agent pane under the cursor")
+			return nil
+		}
+		pane, name = r.Agent.PaneID, rowName(r)
 	}
-	zoom, ws, pane, name, d := m.cfg.Zoom, m.b.WorkspaceID(), r.Agent.PaneID, rowName(r), m.cfg.CallTimeout
+	zoom, ws, d := m.cfg.Zoom, m.b.WorkspaceID(), m.cfg.CallTimeout
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), d)
 		defer cancel()
@@ -401,6 +568,18 @@ func (m *Model) openInbox() tea.Cmd {
 		msgs, err := inbox(ctx, project, name)
 		return inboxMsg{seq: seq, msgs: msgs, err: err}
 	}
+}
+
+// historyKey reports whether a key is the history panel's while it has
+// the focus.
+func historyKey(msg tea.KeyMsg, preview bool) bool {
+	switch msg.String() {
+	case "up", "k", "down", "j", "pgup", "pgdown", "ctrl+u", "home", "g", "end", "G", "v", "f", "a", "t":
+		return true
+	case "esc", "q":
+		return preview
+	}
+	return false
 }
 
 // toForms hands a message to the open form and to the closed forms whose

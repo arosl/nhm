@@ -19,6 +19,7 @@ import (
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
 	"github.com/arosl/nhm/internal/store"
+	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/board"
 	"github.com/arosl/nhm/internal/ui/dashboard"
@@ -154,6 +155,7 @@ func runGoBoard(stderr io.Writer) int {
 	m, err := dashboard.New(dashboard.Config{Board: b, Context: c, Binary: bin, Inbox: inbox,
 		Core:           uiCore(ie, c, uiJobs(ie, c)),
 		NewOperationID: func() (string, error) { return store.NewOperationID(time.Now()) },
+		History:        func() ([]history.HistoryEntry, error) { return history.ReadRecent(200) },
 		Zoom: func(ctx context.Context, ws, pane string) error {
 			if err := h.WorkspaceFocus(ctx, ws); err != nil {
 				return err

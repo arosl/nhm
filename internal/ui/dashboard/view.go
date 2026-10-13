@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -77,11 +78,30 @@ func (m *Model) helpBody(width int) string {
 	return strings.Join(out, "\n\n")
 }
 
-// mainView is the header, the agent table, the preview and the footer.
+// mainView is the header, the agent table with the preview (and, on a
+// wide board, the side panels beside them) and the footer.
 func (m *Model) mainView(w, h int) string {
 	header := m.header(w)
 	footer := m.footer(w)
-	rest := h - lipgloss.Height(header) - lipgloss.Height(footer)
+	rest := max(h-lipgloss.Height(header)-lipgloss.Height(footer), 1)
+	leftW := w
+	var side string
+	if slices.Contains(m.visiblePanels(), PanelAttention) {
+		leftW = max(w*3/5, minWidth)
+		side = m.sidePanels(w-leftW-1, rest)
+	}
+	left := m.agentColumn(leftW, rest)
+	if side != "" {
+		left = lipgloss.NewStyle().Width(leftW).MaxWidth(leftW).Render(left)
+		left = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", side)
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left, header, left)
+	body = lipgloss.NewStyle().Height(h - lipgloss.Height(footer)).MaxHeight(h - lipgloss.Height(footer)).Render(body)
+	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+}
+
+// agentColumn is the agent table and, when there is room, the preview.
+func (m *Model) agentColumn(w, rest int) string {
 	tableRows := len(m.b.Sel.Rows()) + 1
 	previewRows := 0
 	if rest-tableRows >= previewMinRows+2 {
@@ -89,14 +109,24 @@ func (m *Model) mainView(w, h int) string {
 	} else if rest >= 2*previewMinRows+2 {
 		previewRows = previewMinRows + 2
 	}
-	table := m.table(w, rest-previewRows)
-	parts := []string{header, table}
+	parts := []string{m.table(w, rest-previewRows)}
 	if previewRows > 0 {
 		parts = append(parts, m.preview(w, previewRows))
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	body = lipgloss.NewStyle().Height(h - lipgloss.Height(footer)).MaxHeight(h - lipgloss.Height(footer)).Render(body)
-	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// sidePanels are the panels beside the agent table: attention, and the
+// history under it when the board is tall enough.
+func (m *Model) sidePanels(w, h int) string {
+	if !slices.Contains(m.visiblePanels(), PanelHistory) {
+		m.attention.SetSize(w, h)
+		return m.attention.View()
+	}
+	top := h * 45 / 100
+	m.attention.SetSize(w, top)
+	m.history.SetSize(w, h-top)
+	return lipgloss.JoinVertical(lipgloss.Left, m.attention.View(), m.history.View())
 }
 
 // tableHeight is how many rows a page holds.
@@ -132,6 +162,12 @@ func (m *Model) header(w int) string {
 	}
 	if m.b.Paused() {
 		parts = append(parts, "paused")
+	}
+	if !slices.Contains(m.visiblePanels(), PanelAttention) {
+		// No room for the attention panel: its counts, in the header.
+		if action, interesting := attentionCounts(m.attnItems); action+interesting > 0 {
+			parts = append(parts, fmt.Sprintf("attention: %d action, %d interesting", action, interesting))
+		}
 	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Primary).Render(ansi.Truncate(strings.Join(parts, " · "), w, "…"))
 	lines := []string{title}
@@ -179,7 +215,12 @@ const (
 // highlighted and kept in view.
 func (m *Model) table(w, height int) string {
 	rows := m.b.Sel.Rows()
-	head := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Lavender)
+	headColor := m.theme.Lavender
+	if len(m.visiblePanels()) > 1 {
+		// Panels share the screen: the table's header shows its focus.
+		headColor = m.focusBorderColor(m.theme.Overlay, PanelPaneList)
+	}
+	head := lipgloss.NewStyle().Bold(true).Foreground(headColor)
 	out := []string{head.Render(ansi.Truncate(cells(w, "", "slot", "name", "kind", "state", "mail", "bead", "notes"), w, "…"))}
 	if len(rows) == 0 {
 		msg := "no agents in this workspace"

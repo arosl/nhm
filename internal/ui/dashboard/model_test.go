@@ -20,6 +20,7 @@ import (
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
+	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/board"
@@ -507,6 +508,85 @@ func TestClosedFormKeepsItsJob(t *testing.T) {
 	m.Update(cmd())
 	if r, _ := m.b.Results.Get("op-1"); r.Outcome != "sent" || len(m.pending) != 0 {
 		t.Fatalf("result after the answer = %+v, pending %d", r, len(m.pending))
+	}
+}
+
+// A wide board shows attention beside the table: tab moves the focus to
+// it, the arrows move its selection, and enter zooms the item's pane. A
+// narrow board has no room: tab is off and the header counts attention.
+func TestAttentionBesideTheTable(t *testing.T) {
+	var zoomed []string
+	m := newModel(t, Config{Zoom: func(_ context.Context, ws, pane string) error {
+		zoomed = append(zoomed, pane)
+		return nil
+	}})
+	m.Update(tea.WindowSizeMsg{Width: 130, Height: 30})
+	if v := plain(m); !strings.Contains(v, "Attention") || !strings.Contains(v, "BlueLake waits for an answer") {
+		t.Fatalf("wide view:\n%s", v)
+	}
+	press(m, "tab")
+	if m.focusedPanel != PanelAttention {
+		t.Fatal("tab did not focus attention")
+	}
+	// The blocked BlueLake (action) sorts first; down selects the codex.
+	press(m, "j")
+	if it := m.attention.SelectedItem(); it == nil || !strings.Contains(it.Summary, "no binding") {
+		t.Fatalf("selected = %+v", it)
+	}
+	if r, _ := m.b.Sel.Cursor(); r.Name != "IcyKnoll" {
+		t.Fatalf("the arrows moved the table too: %s", r.Name)
+	}
+	cmd := press(m, "enter")
+	m.Update(cmd())
+	if len(zoomed) != 1 || zoomed[0] != "w1:p3" {
+		t.Fatalf("zoomed %v", zoomed)
+	}
+	press(m, "tab")
+	if m.focusedPanel != PanelPaneList {
+		t.Fatal("tab did not come back to the table")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+	if m.focusedPanel != PanelPaneList || m.keys.Tab.Enabled() {
+		t.Fatal("a narrow board keeps a hidden panel's focus or tab")
+	}
+	if v := plain(m); strings.Contains(v, "Attention") || !strings.Contains(v, "attention: 1 action") {
+		t.Fatalf("narrow view:\n%s", v)
+	}
+}
+
+// A tall, wide board shows this workspace's send history under
+// attention; its keys work while it has the focus, and q in its preview
+// closes the preview, not the board.
+func TestHistoryPanelOnTheBoard(t *testing.T) {
+	now := time.Now().UTC()
+	m := newModel(t, Config{History: func() ([]history.HistoryEntry, error) {
+		return []history.HistoryEntry{
+			{ID: "old1", Session: "swarm", Prompt: "older prompt", Targets: []string{"0.1"}, AgentTypes: []string{"claude"}, Success: true, Timestamp: now.Add(-time.Hour)},
+			{ID: "new1", Session: "w1", Prompt: "newer prompt", Targets: []string{"0.2"}, AgentTypes: []string{"claude"}, Success: false, Timestamp: now},
+			{ID: "else", Session: "other", Prompt: "another workspace", Targets: []string{"0.1"}, Success: true, Timestamp: now},
+		}, nil
+	}})
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.Update(m.readHistory()())
+	m.Update(changedMsg{})
+	v := plain(m)
+	if !strings.Contains(v, "Command History") || !strings.Contains(v, "newer prompt") || !strings.Contains(v, "older prompt") ||
+		strings.Contains(v, "another workspace") {
+		t.Fatalf("view:\n%s", v)
+	}
+	press(m, "tab", "tab")
+	if m.focusedPanel != PanelHistory {
+		t.Fatalf("focus = %v", m.focusedPanel)
+	}
+	press(m, "v")
+	if !m.history.PreviewOpen() {
+		t.Fatal("v did not open the preview")
+	}
+	if cmd := press(m, "q"); isQuit(cmd) || m.history.PreviewOpen() {
+		t.Fatal("q in the preview quit the board, or kept the preview")
+	}
+	if !isQuit(press(m, "q")) {
+		t.Fatal("q outside the preview did not quit")
 	}
 }
 

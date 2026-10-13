@@ -252,6 +252,35 @@ func TestBoardMailPartialFailure(t *testing.T) {
 	}
 }
 
+// Merged joins the mail and beads into the agents, so attention sees
+// unread mail, and a failing mail source shows as stale.
+func TestMergedModelForAttention(t *testing.T) {
+	fx := newFixture(t)
+	fx.mail.inbox["IcyKnoll"] = []agentmail.Message{{ID: 1}, {ID: 2}}
+	b := fx.board(t)
+	settle(t, b)
+	m := b.Merged()
+	found := false
+	for _, it := range snapshot.Attention(m) {
+		if it.Kind == snapshot.AttnUnread && it.MailName == "IcyKnoll" {
+			found = true
+		}
+	}
+	if !found || m.Agents[0].Bead == nil || *m.Agents[0].Bead != "nhm-2" {
+		t.Fatalf("attention %+v, bead %v", snapshot.Attention(m), m.Agents[0].Bead)
+	}
+	if b.Model().Agents[0].Mail != nil {
+		t.Fatal("Merged changed the state feed's model")
+	}
+	fx.mail.mu.Lock()
+	fx.mail.err = errors.New("down")
+	fx.mail.mu.Unlock()
+	settle(t, b)
+	if s := b.Merged().Sources[snapshot.SourceMail]; s.Status != snapshot.Stale {
+		t.Fatalf("mail source = %+v", s)
+	}
+}
+
 // herdr down: the board keeps its last rows and says why; it does not
 // empty the list (and so never invalidates every mark).
 func TestBoardHerdrDownKeepsRows(t *testing.T) {
