@@ -46,41 +46,85 @@ func targetsText(r actions.Result, width int) string {
 	return b.String()
 }
 
+// head is a form's title, with a blank line under it when the popup has
+// room for one.
+func head(height int, title ...string) []string {
+	if height >= compactHeight {
+		return append(title, "")
+	}
+	return title
+}
+
+// withErr is body with err's line under it.
+func withErr(body []string, err error, width int) []string {
+	if err == nil {
+		return body
+	}
+	return append(body, "", clip(err.Error(), width))
+}
+
 // reapScreen is reap: a dry run, then exactly that set.
-type reapScreen struct{ f *forms.ReapForm }
+type reapScreen struct {
+	f  *forms.ReapForm
+	pg page
+}
 
 func newReapScreen(run forms.Runner, c ui.Context) *reapScreen {
 	return &reapScreen{f: forms.NewReapForm(run, c, actions.DefaultIdle)}
 }
 
-func (s *reapScreen) Init() tea.Cmd { return s.f.StartReview() }
+func (s *reapScreen) Init() tea.Cmd { return s.review() }
+
+func (s *reapScreen) review() tea.Cmd {
+	s.pg.reset()
+	return s.f.StartReview()
+}
 
 func (s *reapScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
-	k, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return s.f.Update(msg), false
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		s.pg.size(m)
+		return nil, false
+	case tea.KeyMsg:
+		return s.key(m)
 	}
-	ph := s.f.Phase()
+	before := s.f.Phase()
+	cmd := s.f.Update(msg)
+	if s.f.Phase() != before {
+		s.pg.reset()
+	}
+	return cmd, false
+}
+
+func (s *reapScreen) key(k tea.KeyMsg) (tea.Cmd, bool) {
+	if s.pg.key(k, s.layout(s.pg.width, s.pg.height)) {
+		return nil, false
+	}
 	switch k.String() {
 	case "esc", "q":
 		return nil, true
 	case "left", "-":
 		if s.f.CanReview() {
 			s.f.SetIdle(max(0, s.f.Idle()-idleStep))
-			return s.f.StartReview(), false
+			return s.review(), false
 		}
 	case "right", "+":
 		if s.f.CanReview() {
 			s.f.SetIdle(s.f.Idle() + idleStep)
-			return s.f.StartReview(), false
+			return s.review(), false
 		}
 	case "r":
 		if s.f.CanReview() {
-			return s.f.StartReview(), false
+			return s.review(), false
 		}
 	case "enter":
-		switch ph {
+		switch s.f.Phase() {
 		case forms.Reviewed:
+			// Only a set the operator saw whole is retired.
+			if !s.pg.seenAll(s.layout(s.pg.width, s.pg.height)) {
+				return nil, false
+			}
+			s.pg.reset()
 			return s.f.Confirm(), false
 		case forms.Done, forms.Failed, forms.Refused:
 			return nil, true
@@ -89,52 +133,75 @@ func (s *reapScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (s *reapScreen) View(width, _ int) string {
-	var b strings.Builder
-	b.WriteString(clip(fmt.Sprintf("reap: retire the agents idle for %s or more, whose work is done", s.f.Idle()), width) + "\n\n")
+func (s *reapScreen) layout(width, height int) layout {
+	l := layout{head: head(height, clip(fmt.Sprintf("reap: retire the agents idle for %s or more, whose work is done", s.f.Idle()), width))}
+	keys := "esc: close"
 	switch s.f.Phase() {
 	case forms.Reviewing:
-		b.WriteString("dry run…\n")
+		l.body = []string{"dry run…"}
 	case forms.Reviewed:
-		b.WriteString(targetsText(s.f.Review(), width))
-		fmt.Fprintf(&b, "\nenter: retire exactly these %d agent(s) (would_retire) · ←/→ idle −/+%s · r: dry run again · esc: close\n",
-			len(s.f.Set()), idleStep)
+		l.body = lines(targetsText(s.f.Review(), width))
+		keys = fmt.Sprintf("enter: retire these %d agent(s) · ←/→ idle −/+%s · r: dry run again · esc: close", len(s.f.Set()), idleStep)
 	case forms.Refused, forms.Failed, forms.Done:
 		if s.f.Phase() == forms.Done || len(s.f.Result().Targets) > 0 {
-			b.WriteString(resultText(s.f.Result(), width))
+			l.body = lines(resultText(s.f.Result(), width))
 		} else {
-			b.WriteString(targetsText(s.f.Review(), width))
+			l.body = lines(targetsText(s.f.Review(), width))
 		}
-		if err := s.f.Err(); err != nil {
-			b.WriteString("\n" + clip(err.Error(), width) + "\n")
-		}
+		l.body = withErr(l.body, s.f.Err(), width)
+		keys = "enter or esc: close"
 		if s.f.CanReview() {
-			fmt.Fprintf(&b, "\nenter or esc: close · ←/→ idle −/+%s · r: dry run again\n", idleStep)
-		} else {
-			b.WriteString("\nenter or esc: close\n")
+			keys = fmt.Sprintf("enter or esc: close · ←/→ idle −/+%s · r: dry run again", idleStep)
 		}
 	case forms.Running:
-		b.WriteString("retiring one agent at a time, through retire's checks…\n" + running + "\n")
+		l.body = []string{"retiring one agent at a time, through retire's checks…", clip(running, width)}
 	}
-	return b.String()
+	l.foot = []string{clip(keys, width)}
+	return l
+}
+
+func (s *reapScreen) View(width, height int) string {
+	return s.pg.render(s.layout(width, height), width, height)
 }
 
 // killScreen is kill: the checks, the typed label, the kill.
 type killScreen struct {
 	f     *forms.KillForm
 	typed *field
+	pg    page
 }
 
 func newKillScreen(run forms.Runner, c ui.Context) *killScreen {
 	return &killScreen{f: forms.NewKillForm(run, c), typed: newField("label", "")}
 }
 
-func (s *killScreen) Init() tea.Cmd { return s.f.StartReview() }
+func (s *killScreen) Init() tea.Cmd { return s.review() }
+
+func (s *killScreen) review() tea.Cmd {
+	s.pg.reset()
+	s.typed.set("")
+	return s.f.StartReview()
+}
 
 func (s *killScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
-	k, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return s.f.Update(msg), false
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		s.pg.size(m)
+		return nil, false
+	case tea.KeyMsg:
+		return s.key(m)
+	}
+	before := s.f.Phase()
+	cmd := s.f.Update(msg)
+	if s.f.Phase() != before {
+		s.pg.reset()
+	}
+	return cmd, false
+}
+
+func (s *killScreen) key(k tea.KeyMsg) (tea.Cmd, bool) {
+	if s.pg.key(k, s.layout(s.pg.width, s.pg.height)) {
+		return nil, false
 	}
 	ph := s.f.Phase()
 	switch k.String() {
@@ -143,21 +210,27 @@ func (s *killScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case "ctrl+b":
 		if s.f.CanReview() {
 			s.f.SetNoBeads(!s.f.NoBeads())
-			s.typed.set("")
-			return s.f.StartReview(), false
+			return s.review(), false
 		}
 		return nil, false
 	case "r":
 		// While the label is typed, r is a letter of it.
 		if ph != forms.Reviewed && s.f.CanReview() {
-			s.typed.set("")
-			return s.f.StartReview(), false
+			return s.review(), false
 		}
 	case "enter":
 		switch ph {
 		case forms.Reviewed:
+			// Only a review the operator saw whole is confirmed.
+			if !s.pg.seenAll(s.layout(s.pg.width, s.pg.height)) {
+				return nil, false
+			}
 			s.f.Type(s.typed.String())
-			return s.f.Confirm(), false
+			cmd := s.f.Confirm()
+			if cmd != nil {
+				s.pg.reset()
+			}
+			return cmd, false
 		case forms.Done, forms.Failed, forms.Refused:
 			return nil, true
 		}
@@ -169,54 +242,56 @@ func (s *killScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (s *killScreen) View(width, _ int) string {
-	var b strings.Builder
-	b.WriteString(clip(fmt.Sprintf("kill: retire every agent of workspace %s, then close it", s.f.Label()), width) + "\n")
+func (s *killScreen) layout(width, height int) layout {
+	title := []string{clip(fmt.Sprintf("kill: retire every agent of workspace %s, then close it", s.f.Label()), width)}
 	if s.f.NoBeads() {
-		b.WriteString("(no beads: the agents worked none)\n")
+		title = append(title, "(no beads: the agents worked none)")
 	}
-	b.WriteString("\n")
+	l := layout{head: head(height, title...)}
+	keys := "esc: close"
 	switch s.f.Phase() {
 	case forms.Reviewing:
-		b.WriteString("checking every agent with retire's checks…\n")
+		l.body = []string{"checking every agent with retire's checks…"}
 	case forms.Reviewed:
-		b.WriteString(targetsText(s.f.Review(), width))
-		b.WriteString("\n" + clip(fmt.Sprintf("Type the workspace's label, %q, and press enter to kill it.", s.f.Label()), width) + "\n")
-		b.WriteString(s.typed.view(true) + "\n")
+		r := s.f.Review()
+		l.body = lines(targetsText(r, width))
+		l.foot = []string{clip(fmt.Sprintf("Type the workspace's label, %q, and press enter to kill it.", s.f.Label()), width),
+			clip(s.typed.view(true), width)}
 		if s.f.Mismatch() {
-			b.WriteString("the label does not match: nothing was killed\n")
+			l.foot = append(l.foot, "the label does not match: nothing was killed")
 		}
-		b.WriteString("\nctrl+b: the agents worked no beads · esc: close\n")
+		keys = fmt.Sprintf("enter: kill (%d agent(s)) · ctrl+b: no beads · esc: close", len(r.Targets))
 	case forms.Refused:
 		r := s.f.Review()
-		b.WriteString("kill refuses; nothing was closed:\n" + targetsText(r, width))
+		l.body = append([]string{"kill refuses; nothing was closed:"}, lines(targetsText(r, width))...)
 		// The error repeats the review's refusals; it is the reason only
 		// when the review has none (a label that cannot be typed).
 		if err := s.f.Err(); err != nil && len(r.Lines) == 0 && len(r.Targets) == 0 {
-			b.WriteString(wrap(err.Error(), width-2) + "\n")
+			l.body = append(l.body, lines(wrap(err.Error(), width-2))...)
 		}
-		b.WriteString("\n" + clip("r: check again · ctrl+b: no beads · enter or esc: close", width) + "\n")
+		keys = "r: check again · ctrl+b: no beads · enter or esc: close"
 	case forms.Running:
-		b.WriteString("killing…\n")
+		l.body = []string{"killing…"}
 		if p := s.f.Progress(); p != nil {
-			b.WriteString(clip(fmt.Sprintf("  record %s: %s", p.OperationID, p.Status), width) + "\n")
+			l.body = append(l.body, clip(fmt.Sprintf("  record %s: %s", p.OperationID, p.Status), width))
 			for _, t := range p.Targets {
-				b.WriteString(clip(fmt.Sprintf("  agent %d: %s", t.Index, t.Status), width) + "\n")
+				l.body = append(l.body, clip(fmt.Sprintf("  agent %d: %s", t.Index, t.Status), width))
 			}
 		}
-		b.WriteString(running + "\n")
+		l.body = append(l.body, clip(running, width))
 	case forms.Done, forms.Failed:
-		b.WriteString(resultText(s.f.Result(), width))
-		if err := s.f.Err(); err != nil {
-			b.WriteString("\n" + clip(err.Error(), width) + "\n")
-		}
+		l.body = withErr(lines(resultText(s.f.Result(), width)), s.f.Err(), width)
+		keys = "enter or esc: close"
 		if s.f.CanReview() {
-			b.WriteString("\nr: check again · enter or esc: close\n")
-		} else {
-			b.WriteString("\nenter or esc: close\n")
+			keys = "r: check again · enter or esc: close"
 		}
 	}
-	return b.String()
+	l.foot = append(l.foot, clip(keys, width))
+	return l
+}
+
+func (s *killScreen) View(width, height int) string {
+	return s.pg.render(s.layout(width, height), width, height)
 }
 
 // newScreen is new: a label and a project directory.
@@ -224,6 +299,7 @@ type newScreen struct {
 	f      *forms.NewForm
 	fields []*field
 	focus  int
+	pg     page
 }
 
 func newNewScreen(run forms.Runner, c ui.Context) *newScreen {
@@ -234,19 +310,37 @@ func newNewScreen(run forms.Runner, c ui.Context) *newScreen {
 func (s *newScreen) Init() tea.Cmd { return nil }
 
 func (s *newScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
-	k, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return s.f.Update(msg), false
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		s.pg.size(m)
+		return nil, false
+	case tea.KeyMsg:
+		return s.key(m)
 	}
+	before := s.f.Phase()
+	cmd := s.f.Update(msg)
+	if s.f.Phase() != before {
+		s.pg.reset()
+	}
+	return cmd, false
+}
+
+func (s *newScreen) key(k tea.KeyMsg) (tea.Cmd, bool) {
 	ph := s.f.Phase()
+	if ph != forms.Editing && s.pg.key(k, s.layout(s.pg.width, s.pg.height)) {
+		return nil, false
+	}
 	switch k.String() {
 	case "esc":
 		return nil, true
 	case "tab", "down":
+		// The focused field is the body's line on screen.
 		s.focus = (s.focus + 1) % len(s.fields)
+		s.pg.scroll = s.focus
 		return nil, false
 	case "shift+tab", "up":
 		s.focus = (s.focus + len(s.fields) - 1) % len(s.fields)
+		s.pg.scroll = s.focus
 		return nil, false
 	case "enter":
 		if ph >= forms.Done {
@@ -265,32 +359,35 @@ func (s *newScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (s *newScreen) View(width, _ int) string {
-	var b strings.Builder
-	b.WriteString("new: a workspace with this label, its cwd the project; no agent\n\n")
-	for i, f := range s.fields {
-		b.WriteString(clip(f.view(i == s.focus && s.f.Phase() == forms.Editing), width) + "\n")
-	}
+func (s *newScreen) layout(width, height int) layout {
+	l := layout{head: head(height, clip("new: a workspace with this label, its cwd the project; no agent", width))}
+	keys := "esc: close"
 	switch s.f.Phase() {
 	case forms.Editing:
-		if err := s.f.Err(); err != nil {
-			b.WriteString("\n" + clip(err.Error(), width) + "\n")
+		for i, f := range s.fields {
+			l.body = append(l.body, clip(f.view(i == s.focus), width))
 		}
-		b.WriteString("\ntab: next field · enter: create · esc: close\n")
+		l.body = withErr(l.body, s.f.Err(), width)
+		keys = "tab: next field · enter: create · esc: close"
 	case forms.Running:
-		b.WriteString("\ncreating…\n" + running + "\n")
+		l.body = []string{"creating…", clip(running, width)}
 	default:
-		b.WriteString("\n" + resultText(s.f.Result(), width))
-		if err := s.f.Err(); err != nil {
-			b.WriteString(clip(err.Error(), width) + "\n")
-		}
-		b.WriteString("\nenter or esc: close\n")
+		l.body = withErr(lines(resultText(s.f.Result(), width)), s.f.Err(), width)
+		keys = "enter or esc: close"
 	}
-	return b.String()
+	l.foot = []string{clip(keys, width)}
+	return l
+}
+
+func (s *newScreen) View(width, height int) string {
+	return s.pg.render(s.layout(width, height), width, height)
 }
 
 // wakeScreen is wake for the picked agents.
-type wakeScreen struct{ f *forms.WakeForm }
+type wakeScreen struct {
+	f  *forms.WakeForm
+	pg page
+}
 
 func newWakeScreen(run forms.Runner, c ui.Context, ts []ui.Target) *wakeScreen {
 	f := forms.NewWakeForm(run, c)
@@ -301,9 +398,24 @@ func newWakeScreen(run forms.Runner, c ui.Context, ts []ui.Target) *wakeScreen {
 func (s *wakeScreen) Init() tea.Cmd { return nil }
 
 func (s *wakeScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
-	k, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return s.f.Update(msg), false
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		s.pg.size(m)
+		return nil, false
+	case tea.KeyMsg:
+		return s.key(m)
+	}
+	before := s.f.Phase()
+	cmd := s.f.Update(msg)
+	if s.f.Phase() != before {
+		s.pg.reset()
+	}
+	return cmd, false
+}
+
+func (s *wakeScreen) key(k tea.KeyMsg) (tea.Cmd, bool) {
+	if s.pg.key(k, s.layout(s.pg.width, s.pg.height)) {
+		return nil, false
 	}
 	switch k.String() {
 	case "esc":
@@ -311,6 +423,10 @@ func (s *wakeScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case "enter":
 		switch s.f.Phase() {
 		case forms.Editing:
+			// Only recipients the operator saw are woken.
+			if !s.pg.seenAll(s.layout(s.pg.width, s.pg.height)) {
+				return nil, false
+			}
 			return s.f.Confirm(), false
 		case forms.Done, forms.Failed:
 			return nil, true
@@ -319,28 +435,28 @@ func (s *wakeScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (s *wakeScreen) View(width, _ int) string {
-	var b strings.Builder
-	b.WriteString("wake: tell these agents about their new mail, once\n\n")
+func (s *wakeScreen) layout(width, height int) layout {
+	l := layout{head: head(height, clip("wake: tell these agents about their new mail, once", width))}
+	keys := "esc: close"
 	switch s.f.Phase() {
 	case forms.Editing:
 		for _, t := range s.f.Recipients() {
-			b.WriteString(clip("  "+describe(t), width) + "\n")
+			l.body = append(l.body, clip("  "+describe(t), width))
 		}
-		if err := s.f.Err(); err != nil {
-			b.WriteString("\n" + clip(err.Error(), width) + "\n")
-		}
-		b.WriteString("\nenter: wake them · esc: close\n")
+		l.body = withErr(l.body, s.f.Err(), width)
+		keys = fmt.Sprintf("enter: wake these %d · esc: close", len(s.f.Recipients()))
 	case forms.Running:
-		b.WriteString("waking…\n" + running + "\n")
+		l.body = []string{"waking…", clip(running, width)}
 	default:
-		b.WriteString(resultText(s.f.Result(), width))
-		if err := s.f.Err(); err != nil {
-			b.WriteString("\n" + clip(err.Error(), width) + "\n")
-		}
-		b.WriteString("\nenter or esc: close\n")
+		l.body = withErr(lines(resultText(s.f.Result(), width)), s.f.Err(), width)
+		keys = "enter or esc: close"
 	}
-	return b.String()
+	l.foot = []string{clip(keys, width)}
+	return l
+}
+
+func (s *wakeScreen) View(width, height int) string {
+	return s.pg.render(s.layout(width, height), width, height)
 }
 
 // describe names a frozen target.

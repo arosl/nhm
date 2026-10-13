@@ -470,25 +470,53 @@ func (m *Model) openFromView(o views.Open) (screen, error) {
 }
 
 // confirmScreen is a review-and-confirm form (ensemble stop).
-type confirmScreen struct{ f *forms.ConfirmForm }
+type confirmScreen struct {
+	f  *forms.ConfirmForm
+	pg page
+}
 
-func (s *confirmScreen) Init() tea.Cmd { return s.f.StartReview() }
+func (s *confirmScreen) Init() tea.Cmd { return s.review() }
+
+func (s *confirmScreen) review() tea.Cmd {
+	s.pg.reset()
+	return s.f.StartReview()
+}
 
 func (s *confirmScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
-	k, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return s.f.Update(msg), false
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		s.pg.size(m)
+		return nil, false
+	case tea.KeyMsg:
+		return s.key(m)
+	}
+	before := s.f.Phase()
+	cmd := s.f.Update(msg)
+	if s.f.Phase() != before {
+		s.pg.reset()
+	}
+	return cmd, false
+}
+
+func (s *confirmScreen) key(k tea.KeyMsg) (tea.Cmd, bool) {
+	if s.pg.key(k, s.layout(s.pg.width, s.pg.height)) {
+		return nil, false
 	}
 	switch k.String() {
 	case "esc":
 		return nil, true
 	case "r":
 		if s.f.CanReview() {
-			return s.f.StartReview(), false
+			return s.review(), false
 		}
 	case "enter":
 		switch s.f.Phase() {
 		case forms.Reviewed:
+			// Only a review the operator saw whole is confirmed.
+			if !s.pg.seenAll(s.layout(s.pg.width, s.pg.height)) {
+				return nil, false
+			}
+			s.pg.reset()
 			return s.f.Confirm(), false
 		case forms.Done, forms.Failed, forms.Refused:
 			return nil, true
@@ -497,34 +525,35 @@ func (s *confirmScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (s *confirmScreen) View(width, _ int) string {
-	var b strings.Builder
+func (s *confirmScreen) layout(width, height int) layout {
 	a := s.f.Action()
-	b.WriteString(a.Label + ": " + a.Help + "\n\n")
+	l := layout{head: head(height, clip(a.Label+": "+a.Help, width))}
+	keys := "esc: back"
 	switch s.f.Phase() {
 	case forms.Reviewing:
-		b.WriteString("reading it…\n")
+		l.body = []string{"reading it…"}
 	case forms.Reviewed:
-		b.WriteString(targetsText(s.f.Review(), width))
-		b.WriteString("\nenter: " + a.Label + " · esc: back\n")
+		l.body = lines(targetsText(s.f.Review(), width))
+		keys = "enter: " + a.Label + " · esc: back"
 	case forms.Running:
-		b.WriteString(a.Label + "…\n" + running + "\n")
+		l.body = []string{a.Label + "…", clip(running, width)}
 	default:
 		r := s.f.Review()
 		if s.f.Phase() == forms.Done {
 			r = s.f.Result()
 		}
-		b.WriteString(resultText(r, width))
-		if err := s.f.Err(); err != nil {
-			b.WriteString("\n" + clip(err.Error(), width) + "\n")
-		}
+		l.body = withErr(lines(resultText(r, width)), s.f.Err(), width)
+		keys = "enter or esc: back"
 		if s.f.CanReview() {
-			b.WriteString("\nr: read again · enter or esc: back\n")
-		} else {
-			b.WriteString("\nenter or esc: back\n")
+			keys = "r: read again · enter or esc: back"
 		}
 	}
-	return b.String()
+	l.foot = []string{clip(keys, width)}
+	return l
+}
+
+func (s *confirmScreen) View(width, height int) string {
+	return s.pg.render(s.layout(width, height), width, height)
 }
 
 // doScreen runs an action that changes no agent (zoom, focus) at once,

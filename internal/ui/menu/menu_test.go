@@ -20,6 +20,7 @@ import (
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
+	"github.com/arosl/nhm/internal/ui/forms"
 	"github.com/arosl/nhm/internal/ui/runner"
 	"github.com/arosl/nhm/internal/ui/views"
 )
@@ -248,6 +249,69 @@ func TestKillRefusedView(t *testing.T) {
 	// The reason is wrapped, not cut: all of it shows.
 	if v := m.View(); !strings.Contains(strings.Join(strings.Fields(v), " "), "cannot be typed: rename the workspace in herdr, then kill it") {
 		t.Fatalf("a label with controls:\n%s", v)
+	}
+}
+
+// A form's body scrolls between its title and its keys, and enter
+// confirms only a review that was on screen to its end (the re-check's
+// B): at 21x4 a review of 3 agents shows one line at a time.
+func TestReviewSeenWholeBeforeConfirm(t *testing.T) {
+	var reaps []lifecycle.ReapRequest
+	m := newMenu(ctxW, &fakeCore{})
+	m.env.Core.Reap = func(_ context.Context, r lifecycle.ReapRequest, _ string) ([]lifecycle.ReapItem, error) {
+		reaps = append(reaps, r)
+		var items []lifecycle.ReapItem
+		for i, n := range []string{"IcyKnoll", "BlueLake", "RedStone"} {
+			action := "would_retire"
+			if !r.DryRun {
+				action = "retired"
+			}
+			items = append(items, lifecycle.ReapItem{MailName: n, BindingID: fmt.Sprintf("b%d", i), Generation: 1, Action: action})
+		}
+		return items, nil
+	}
+	m.Update(tea.WindowSizeMsg{Width: 21, Height: 4})
+	press(m, "w", "r")
+	s, ok := m.open.(*reapScreen)
+	if !ok || s.f.Phase() != forms.Reviewed || len(reaps) != 1 {
+		t.Fatalf("reap review: %T %d", m.open, len(reaps))
+	}
+	v := m.View()
+	if len(strings.Split(v, "\n")) > 4 || !strings.Contains(v, "↑/↓ more") {
+		t.Fatalf("21x4 review:\n%s", v)
+	}
+	press(m, "enter")
+	if len(reaps) != 1 || !strings.Contains(m.View(), "read the whole") {
+		t.Fatalf("enter before the whole review: %d reaps\n%s", len(reaps), m.View())
+	}
+	press(m, "down", "down", "enter")
+	if len(reaps) != 2 || reaps[1].DryRun || len(reaps[1].Only) != 3 {
+		t.Fatalf("enter after the whole review: %+v", reaps)
+	}
+	// At 54x20 the review fits: enter confirms at once.
+	m = newMenu(ctxW, &fakeCore{})
+	m.env.Core.Reap = func(_ context.Context, r lifecycle.ReapRequest, _ string) ([]lifecycle.ReapItem, error) {
+		reaps = append(reaps, r)
+		return []lifecycle.ReapItem{{MailName: "IcyKnoll", BindingID: "b0", Generation: 1, Action: "would_retire"}}, nil
+	}
+	m.Update(tea.WindowSizeMsg{Width: 54, Height: 20})
+	press(m, "w", "r", "enter")
+	if len(reaps) != 4 || reaps[3].DryRun {
+		t.Fatalf("a review that fits: %+v", reaps)
+	}
+}
+
+// The kill's prompt and field stay under a long review, and its key line
+// names how many agents it kills.
+func TestKillFieldStaysInView(t *testing.T) {
+	fc := &fakeCore{}
+	m := newMenu(ctxW, fc)
+	m.Update(tea.WindowSizeMsg{Width: 54, Height: 9})
+	press(m, "w", "k")
+	v := m.View()
+	if len(strings.Split(v, "\n")) > 9 || !strings.Contains(v, "Type the workspace's label") || !strings.Contains(v, "▌") ||
+		!strings.Contains(v, "enter: kill (1 agent(s))") {
+		t.Fatalf("kill at 54x9:\n%s", v)
 	}
 }
 
