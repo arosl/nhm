@@ -250,7 +250,7 @@ type Resolution struct {
 // (h may be nil: then nothing is verified). A name with no active binding
 // resolves to its newest displaced or retired one.
 func Resolve(ctx context.Context, s *Store, h Herdr, q Query, getenv func(string) string) (Resolution, error) {
-	b, err := find(ctx, s, q, getenv)
+	b, err := find(ctx, s, h, q, getenv)
 	if err != nil {
 		return Resolution{}, err
 	}
@@ -263,7 +263,7 @@ func Resolve(ctx context.Context, s *Store, h Herdr, q Query, getenv func(string
 	return r, nil
 }
 
-func find(ctx context.Context, s *Store, q Query, getenv func(string) string) (Binding, error) {
+func find(ctx context.Context, s *Store, h Herdr, q Query, getenv func(string) string) (Binding, error) {
 	target := strings.TrimSpace(q.Target)
 	if q.Current {
 		target = getenv("HERDR_PANE_ID")
@@ -274,9 +274,10 @@ func find(ctx context.Context, s *Store, q Query, getenv func(string) string) (B
 	if target == "" {
 		return Binding{}, errors.New("bindings: name a mail name, a herdr name or a pane id")
 	}
-	// Pane ids hold a colon; mail names and aliases never do.
+	// Pane ids hold a colon; mail names and aliases never do. A moved
+	// pane's old id (the moved agent's own HERDR_PANE_ID) finds it too.
 	if strings.Contains(target, ":") {
-		return s.ActiveByPane(ctx, target)
+		return s.ActiveByPane(ctx, CallerPane(ctx, s, h, target))
 	}
 	b, err := s.ActiveByName(ctx, q.ProjectKey, target)
 	if !errors.Is(err, ErrNotFound) {

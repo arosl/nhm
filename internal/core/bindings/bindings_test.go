@@ -211,12 +211,18 @@ type fakeHerdr struct {
 	procs      map[string][]herdr.Process
 	renamed    map[string]string
 	paneLabels map[string]string
-	fail       error
+	// moved maps a moved pane's old id to its new one, as herdr's pane
+	// calls answer it.
+	moved map[string]string
+	fail  error
 }
 
 func (f *fakeHerdr) Snapshot(context.Context) (herdr.SessionSnapshot, error) { return f.snap, f.fail }
 
 func (f *fakeHerdr) PaneProcessInfo(_ context.Context, pane string) (herdr.ProcessInfo, error) {
+	if to, ok := f.moved[pane]; ok {
+		pane = to
+	}
 	return herdr.ProcessInfo{PaneID: pane, ForegroundProcesses: f.procs[pane]}, nil
 }
 

@@ -53,6 +53,40 @@ func TestRelocateKeepsTheGenerationAndTakesANewSlot(t *testing.T) {
 	}
 }
 
+// A moved agent's own commands carry its old HERDR_PANE_ID; herdr's pane
+// calls answer it with the new pane (nhm-5qa). The caller's pane is the
+// old id until nhm follows the move, then the new one.
+func TestCallerPaneFollowsAMove(t *testing.T) {
+	_, s := openStore(t)
+	ctx := context.Background()
+	h := moveSession()
+	h.moved = map[string]string{"w1:p1": "w2:p1"}
+	b, err := s.Create(ctx, newBinding("IcyKnoll", "/p", "w1", "w1:t1", "w1:p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := CallerPane(ctx, s, h, "w1:p1"); got != "w1:p1" {
+		t.Fatalf("before nhm follows: %q", got)
+	}
+	if _, err := s.Relocate(ctx, b.ID, b.Generation, Location{"w2", "w2:t1", "w2:p1"}, Evidence{Kind: "move"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := CallerPane(ctx, s, h, "w1:p1"); got != "w2:p1" {
+		t.Fatalf("after: %q", got)
+	}
+	getenv := func(k string) string { return map[string]string{"HERDR_PANE_ID": "w1:p1"}[k] }
+	r, err := Resolve(ctx, s, h, Query{Current: true}, getenv)
+	if err != nil || r.Binding.ID != b.ID {
+		t.Fatalf("resolve --current = %+v %v", r.Binding, err)
+	}
+	if got := CallerPane(ctx, s, nil, "w1:p1"); got != "w1:p1" {
+		t.Fatalf("without herdr: %q", got)
+	}
+	if got := CallerPane(ctx, s, h, ""); got != "" {
+		t.Fatalf("outside herdr: %q", got)
+	}
+}
+
 // moveSession is IcyKnoll's agent (pid 300, session sess-9) after herdr
 // moved its pane w1:p1 to workspace w2 as w2:p1, beside other agents.
 func moveSession(extra ...herdr.AgentInfo) *fakeHerdr {

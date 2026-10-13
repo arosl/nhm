@@ -205,7 +205,7 @@ func setTokenRef(ctx context.Context, env Env, id int64, ref string) error {
 // for Codex it is not proven). It costs context tokens; the pane name
 // costs none.
 func reminder(ctx context.Context, env Env, pane, session string) string {
-	b, err := env.Bindings.ActiveByPane(ctx, pane)
+	b, err := env.Bindings.ActiveByPane(ctx, bindings.CallerPane(ctx, env.Bindings, env.Herdr, pane))
 	if err != nil || !kinds.Lookup(b.Kind).SessionStartContext {
 		return ""
 	}
@@ -293,17 +293,23 @@ func reconcile(ctx context.Context, env Env, pane string, r *Reconcile) error {
 	if err != nil {
 		return err
 	}
-	st, err := readPane(ctx, env.Herdr, pane)
+	// An agent hook names its pane by HERDR_PANE_ID, which a moved agent
+	// keeps at the old id; herdr knows the pane by its new one (nhm-5qa).
+	at := pane
+	if len(cands) > 0 {
+		at = bindings.CallerPane(ctx, env.Bindings, env.Herdr, pane)
+	}
+	st, err := readPane(ctx, env.Herdr, at)
 	if err != nil {
 		return fmt.Errorf("hooks: herdr: %w", err)
 	}
 	// herdr's own SessionStart hook reports the session beside nhm's; give
 	// it a moment when a fresh candidate names a session herdr lacks.
-	st, err = settle(ctx, env, pane, st, cands)
+	st, err = settle(ctx, env, at, st, cands)
 	if err != nil {
 		return fmt.Errorf("hooks: herdr: %w", err)
 	}
-	b, err := env.Bindings.ActiveByPane(ctx, pane)
+	b, err := env.Bindings.ActiveByPane(ctx, at)
 	var bp *bindings.Binding
 	switch {
 	case err == nil:

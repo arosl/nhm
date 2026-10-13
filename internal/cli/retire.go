@@ -66,7 +66,7 @@ func (ie *instanceEnv) lifecycleEnv() (lifecycle.Env, error) {
 	configHome, _ := agentmail.ConfigHome()
 	senv := ie.sendEnv()
 	return lifecycle.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, Mail: mail, Facts: facts,
-		InstanceDir: ie.inst.Dir, Home: home, MailConfigHome: configHome, Caller: os.Getenv("HERDR_PANE_ID"),
+		InstanceDir: ie.inst.Dir, Home: home, MailConfigHome: configHome, Caller: ie.callerPane(context.Background()),
 		Send:           func(ctx context.Context, r send.Request) (send.Result, error) { return send.Send(ctx, senv, r) },
 		Handoff:        lifecycle.DefaultHandoff("", ""),
 		LaunchSettings: spawn.HookSettings(exec.LookPath),

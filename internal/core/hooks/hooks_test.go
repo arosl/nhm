@@ -56,6 +56,9 @@ type world struct {
 	panes map[string]*pane
 	tabs  map[string]*tabState
 	calls []string
+	// moved maps a moved pane's old id to its new one: herdr's pane calls
+	// answer the old id, agent.get does not.
+	moved map[string]string
 }
 
 func newWorld(t *testing.T) (*world, *herdr.Client) {
@@ -154,6 +157,9 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 		_ = json.Unmarshal(r.Params, &p)
 		w.mu.Lock()
 		defer w.mu.Unlock()
+		if to, ok := w.moved[p.PaneID]; ok {
+			p.PaneID = to
+		}
 		pn := w.panes[p.PaneID]
 		procs := []any{}
 		if pn != nil && pn.pid != 0 {
@@ -252,6 +258,10 @@ func (w *world) move(from, to, tab string) {
 	pn.ws, _, _ = strings.Cut(to, ":")
 	pn.tab, pn.name = tab, ""
 	w.panes[to] = pn
+	if w.moved == nil {
+		w.moved = map[string]string{}
+	}
+	w.moved[from] = to
 }
 
 type harness struct {
@@ -528,6 +538,30 @@ func TestBindingFollowsAPaneMovedToAnotherWorkspace(t *testing.T) {
 	}
 	if r, err = ReconcilePane(ctx, h.env, "w2:p1"); err != nil || len(r.Actions) != 0 || len(r.Warnings) != 0 {
 		t.Fatalf("second reconcile: %+v %v", r, err)
+	}
+}
+
+// A moved agent's hooks still name its old pane (HERDR_PANE_ID); after
+// nhm followed the move, a compaction still continues the binding and
+// the agent still gets its reminder (nhm-5qa).
+func TestMovedAgentsHooksFindTheBinding(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	h.world.move("w1:p1", "w2:p1", "w2:t1")
+	h.world.addTab("w2:t1", "IcyKnoll", 1)
+	if _, err := ReconcilePane(ctx, h.env, "w1:p1"); err != nil || h.binding("IcyKnoll").PaneID != "w2:p1" {
+		t.Fatalf("the move was not followed: %v", err)
+	}
+	h.clock = h.clock.Add(time.Minute)
+	res := h.hook(sessionStart("sess-a", "compact"), "e2")
+	b := h.binding("IcyKnoll")
+	if b.PaneID != "w2:p1" || b.Generation != 1 || b.CompactedAt == nil || !b.CompactedAt.Equal(h.clock) {
+		t.Fatalf("binding = %+v, report %+v", b, res.Report)
+	}
+	if res.Reminder != "You are IcyKnoll (herdr icyknoll)." {
+		t.Fatalf("reminder = %q", res.Reminder)
 	}
 }
 

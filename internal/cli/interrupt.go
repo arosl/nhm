@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -73,7 +72,7 @@ func runInterrupt(args []string, stdout, stderr io.Writer) int {
 	}
 	s := sel.selector()
 	if !*includeSelf {
-		s.Exclude = os.Getenv("HERDR_PANE_ID")
+		s.Exclude = ie.callerPane(ctx)
 	}
 	targets, err := wait.Select(ctx, store, ws, projectKey, s)
 	if err != nil {

@@ -220,6 +220,7 @@ func sendMain(f *sendFlags, fs *flag.FlagSet, pos []string, stdout, stderr io.Wr
 		return output(stdout, stderr, f.asJSON, env, err, exitError, nil)
 	}
 	defer ie.db.Close()
+	req.Caller = ie.callerPane(ctx)
 	if err := ie.fillScope(ctx, &req, session, f.project); err != nil {
 		return refuse(err)
 	}
@@ -294,7 +295,7 @@ func laterFlags(fs *flag.FlagSet, f sendFlags) error {
 // request builds the core request from the flags, without the scope.
 func (f sendFlags) request(prompt string) (send.Request, error) {
 	req := send.Request{Template: f.tmpl, BeadID: f.bead, Force: f.force, OperationID: f.opID, DryRun: f.dryRun,
-		Source: history.SourceCLI, Caller: os.Getenv("HERDR_PANE_ID")}
+		Source: history.SourceCLI}
 	switch f.when {
 	case "ready":
 	case "any":
@@ -625,7 +626,7 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 		text = *msg
 	}
 	req := send.Request{Message: text, OperationID: *opID, DryRun: *dryRun, Source: history.SourceRobot,
-		Caller: os.Getenv("HERDR_PANE_ID"), Selector: send.Selector{All: *all, Panes: panes, Kinds: types}, Enrich: enrichment}
+		Caller: ie.callerPane(ctx), Selector: send.Selector{All: *all, Panes: panes, Kinds: types}, Enrich: enrichment}
 	if err := ie.fillScope(ctx, &req, *sendS, ""); err != nil {
 		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "list sessions: nhm --robot-status", *format, robotError, now)
 	}

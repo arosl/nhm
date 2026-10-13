@@ -114,6 +114,30 @@ func Moved(ctx context.Context, h Herdr, s *Store, b Binding) (agent herdr.Agent
 	return herdr.AgentInfo{}, false, fmt.Errorf("%w: %s could be in %s", ErrAmbiguousMove, b.MailName, strings.Join(panes, ", "))
 }
 
+// CallerPane is the pane id nhm uses for a caller whose HERDR_PANE_ID is
+// id. herdr gives a pane a new id when it moves to another workspace, and
+// the moved process keeps the old id in its environment. herdr answers
+// the old id in its pane calls (pane.process_info, pane.get; not
+// agent.get) with the new pane until the server restarts, which also
+// ends the moved process (nhm-5qa). So the caller's pane is id while an
+// active binding records it (nhm has not followed the move yet), else
+// herdr's current id for it, else id. It is id when h is nil.
+func CallerPane(ctx context.Context, s *Store, h Herdr, id string) string {
+	if id == "" || h == nil {
+		return id
+	}
+	if s != nil {
+		if _, err := s.ActiveByPane(ctx, id); err == nil {
+			return id
+		}
+	}
+	info, err := h.PaneProcessInfo(ctx, id)
+	if err != nil || info.PaneID == "" {
+		return id
+	}
+	return info.PaneID
+}
+
 // SameOccupant reports whether the agent a, in any pane, is the
 // binding's occupant: the binding's process (pid and start time) is in
 // a's pane, or, when the binding has no process, a has its native

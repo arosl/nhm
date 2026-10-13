@@ -64,7 +64,7 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	var self *bindings.Binding
 	if ie, err = openInstance(*socket); err == nil {
 		defer ie.db.Close()
-		if pane := os.Getenv("HERDR_PANE_ID"); pane != "" {
+		if pane := ie.callerPane(ctx); pane != "" {
 			if b, err := bindings.NewStore(ie.db).ActiveByPane(ctx, pane); err == nil {
 				self = &b
 			}

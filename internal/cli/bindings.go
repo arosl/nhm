@@ -73,6 +73,13 @@ func (e *instanceEnv) env() bindings.Env {
 	return bindings.Env{DB: e.db, Bindings: bindings.NewStore(e.db), Herdr: e.herdr}
 }
 
+// callerPane is the calling pane as the bindings know it: HERDR_PANE_ID,
+// or herdr's new id for it after a move to another workspace
+// (bindings.CallerPane).
+func (e *instanceEnv) callerPane(ctx context.Context) string {
+	return bindings.CallerPane(ctx, bindings.NewStore(e.db), e.herdr, os.Getenv("HERDR_PANE_ID"))
+}
+
 // parseInterleaved parses flags that may come before or after the
 // positional arguments, and returns the positional ones.
 func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -266,9 +273,6 @@ func runAdopt(args []string, stdout, stderr io.Writer) int {
 	if len(pos) == 1 {
 		req.MailName = pos[0]
 	}
-	if req.PaneID == "" {
-		req.PaneID = os.Getenv("HERDR_PANE_ID")
-	}
 	env := envelope{Command: "adopt"}
 	ctx := context.Background()
 	ie, err := openInstance(*socket)
@@ -276,6 +280,9 @@ func runAdopt(args []string, stdout, stderr io.Writer) int {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
 	defer ie.db.Close()
+	if req.PaneID == "" {
+		req.PaneID = ie.callerPane(ctx)
+	}
 	if req.HandoffFrom == "" {
 		s, err := projectScope(ctx, ie.inst.ID, *project)
 		if err != nil {
