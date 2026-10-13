@@ -525,6 +525,25 @@ func TestWorkspacesScreen(t *testing.T) {
 	}
 }
 
+// Outside text reaches the screen without terminal controls: a review's
+// reason, a header label, an error (the review's L2).
+func TestClipCleans(t *testing.T) {
+	if got := clip("BlueLake: \x1b]0;pwned\x07it is \x1b[31mworking\u009b", 40); got != "BlueLake: it is working" {
+		t.Fatalf("clip = %q", got)
+	}
+	c := ctxW
+	c.WorkspaceLabel = "proj\x1b[2J-a"
+	m := newMenu(c, &fakeCore{})
+	if v := m.View(); strings.Contains(v, "\x1b[2J") {
+		t.Fatalf("the header shows a control sequence: %q", v)
+	}
+	text := targetsText(actions.Result{Lines: []string{"its mail cannot be read: \x1b[2Jboom"},
+		Targets: []actions.TargetResult{{Name: "Icy\x1b[1mKnoll", Status: "refused", Reason: "\x07it is working"}}}, 60)
+	if strings.ContainsAny(text, "\x1b\x07") {
+		t.Fatalf("targets text = %q", text)
+	}
+}
+
 func TestWindow(t *testing.T) {
 	lines := []string{"0", "1", "2", "3", "4", "5"}
 	for _, c := range []struct {

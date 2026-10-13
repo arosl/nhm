@@ -181,7 +181,7 @@ func (s *killScreen) View(width, _ int) string {
 		b.WriteString("checking every agent with retire's checks…\n")
 	case forms.Reviewed:
 		b.WriteString(targetsText(s.f.Review(), width))
-		fmt.Fprintf(&b, "\nType the workspace's label, %q, and press enter to kill it.\n", s.f.Label())
+		b.WriteString("\n" + clip(fmt.Sprintf("Type the workspace's label, %q, and press enter to kill it.", s.f.Label()), width) + "\n")
 		b.WriteString(s.typed.view(true) + "\n")
 		if s.f.Mismatch() {
 			b.WriteString("the label does not match: nothing was killed\n")
@@ -189,13 +189,16 @@ func (s *killScreen) View(width, _ int) string {
 		b.WriteString("\nctrl+b: the agents worked no beads · esc: close\n")
 	case forms.Refused:
 		b.WriteString("kill refuses; nothing was closed:\n" + targetsText(s.f.Review(), width))
+		if err := s.f.Err(); err != nil {
+			b.WriteString(clip("  "+err.Error(), width) + "\n")
+		}
 		b.WriteString("\nr: check again · ctrl+b: the agents worked no beads · enter or esc: close\n")
 	case forms.Running:
 		b.WriteString("killing…\n")
 		if p := s.f.Progress(); p != nil {
-			fmt.Fprintf(&b, "  record %s: %s\n", p.OperationID, p.Status)
+			b.WriteString(clip(fmt.Sprintf("  record %s: %s", p.OperationID, p.Status), width) + "\n")
 			for _, t := range p.Targets {
-				fmt.Fprintf(&b, "  agent %d: %s\n", t.Index, t.Status)
+				b.WriteString(clip(fmt.Sprintf("  agent %d: %s", t.Index, t.Status), width) + "\n")
 			}
 		}
 		b.WriteString(running + "\n")

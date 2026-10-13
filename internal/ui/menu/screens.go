@@ -437,13 +437,13 @@ func (s *sendScreen) View(width, height int) string {
 	case s.result != nil:
 		out := forms.ResultText(*s.result)
 		if s.err != nil {
-			out += "error: " + s.err.Error() + "\n"
+			out += clip("error: "+s.err.Error(), width) + "\n"
 		}
 		return out + "\nany key closes\n"
 	}
 	out := s.comp.View()
 	if s.err != nil {
-		out += "\n" + s.err.Error()
+		out += "\n" + clip(s.err.Error(), width)
 	}
 	return out
 }

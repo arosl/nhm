@@ -115,6 +115,18 @@ func TestKillReviewRefusesOrFails(t *testing.T) {
 	}
 }
 
+// A label with terminal controls cannot be typed into the field, so the
+// kill refuses at once and runs no checks (the review's L2).
+func TestKillRefusesAnUntypableLabel(t *testing.T) {
+	fc := &fakeCore{killErr: errYes}
+	c := ctxW
+	c.WorkspaceLabel = "proj\x1b[31m-a"
+	f := NewKillForm(newRunner(t, "workspace.kill", fc.core()), c)
+	if cmd := f.StartReview(); cmd != nil || f.Phase() != Refused || !errors.Is(f.Err(), ErrLabelControls) || f.Confirm() != nil {
+		t.Fatalf("label with controls: %v %v", f.Phase(), f.Err())
+	}
+}
+
 // --no-beads changes the checks: it drops the review, its answer and its
 // id.
 func TestKillEditDropsTheReview(t *testing.T) {

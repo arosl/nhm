@@ -2,6 +2,7 @@ package forms
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -14,6 +15,10 @@ import (
 
 // KillPoll is how often a running kill's record is read.
 const KillPoll = time.Second
+
+// ErrLabelControls refuses a kill whose workspace label holds terminal
+// controls: the confirmation field takes none, so it cannot be typed.
+var ErrLabelControls = errors.New("the workspace's label holds terminal control characters, so it cannot be typed: rename the workspace in herdr, then kill it")
 
 // KillForm is the menu's kill (workspace.kill): the checks, then the
 // workspace's label typed as the confirmation, then the kill under the
@@ -110,6 +115,13 @@ func (f *KillForm) request0() actions.Request {
 // submitted, so its operation id is the kill's.
 func (f *KillForm) StartReview() tea.Cmd {
 	if !f.CanReview() {
+		return nil
+	}
+	if l := f.Label(); clean(l) != l {
+		// The field takes no control bytes, so this label can never be
+		// typed: say so at once.
+		f.review, f.typed, f.mismatch = actions.Result{}, "", false
+		f.phase, f.err = Refused, ErrLabelControls
 		return nil
 	}
 	req := f.request0()

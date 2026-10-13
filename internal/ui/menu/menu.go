@@ -503,11 +503,13 @@ What a form starts runs on when the menu closes: recent operations (o)
 shows how it ended. Closing the menu is not cancelling.
 `
 
-// clip shortens s to width columns.
+// clip removes terminal controls from s (forms.Clean) and shortens it to
+// width columns. Every line of outside text the menu shows (labels,
+// statuses, reasons, errors) passes it.
 func clip(s string, width int) string {
-	r := []rune(s)
+	r := []rune(forms.Clean(s))
 	if len(r) <= width {
-		return s
+		return string(r)
 	}
 	if width <= 1 {
 		return string(r[:max(0, width)])
