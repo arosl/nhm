@@ -272,9 +272,80 @@ func LoadBeadDBs(path string) ([]string, error) {
 
 // KillResult is a kill of a workspace.
 type KillResult struct {
+	// OperationID is the kill's operation record, claimed after the
+	// checks and before the first effect; empty when nothing ran.
+	OperationID string         `json:"operation_id,omitempty"`
 	WorkspaceID string         `json:"workspace_id"`
 	Agents      []RetireResult `json:"agents"`
 	Closed      bool           `json:"closed"`
+}
+
+// VerbKill is the operation verb of a workspace kill; each agent's
+// retire is its own operation, with verb "kill" and the id
+// <kill operation>.<index>.
+const VerbKill = "kill_workspace"
+
+// Kill operation and receipt statuses. A kill that stops while
+// "dispatching" or "closing" died partway: its receipts say how far it
+// got (RecentOperations, admin recover inspect).
+const (
+	KillDispatching = "dispatching"
+	KillClosing     = "closing"
+	KillClosed      = "closed"
+	KillStopped     = "stopped"
+	KillRetired     = "retired"
+	KillRefused     = "refused"
+	KillFailed      = "failed"
+)
+
+// killReceipt records one agent's outcome as it happens.
+func killReceipt(ctx context.Context, env Env, opID string, i int, status string, r RetireResult, rerr error) error {
+	detail := map[string]any{"mail_name": r.MailName, "retire_operation": r.OperationID}
+	if len(r.Refusals) > 0 {
+		detail["refusals"] = r.Refusals
+	}
+	if rerr != nil {
+		detail["error"] = rerr.Error()
+	}
+	js, err := json.Marshal(detail)
+	if err != nil {
+		return err
+	}
+	_, err = env.DB.SQL().ExecContext(ctx, `UPDATE receipts SET status = ?, result_json = ?, updated_at = ?
+		WHERE operation_id = ? AND target_index = ?`, status, string(js), store.FormatTime(env.now()), opID, i)
+	return err
+}
+
+// claimKill records the kill and one pending receipt per agent before
+// any effect, so the record outlives the process that runs it.
+func claimKill(ctx context.Context, env Env, workspaceID string, list []bindings.Binding, noBeads bool) (string, error) {
+	type target struct {
+		BindingID  string `json:"binding_id"`
+		Generation int64  `json:"generation"`
+	}
+	targets := make([]target, len(list))
+	for i, b := range list {
+		targets[i] = target{b.ID, b.Generation}
+	}
+	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{Verb: VerbKill,
+		Scope:   map[string]string{"workspace_id": workspaceID},
+		Request: map[string]any{"workspace_id": workspaceID, "targets": targets, "no_beads": noBeads}}, env.now())
+	if err != nil {
+		return "", err
+	}
+	id := claim.Operation.ID
+	now := store.FormatTime(env.now())
+	for i, b := range list {
+		js, err := json.Marshal(map[string]string{"mail_name": b.MailName})
+		if err != nil {
+			return id, err
+		}
+		if _, err := env.DB.SQL().ExecContext(ctx, `INSERT INTO receipts (operation_id, target_index, binding_id, generation,
+			status, result_json, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)`, id, i, b.ID, b.Generation, string(js), now); err != nil {
+			return id, err
+		}
+	}
+	return id, env.DB.SetOperationStatus(ctx, id, KillDispatching, false, env.now())
 }
 
 // Kill closes a workspace. It runs retire's checks for every bound agent
@@ -321,12 +392,34 @@ func Kill(ctx context.Context, env Env, workspaceID string, yes, noBeads bool) (
 	if !yes {
 		return res, fmt.Errorf("%w: kill closes the workspace and retires its agents: give --yes", ErrRefused)
 	}
+	opID, err := claimKill(ctx, env, workspaceID, list, noBeads)
+	res.OperationID = opID
+	if err != nil {
+		return res, fmt.Errorf("kill: record the operation: %w", err)
+	}
+	stop := func(err error) (KillResult, error) {
+		_ = env.DB.SetOperationStatus(ctx, opID, KillStopped, true, env.now())
+		return res, err
+	}
 	res.Agents = res.Agents[:0]
-	for _, b := range list {
-		r, err := Retire(ctx, env, RetireRequest{Target: b.ID, Reason: "kill", NoBeads: noBeads || b.Role == spawn.RoleReviewer})
+	for i, b := range list {
+		// The generation the checks saw: an agent recycled since is
+		// refused, never retired unchecked.
+		r, err := Retire(ctx, env, RetireRequest{Target: b.ID, Reason: "kill", NoBeads: noBeads || b.Role == spawn.RoleReviewer,
+			OperationID: fmt.Sprintf("%s.%d", opID, i), ExpectedGeneration: b.Generation})
 		res.Agents = append(res.Agents, r)
+		status := KillRetired
+		switch {
+		case errors.Is(err, ErrRefused):
+			status = KillRefused
+		case err != nil:
+			status = KillFailed
+		}
+		if werr := killReceipt(ctx, env, opID, i, status, r, err); werr != nil && err == nil {
+			err = fmt.Errorf("record the outcome: %w", werr)
+		}
 		if err != nil {
-			return res, fmt.Errorf("%s: %w; the workspace stays open", b.MailName, err)
+			return stop(fmt.Errorf("%s: %w; the workspace stays open", b.MailName, err))
 		}
 	}
 	// What started in the workspace while the agents were retired is not
@@ -336,13 +429,21 @@ func Kill(ctx context.Context, env Env, workspaceID string, yes, noBeads bool) (
 		if err != nil {
 			unchecked = append(unchecked, "the workspace's panes cannot be read: "+err.Error())
 		}
-		return res, fmt.Errorf("%w: the agents are retired, the workspace stays open: %s", ErrRefused, strings.Join(unchecked, " | "))
+		return stop(fmt.Errorf("%w: the agents are retired, the workspace stays open: %s", ErrRefused, strings.Join(unchecked, " | ")))
+	}
+	// Closing may end the process that runs the kill (a UI in the
+	// workspace): the record says "closing" until the close returns.
+	if err := env.DB.SetOperationStatus(ctx, opID, KillClosing, false, env.now()); err != nil {
+		return stop(fmt.Errorf("kill: record the close: %w", err))
 	}
 	// herdr may have closed the workspace with its last pane.
 	if err := env.Herdr.WorkspaceClose(ctx, workspaceID); err != nil && !strings.HasSuffix(herdr.ErrorCode(err), "not_found") {
-		return res, fmt.Errorf("close workspace %s: %w", workspaceID, err)
+		return stop(fmt.Errorf("close workspace %s: %w", workspaceID, err))
 	}
 	res.Closed = true
+	if err := env.DB.SetOperationStatus(ctx, opID, KillClosed, true, env.now()); err != nil {
+		return res, fmt.Errorf("kill: the workspace is closed, but its record is not: %w", err)
+	}
 	return res, nil
 }
 
