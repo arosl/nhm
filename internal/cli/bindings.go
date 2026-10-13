@@ -290,22 +290,7 @@ func runAdopt(args []string, stdout, stderr io.Writer) int {
 		}
 		req.ProjectKey, req.ProjectID, env.Scope = s.MailProjectKey, s.ProjectID, s
 	}
-	lctx, cancel := context.WithTimeout(ctx, lockWait)
-	defer cancel()
-	var res bindings.AdoptResult
-	code := exitOK
-	err = core.WithOwnerShared(lctx, ie.inst.Dir, func(o core.Owner) error {
-		if err := core.RequireOwner(o, core.OwnerNhm); err != nil {
-			code = exitRefused
-			return err
-		}
-		var aerr error
-		res, aerr = bindings.Adopt(ctx, ie.env(), req)
-		return aerr
-	})
-	if err != nil && code == exitOK {
-		code = exitError
-	}
+	res, code, err := adoptUnderOwner(ctx, ie, req)
 	env.OperationID, env.Result, env.Warnings = res.OperationID, res, res.Warnings
 	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
 		b := res.Binding
@@ -315,6 +300,32 @@ func runAdopt(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(w, "%s %s (%s) in %s: %s generation %d, slot %s\n", verb, b.MailName, b.Kind, b.PaneID, b.ID, b.Generation, dash(b.Slot))
 	})
+}
+
+// adoptUnderOwner runs adopt under the owner lock, for nhm adopt and the
+// surfaces' adopt job.
+func adoptUnderOwner(ctx context.Context, ie *instanceEnv, req bindings.AdoptRequest) (bindings.AdoptResult, int, error) {
+	lctx, cancel := context.WithTimeout(ctx, lockWait)
+	defer cancel()
+	var res bindings.AdoptResult
+	code := exitOK
+	err := core.WithOwnerShared(lctx, ie.inst.Dir, func(o core.Owner) error {
+		if err := core.RequireOwner(o, core.OwnerNhm); err != nil {
+			code = exitRefused
+			return err
+		}
+		var aerr error
+		res, aerr = bindings.Adopt(ctx, ie.env(), req)
+		return aerr
+	})
+	switch {
+	case errors.Is(err, bindings.ErrAgentChanged):
+		// Another agent is in the pane since the review: a refusal.
+		code = exitRefused
+	case err != nil && code == exitOK:
+		code = exitError
+	}
+	return res, code, err
 }
 
 const recoverUsage = `Usage: nhm admin recover reconcile --import-only [--project DIR] [--dry-run] [--op-id ID] [--socket PATH] [--json]

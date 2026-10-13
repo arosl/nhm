@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
@@ -32,12 +33,11 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 				res, _, err := runSendCore(ctx, ie, req)
 				return res, err
 			}
-			var res send.Result
-			return res, uiJob(ctx, jobs, runner.VerbSend, req.OperationID, req, &res, nil)
+			return uiRun(ctx, jobs, runner.VerbSend, req.OperationID, req, nil, func(r *send.Result) *string { return &r.OperationID })
 		},
 		Interrupt: func(ctx context.Context, expect map[string]int64, opID string) (wait.InterruptResult, error) {
-			var res wait.InterruptResult
-			return res, uiJob(ctx, jobs, runner.VerbInterrupt, opID, runner.InterruptRequest{Expect: expect}, &res, nil)
+			return uiRun(ctx, jobs, runner.VerbInterrupt, opID, runner.InterruptRequest{Expect: expect}, nil,
+				func(r *wait.InterruptResult) *string { return &r.OperationID })
 		},
 		Retire: func(ctx context.Context, req lifecycle.RetireRequest) (lifecycle.RetireResult, error) {
 			if req.DryRun {
@@ -47,12 +47,16 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 				}
 				return lifecycle.Retire(ctx, lenv, req)
 			}
-			var res lifecycle.RetireResult
-			return res, uiJob(ctx, jobs, runner.VerbRetire, req.OperationID, req, &res, lifecycle.ErrRefused)
+			return uiRun(ctx, jobs, runner.VerbRetire, req.OperationID, req, lifecycle.ErrRefused,
+				func(r *lifecycle.RetireResult) *string { return &r.OperationID })
 		},
 		Recycle: func(ctx context.Context, req lifecycle.RecycleRequest) (lifecycle.RecycleResult, error) {
-			var res lifecycle.RecycleResult
-			return res, uiJob(ctx, jobs, runner.VerbRecycle, req.OperationID, req, &res, nil)
+			return uiRun(ctx, jobs, runner.VerbRecycle, req.OperationID, req, nil,
+				func(r *lifecycle.RecycleResult) *string { return &r.OperationID })
+		},
+		Adopt: func(ctx context.Context, req bindings.AdoptRequest) (bindings.AdoptResult, error) {
+			return uiRun(ctx, jobs, runner.VerbAdopt, req.OperationID, req, bindings.ErrAgentChanged,
+				func(r *bindings.AdoptResult) *string { return &r.OperationID })
 		},
 		Kill: func(ctx context.Context, req lifecycle.KillRequest) (lifecycle.KillResult, error) {
 			if !req.Yes {
@@ -62,9 +66,8 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 				}
 				return lifecycle.KillWith(ctx, lenv, req)
 			}
-			var res lifecycle.KillResult
-			return res, uiJob(ctx, jobs, runner.VerbKill, req.OperationID,
-				runner.KillRequest{WorkspaceID: req.WorkspaceID, NoBeads: req.NoBeads}, &res, lifecycle.ErrRefused)
+			return uiRun(ctx, jobs, runner.VerbKill, req.OperationID, runner.KillRequest{WorkspaceID: req.WorkspaceID,
+				NoBeads: req.NoBeads}, lifecycle.ErrRefused, func(r *lifecycle.KillResult) *string { return &r.OperationID })
 		},
 		Reap: func(ctx context.Context, req lifecycle.ReapRequest, opID string) ([]lifecycle.ReapItem, error) {
 			if req.DryRun {
@@ -107,8 +110,7 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 				res, _, err := spawnUnderOwner(ctx, ie, &sreq, "")
 				return res, err
 			}
-			var res spawn.Result
-			return res, uiJob(ctx, jobs, runner.VerbSpawn, opID, rreq, &res, spawn.ErrRefused)
+			return uiRun(ctx, jobs, runner.VerbSpawn, opID, rreq, spawn.ErrRefused, func(r *spawn.Result) *string { return &r.OperationID })
 		},
 		Operation: func(ctx context.Context, id string) (lifecycle.RecentOperation, error) {
 			return lifecycle.ReadOperation(ctx, ie.db, id)
@@ -141,20 +143,26 @@ func uiSendBase(ctx context.Context, ie *instanceEnv, c ui.Context) (send.Reques
 }
 
 // uiJob runs a job under id and decodes its result into out. A job that
-// ended with an error returns it (uiJobError); refused, when not nil, is
-// the core's refusal sentinel the error wraps on exit code 2, as the
-// verb's in-process error would.
+// did not start returns that error: nothing ran. A job whose answer does
+// not come in (the wait ended, or its result cannot be read) returns a
+// uiLostError: it may run on, and its record says how it ends; nothing
+// replays it. A job that ended with an error returns it (uiJobError);
+// refused, when not nil, is the core's refusal sentinel the error wraps
+// on exit code 2, as the verb's in-process error would.
 func uiJob(ctx context.Context, jobs runner.Client, verb, id string, req, out any, refused error) error {
 	if id == "" {
 		return fmt.Errorf("%s: a mutation needs the operation id of its review", verb)
 	}
-	r, err := jobs.Run(ctx, verb, id, req)
-	if err != nil {
+	if err := jobs.StartAs(verb, id, req); err != nil {
 		return err
+	}
+	r, err := jobs.Wait(ctx, id)
+	if err != nil {
+		return &uiLostError{ID: id, Err: err}
 	}
 	if len(r.Result) > 0 && string(r.Result) != "null" {
 		if err := json.Unmarshal(r.Result, out); err != nil {
-			return fmt.Errorf("%s: the job's result cannot be read: %w", verb, err)
+			return &uiLostError{ID: id, Err: fmt.Errorf("its result cannot be read: %w", err)}
 		}
 	}
 	if r.Error == "" {
@@ -162,6 +170,31 @@ func uiJob(ctx context.Context, jobs runner.Client, verb, id string, req, out an
 	}
 	return &uiJobError{Code: r.Code, Message: r.Error, refused: refused}
 }
+
+// uiRun is uiJob for a result that carries its operation id (opID gives
+// the field): on a lost answer the result names the job's id, so the
+// surface says "unknown" and reads the record, never a second submission.
+func uiRun[T any](ctx context.Context, jobs runner.Client, verb, id string, req any, refused error, opID func(*T) *string) (T, error) {
+	var res T
+	err := uiJob(ctx, jobs, verb, id, req, &res, refused)
+	var lost *uiLostError
+	if errors.As(err, &lost) {
+		*opID(&res) = lost.ID
+	}
+	return res, err
+}
+
+// uiLostError is a job whose answer did not come in.
+type uiLostError struct {
+	ID  string
+	Err error
+}
+
+func (e *uiLostError) Error() string {
+	return fmt.Sprintf("operation %s: no answer (%v); it may run on: recent operations shows its record", e.ID, e.Err)
+}
+
+func (e *uiLostError) Unwrap() error { return e.Err }
 
 // uiJobError is how a job ended when it gave an error: its message and
 // the verb's exit code.

@@ -36,10 +36,10 @@ import (
 // Version is the job format this nhm writes and runs.
 const Version = 1
 
-// Verbs. The requests of send, retire and recycle are the core's own
-// (send.Request, lifecycle.RetireRequest, lifecycle.RecycleRequest), as
-// the action table's handler built them; the others have a request type
-// here. A job's id is its operation id.
+// Verbs. The requests of send, retire, recycle and adopt are the core's
+// own (send.Request, lifecycle.RetireRequest, lifecycle.RecycleRequest,
+// bindings.AdoptRequest), as the action table's handler built them; the
+// others have a request type here. A job's id is its operation id.
 const (
 	VerbKill      = "kill"
 	VerbReap      = "reap"
@@ -50,6 +50,7 @@ const (
 	VerbInterrupt = "interrupt"
 	VerbRetire    = "retire"
 	VerbRecycle   = "recycle"
+	VerbAdopt     = "adopt"
 )
 
 // Codes are the CLI verbs' exit codes.

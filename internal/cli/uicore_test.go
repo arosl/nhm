@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/lifecycle"
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
@@ -26,6 +28,7 @@ func fakeJobs(t *testing.T, sock string, code, msg, result string) runner.Client
 	script := `#!/bin/sh
 job="$3"; dir=$(dirname "$job"); id=$(basename "$job" .job.json)
 cp "$job" "$dir/$id.seen"
+[ "$FAKE_CODE" = none ] && exit 0
 printf '{"version":1,"id":"%s","verb":"x","code":%s,"error":"%s","result":%s}\n' "$id" "$FAKE_CODE" "$FAKE_ERROR" "$FAKE_RESULT" > "$dir/$id.tmp"
 mv "$dir/$id.tmp" "$dir/$id.result.json"
 `
@@ -71,6 +74,24 @@ func TestUIJobErrors(t *testing.T) {
 	}
 	if err := uiJob(ctx, jobs, runner.VerbRetire, "", lifecycle.RetireRequest{}, &res, nil); err == nil {
 		t.Fatal("a mutation ran without its operation id")
+	}
+}
+
+// A job whose answer does not come in is unknown under its id; a job that
+// did not start has none: nothing ran.
+func TestUIJobLostAndNotStarted(t *testing.T) {
+	jobs := fakeJobs(t, "/run/herdr.sock", "none", "", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	res, err := uiRun(ctx, jobs, runner.VerbSend, "op-lost", send.Request{}, nil, func(r *send.Result) *string { return &r.OperationID })
+	var lost *uiLostError
+	if !errors.As(err, &lost) || res.OperationID != "op-lost" || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lost answer = %+v %v", res, err)
+	}
+	jobs.Bin = filepath.Join(t.TempDir(), "missing")
+	res, err = uiRun(context.Background(), jobs, runner.VerbSend, "op-gone", send.Request{}, nil, func(r *send.Result) *string { return &r.OperationID })
+	if err == nil || errors.As(err, &lost) || res.OperationID != "" {
+		t.Fatalf("a job that did not start = %+v %v", res, err)
 	}
 }
 
@@ -167,6 +188,14 @@ func TestUICoreRunsMutationsAsJobs(t *testing.T) {
 	}
 	if _, err := core.Operation(ctx, "op-none"); !errors.Is(err, lifecycle.ErrNoOperation) {
 		t.Fatalf("a missing operation = %v", err)
+	}
+	if _, err := core.Adopt(ctx, bindings.AdoptRequest{MailName: "GreenPike", PaneID: "w1:p9", ExpectedSession: "claude:s9",
+		OperationID: "op-ui-8"}); err != nil {
+		t.Fatal(err)
+	}
+	var ar bindings.AdoptRequest
+	if j := seenJob(t, jobs, "op-ui-8"); j.Verb != runner.VerbAdopt || j.Decode(&ar) != nil || ar.ExpectedSession != "claude:s9" || ar.PaneID != "w1:p9" {
+		t.Fatalf("adopt job = %+v %+v", j, ar)
 	}
 	// The send base is nhm send's for the workspace, with no selector.
 	if _, err := uiSendBase(ctx, ie, ui.Context{}); err == nil {

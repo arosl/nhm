@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/store"
@@ -150,6 +151,7 @@ func TestUIRunAgentJobs(t *testing.T) {
 	}{
 		{runner.VerbRetire, lifecycle.RetireRequest{Target: blue, DryRun: true}},
 		{runner.VerbInterrupt, runner.InterruptRequest{}},
+		{runner.VerbAdopt, bindings.AdoptRequest{MailName: "GreenPike"}},
 	} {
 		j, path := writeJob(t, c.verb, s.SocketPath, dir, c.req)
 		if code, _, _ := run("ui", "run", path); code != 2 {
