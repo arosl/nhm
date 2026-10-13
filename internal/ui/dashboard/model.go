@@ -123,10 +123,12 @@ type Model struct {
 	seq   uint64
 
 	// The action menu (space): its rows, the submission guard and the
-	// form shown.
-	menu  []actions.Action
-	guard *actions.Guard
-	form  *forms.AgentForm
+	// form shown. menuTargets are the menu's targets, frozen when space
+	// opens it.
+	menu        []actions.Action
+	menuTargets board.Targets
+	guard       *actions.Guard
+	form        *forms.AgentForm
 
 	// The side panels and the focus between them (focus.go). The board
 	// runs no animations: dashboardSprings stays nil.
@@ -441,15 +443,19 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if msg.String() != a.Board.Space {
 				continue
 			}
+			tg, ok := m.menuSelection()
+			if !ok {
+				return m, nil
+			}
 			switch a.ID {
 			case readActionID:
-				return m, m.openRead()
+				return m, m.openRead(tg)
 			case sendActionID:
-				return m, m.openSend(a)
+				return m, m.openSend(a, tg)
 			case paletteActionID:
-				return m, m.openPalette()
+				return m, m.openPalette(tg)
 			}
-			return m, m.openForm(a)
+			return m, m.openForm(a, tg)
 		}
 		return m, nil
 	}
@@ -525,7 +531,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Help):
 		m.view = viewHelp
 	case key.Matches(msg, m.keys.Actions):
-		m.view = viewActions
+		// The menu's targets freeze now: a refresh while it is open never
+		// swaps the cursor's agent for the row now in its place.
+		m.menuTargets, m.view = m.b.Sel.Targets(), viewActions
 	case key.Matches(msg, m.keys.Mark):
 		m.b.Sel.Toggle()
 	case key.Matches(msg, m.keys.Filter):
@@ -678,11 +686,32 @@ func (m *Model) track(f *forms.AgentForm) {
 	}
 }
 
-// openForm opens the action's form on what the action menu acts on: the
-// marks, else the cursor's row, frozen now. An invalid mark refuses it:
-// it is never dropped or swapped for the row in its place.
-func (m *Model) openForm(a actions.Action) tea.Cmd {
-	tg := m.b.Sel.Targets()
+// menuSelection is the menu's frozen targets as the board has them now:
+// the same keys (binding and generation, or pane and session), with
+// today's rows. A target whose key is no longer on the board (retired,
+// recycled, gone) refuses the action and closes the menu; the action
+// never falls back to the row in its place or to the cursor.
+func (m *Model) menuSelection() (board.Targets, bool) {
+	tg := m.menuTargets
+	tg.Rows = slices.Clone(tg.Rows)
+	now := m.b.Rows()
+	for i, r := range tg.Rows {
+		j := slices.IndexFunc(now, func(x board.Row) bool { return x.Key.Key() == r.Key.Key() })
+		if j < 0 {
+			m.view = viewMain
+			m.say(true, board.Clean(rowName(r))+" is no longer on the board as it was (retired, recycled or gone): "+
+				"nothing was done; space shows the board as it is now")
+			return tg, false
+		}
+		tg.Rows[i] = now[j]
+	}
+	return tg, true
+}
+
+// openForm opens the action's form on the targets the action menu froze:
+// the marks, else the cursor's row. An invalid mark refuses it: it is
+// never dropped or swapped for the row in its place.
+func (m *Model) openForm(a actions.Action, tg board.Targets) tea.Cmd {
 	switch err := m.Frozen(); {
 	case err != nil:
 		// The form refuses at its confirm too (WithFrozen).

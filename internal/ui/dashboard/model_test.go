@@ -517,6 +517,60 @@ func TestActionMenuRefusesAReplacedMark(t *testing.T) {
 	}
 }
 
+// space freezes the cursor's agent. When it is recycled while the menu
+// is open, the cursor moves to the row now in its place, but no action
+// takes that row: each refuses, and nothing is sent or opened. A new
+// space acts on the board as it is now.
+func TestActionMenuFreezesTheCursor(t *testing.T) {
+	b, _, bs := fixtureStore(t)
+	ic, sc := &interruptCore{}, &sendCore{}
+	core := ic.core()
+	core.SendBase, core.Send = sc.core().SendBase, sc.core().Send
+	var palettes []ui.Context
+	m := newModel(t, Config{Board: b, Core: core, NewOperationID: opIDs(),
+		OpenPalette: func(_ context.Context, c ui.Context) error { palettes = append(palettes, c); return nil }})
+	icy, err := bs.ActiveByPane(context.Background(), "w1:p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recycle := func() {
+		t.Helper()
+		cur, err := bs.Get(context.Background(), icy.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bs.Occupy(context.Background(), cur.ID, cur.Generation, bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1",
+			PaneID: "w1:p1", HerdrAlias: "icyknoll"}); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m)
+	}
+	for _, k := range []string{"a", "s", "x"} {
+		press(m, "space")
+		recycle()
+		if r, _ := m.b.Sel.Cursor(); r.Key.Generation == m.menuTargets.Rows[0].Key.Generation {
+			t.Fatal("the recycle did not move the cursor to the new generation")
+		}
+		cmd := press(m, k)
+		runAll(m, cmd)
+		if m.view != viewMain || !strings.Contains(plain(m), "no longer on the board as it was") {
+			t.Fatalf("space %s after a recycle: view %d\n%s", k, m.view, plain(m))
+		}
+	}
+	if len(palettes) != 0 || len(sc.reqs) != 0 || len(ic.asked) != 0 {
+		t.Fatalf("an action took the row in its place: %d palettes, %d sends, %d interrupts", len(palettes), len(sc.reqs), len(ic.asked))
+	}
+	cmd := press(m, "space", "a")
+	runAll(m, cmd)
+	cur, _ := m.b.Sel.Cursor()
+	if len(palettes) != 1 {
+		t.Fatalf("a new space opened %d palettes", len(palettes))
+	}
+	if ts, _, _ := palettes[0].Selection(); len(ts) != 1 || ts[0].Generation != cur.Key.Generation {
+		t.Fatalf("a new space: selection %+v, cursor %+v", ts, cur.Key)
+	}
+}
+
 // The cursor on an unbound agent: interrupt refuses it (bound agents
 // only), with the table's reason.
 func TestActionMenuRefusesAnUnboundAgent(t *testing.T) {

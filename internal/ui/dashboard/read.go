@@ -52,9 +52,8 @@ func (m *Model) readAction() (actions.Action, bool) {
 	return actions.ByID(readActionID)
 }
 
-// openRead opens the read view on the one agent the action menu acts on.
-func (m *Model) openRead() tea.Cmd {
-	tg := m.b.Sel.Targets()
+// openRead opens the read view on the one agent the action menu froze.
+func (m *Model) openRead(tg board.Targets) tea.Cmd {
 	switch {
 	case len(tg.Invalid) > 0:
 		m.view = viewMain

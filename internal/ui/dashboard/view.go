@@ -421,9 +421,9 @@ func (m *Model) preview(w, height int) string {
 	return head + "\n" + strings.Join(lines, "\n")
 }
 
-// actionTargets names what the action menu acts on.
+// actionTargets names what the action menu acts on: its frozen targets.
 func (m *Model) actionTargets() string {
-	tg := m.b.Sel.Targets()
+	tg := m.menuTargets
 	switch {
 	case tg.From == board.FromNone:
 		return "no agent"
@@ -451,7 +451,7 @@ func (m *Model) actionsBody() string {
 		}
 		lines = append(lines, line)
 	}
-	for _, mk := range m.b.Sel.Targets().Invalid {
+	for _, mk := range m.menuTargets.Invalid {
 		lines = append(lines, lipgloss.NewStyle().Foreground(m.theme.Error).Render(
 			"marked "+board.Clean(mk.Name)+": "+mk.Reason+" (esc on the board clears the marks)"))
 	}

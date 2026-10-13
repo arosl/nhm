@@ -27,12 +27,11 @@ type paletteMsg struct {
 	err error
 }
 
-// openPalette opens the palette popup on the board's frozen selection:
-// the marks, else the cursor's row. The palette sends to exactly those
-// targets at the generations frozen here; it never widens the set.
-func (m *Model) openPalette() tea.Cmd {
+// openPalette opens the palette popup on the targets the action menu
+// froze: the marks, else the cursor's row. The palette sends to exactly
+// those targets at the frozen generations; it never widens the set.
+func (m *Model) openPalette(tg board.Targets) tea.Cmd {
 	m.view = viewMain
-	tg := m.b.Sel.Targets()
 	switch err := m.Frozen(); {
 	case err != nil:
 		// The palette sends: a frozen board hands it no selection.
@@ -78,10 +77,9 @@ type sentMsg struct {
 	err  error
 }
 
-// openSend freezes the targets of the action menu and opens the
-// composer. An invalid mark, an unbound agent or no agent refuses it.
-func (m *Model) openSend(a actions.Action) tea.Cmd {
-	tg := m.b.Sel.Targets()
+// openSend opens the composer for the targets the action menu froze. An
+// invalid mark, an unbound agent or no agent refuses it.
+func (m *Model) openSend(a actions.Action, tg board.Targets) tea.Cmd {
 	switch err := m.Frozen(); {
 	case err != nil:
 		m.view = viewMain
