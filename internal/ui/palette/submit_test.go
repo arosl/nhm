@@ -140,8 +140,8 @@ func TestBuildRequestFreezesTheTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.Selector.All || len(req.Selector.Kinds) != 0 || len(req.Selector.Names) != 0 ||
-		strings.Join(req.Selector.Panes, ",") != "w1:p1,w1:p2" {
+	if req.Selector.All || len(req.Selector.Kinds) != 0 || len(req.Selector.Names) != 0 || len(req.Selector.Panes) != 0 ||
+		strings.Join(req.Selector.Bindings, ",") != "b1,b2" {
 		t.Fatalf("selector = %+v", req.Selector)
 	}
 	if len(req.Expect) != 2 || req.Expect["b1"] != 3 || req.Expect["b2"] != 1 {
@@ -274,8 +274,12 @@ func TestPaletteSendThroughTheCore(t *testing.T) {
 	if rc := receiptFor(t, res, blue.BindingID); rc.Status != send.StatusRefused || rc.ErrorCode != send.CodeGenerationChanged {
 		t.Fatalf("recycled target = %+v", rc)
 	}
-	if rc := receiptFor(t, res, heir.BindingID); rc.Status != send.StatusRefused || rc.ErrorCode != send.CodeNotReviewed {
-		t.Fatalf("the heir in a target's pane = %+v", rc)
+	// The palette selects the frozen bindings: the heir in a target's pane
+	// is never selected, so it gets no receipt and no prompt.
+	for _, rc := range res.Targets {
+		if rc.BindingID == heir.BindingID {
+			t.Fatalf("the heir in a target's pane got a receipt: %+v", rc)
+		}
 	}
 	if rc := receiptFor(t, res, moved.BindingID); rc.Status != send.StatusRefused || rc.ErrorCode != send.CodeNotSelected {
 		t.Fatalf("the target that handed off = %+v", rc)

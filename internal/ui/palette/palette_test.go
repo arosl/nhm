@@ -1274,8 +1274,8 @@ func TestSendDeliversMixedGrokBatchToEveryPane(t *testing.T) {
 		t.Fatalf("send() phase = %v, want the result screen", got.phase)
 	}
 	reqs := rec.waitRequests(t, 1)
-	if want := []string{"w1:p1", "w1:p2"}; !reflect.DeepEqual(reqs[0].Selector.Panes, want) {
-		t.Fatalf("send() targets = %v, want %v (grok pane delivered like claude)", reqs[0].Selector.Panes, want)
+	if want := []string{"b1", "b2"}; !reflect.DeepEqual(reqs[0].Selector.Bindings, want) {
+		t.Fatalf("send() targets = %v, want %v (grok pane delivered like claude)", reqs[0].Selector.Bindings, want)
 	}
 	if reqs[0].Message != "Fix the bug" || reqs[0].Template != "" {
 		t.Fatalf("send() payload = %+v", reqs[0])
@@ -1318,8 +1318,8 @@ func TestOmpQuickTarget(t *testing.T) {
 		t.Fatalf("pressing 7 in the target phase set target %v %q, want omp", got.target, got.targetKind)
 	}
 	reqs := rec.waitRequests(t, 1)
-	if want := []string{"w1:p3", "w1:p4"}; !reflect.DeepEqual(reqs[0].Selector.Panes, want) {
-		t.Fatalf("omp quick target sent to %v, want the two omp panes", reqs[0].Selector.Panes)
+	if want := []string{"b3", "b4"}; !reflect.DeepEqual(reqs[0].Selector.Bindings, want) {
+		t.Fatalf("omp quick target sent to %v, want the two omp agents", reqs[0].Selector.Bindings)
 	}
 }
 
@@ -1491,8 +1491,8 @@ func waitABit() { time.Sleep(10 * time.Millisecond) }
 
 func submittedAll(req send.Request) send.Result {
 	res := send.Result{OperationID: req.OperationID}
-	for i, p := range req.Selector.Panes {
-		res.Targets = append(res.Targets, send.Receipt{TargetIndex: i, PaneID: p, MailName: "agent-" + p,
+	for i, id := range req.Selector.Bindings {
+		res.Targets = append(res.Targets, send.Receipt{TargetIndex: i, BindingID: id, MailName: "agent-" + id,
 			Status: send.StatusSubmitted})
 	}
 	return res
@@ -1542,7 +1542,7 @@ func TestTargetsAreFrozenAtTheKeypress(t *testing.T) {
 	m = next.(Model)
 	reqs := rec.waitRequests(t, 1)
 	r := reqs[0]
-	if r.Selector.All || len(r.Selector.Kinds) != 0 || len(r.Selector.Panes) != 4 {
+	if r.Selector.All || len(r.Selector.Kinds) != 0 || len(r.Selector.Panes) != 0 || len(r.Selector.Bindings) != 4 {
 		t.Fatalf("selector = %+v", r.Selector)
 	}
 	want := map[string]int64{"b1": 1, "b2": 4, "b3": 2, "b4": 1}
@@ -1616,8 +1616,8 @@ func TestRepeatedSubmitSendsOnce(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(data)) != "Fix the bug" {
 		t.Fatalf("template file = %q %v", data, err)
 	}
-	if !reflect.DeepEqual(r.Selector.Panes, []string{"w1:p3", "w1:p4"}) {
-		t.Fatalf("panes = %v", r.Selector.Panes)
+	if !reflect.DeepEqual(r.Selector.Bindings, []string{"b3", "b4"}) {
+		t.Fatalf("bindings = %v", r.Selector.Bindings)
 	}
 }
 
@@ -1753,7 +1753,7 @@ func TestUnfilledVariablesAskAndSendAgain(t *testing.T) {
 	}
 	reqs := rec.waitRequests(t, 2)
 	if reqs[1].Vars["thread"] != "nhm-1" || !reflect.DeepEqual(reqs[1].Expect, reqs[0].Expect) ||
-		!reflect.DeepEqual(reqs[1].Selector.Panes, []string{"w1:p3", "w1:p4"}) {
+		!reflect.DeepEqual(reqs[1].Selector.Bindings, []string{"b3", "b4"}) {
 		t.Fatalf("second request = %+v", reqs[1])
 	}
 	// The value belongs to that prompt: a new selection starts without it.
@@ -1821,7 +1821,7 @@ func TestPickAgentsByHand(t *testing.T) {
 	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeySpace})
 	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	reqs := rec.waitRequests(t, 1)
-	if !reflect.DeepEqual(reqs[0].Selector.Panes, []string{"w1:p2"}) || reqs[0].Expect["b2"] != 4 || len(reqs[0].Expect) != 1 {
+	if !reflect.DeepEqual(reqs[0].Selector.Bindings, []string{"b2"}) || reqs[0].Expect["b2"] != 4 || len(reqs[0].Expect) != 1 {
 		t.Fatalf("request = %+v", reqs[0])
 	}
 	if m.phase != PhaseResult {
@@ -2036,7 +2036,7 @@ func TestHandedSelectionIsTheOnlyTarget(t *testing.T) {
 	}
 	m, _ = press(t, m, runeKey('1'))
 	reqs := rec.waitRequests(t, 1)
-	if !reflect.DeepEqual(reqs[0].Selector.Panes, []string{"w1:p3"}) || len(reqs[0].Expect) != 1 || reqs[0].Expect["b3"] != 7 {
+	if !reflect.DeepEqual(reqs[0].Selector.Bindings, []string{"b3"}) || len(reqs[0].Expect) != 1 || reqs[0].Expect["b3"] != 7 {
 		t.Fatalf("request = %+v", reqs[0])
 	}
 	if m.phase != PhaseResult {

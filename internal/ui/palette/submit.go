@@ -46,12 +46,15 @@ func (ts Targets) Expect() map[string]int64 {
 	return ui.Expect(ts.UI())
 }
 
-// PaneIDs are the targets' panes, for the send's selector.
-func (ts Targets) PaneIDs() []string {
+// BindingIDs are the targets' bindings, for the send's selector: the
+// core selects exactly these. One that is no longer active in the
+// workspace gets its own refused receipt (not_selected) while the others
+// go on; the agent now in its pane is never selected for it.
+func (ts Targets) BindingIDs() []string {
 	out := make([]string, 0, len(ts))
 	for _, t := range ts {
-		if !slices.Contains(out, t.PaneID) {
-			out = append(out, t.PaneID)
+		if t.BindingID != "" && !slices.Contains(out, t.BindingID) {
+			out = append(out, t.BindingID)
 		}
 	}
 	return out
@@ -97,21 +100,22 @@ func (b Bodies) Path(p Payload) (string, error) {
 
 // BuildRequest builds the send request of a payload to a target set, on
 // base: the session, workspace, project, scope and enrichment that the
-// caller resolved. The selector names the targets' panes and Expect
-// freezes their bindings and generations, so the core refuses a target
-// that changed since it was picked, under the target's lock and before
-// any prompt; it never swaps in the agent now in that pane. An empty
-// target set is refused. bodyPath is the file that holds a template
-// payload's text (Bodies.Path).
+// caller resolved. The selector names the targets' bindings and Expect
+// freezes their generations, so the core refuses a target that changed
+// since it was picked, under the target's lock and before any prompt,
+// and one that is gone with its own receipt; it never swaps in the agent
+// now in that pane. An empty target set is refused. bodyPath is the file
+// that holds a template payload's text (Bodies.Path).
 func BuildRequest(base send.Request, p Payload, ts Targets, bodyPath string) (send.Request, error) {
-	if len(ts) == 0 {
+	ids := ts.BindingIDs()
+	if len(ids) == 0 {
 		return send.Request{}, ErrNoTargets
 	}
 	if strings.TrimSpace(p.Text) == "" {
 		return send.Request{}, ErrEmptyDraft
 	}
 	req := base
-	req.Selector = send.Selector{Panes: ts.PaneIDs()}
+	req.Selector = send.Selector{Bindings: ids}
 	req.Expect = ts.Expect()
 	req.Source = history.SourcePalette
 	req.Message, req.Template, req.Vars, req.FileContent, req.BeadID = "", "", nil, "", ""
