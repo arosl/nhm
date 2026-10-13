@@ -99,13 +99,22 @@ func TestPaletteMemoryFollowsTheConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	(&fakeTools{}).use(t)
 	mem := paletteMemory(t.TempDir())
-	got, err := mem(context.Background(), "fix the login tests")
+	got, err := mem(context.Background(), "fix the login tests", palette.MemoryModes{})
 	if err != nil || got.CM.Enabled || got.Block != "" {
 		t.Fatalf("default config = %+v %v", got, err)
 	}
+	// The palette's choice wins over the config, both ways (nhm-t63).
+	got, err = mem(context.Background(), "fix the login tests", palette.MemoryModes{CM: enrich.BestEffort})
+	if err != nil || !got.CM.Enabled || got.CASS.Enabled || !strings.Contains(got.Block, "Run the login tests") {
+		t.Fatalf("CM chosen on = %+v %v", got, err)
+	}
 	cfg := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "nhm", "config.toml")
 	writeTestFile(t, cfg, "[memory]\ncm = \"best-effort\"\n[cass]\ncontext = \"best-effort\"\n")
-	got, err = mem(context.Background(), "fix the login tests")
+	got, err = mem(context.Background(), "fix the login tests", palette.MemoryModes{CASS: enrich.Off})
+	if err != nil || !got.CM.Enabled || got.CASS.Enabled {
+		t.Fatalf("CASS chosen off = %+v %v", got, err)
+	}
+	got, err = mem(context.Background(), "fix the login tests", palette.MemoryModes{})
 	if err != nil || !got.CM.Enabled || !strings.Contains(got.Block, "Run the login tests") {
 		t.Fatalf("memory on = %+v %v", got, err)
 	}

@@ -3,7 +3,8 @@
 // Local changes: this header; import paths. Behaviour (plan-v4 section 5):
 // the target phase's per-kind bindings (2-5 and 7) are one TargetKind
 // binding over nhm's kind digits (KindKeys); ctrl+o in the command phase
-// and m in the target phase show or hide the memory preview; the result
+// and m in the target phase show or hide the memory preview, and c and s
+// switch CM and CASS for the sends (nhm-t63); the result
 // and variables phases and the Composer are nhm's and have their own
 // keymaps.
 
@@ -84,6 +85,8 @@ type targetKeyMap struct {
 	SelectAgents key.Binding
 	Edit         key.Binding
 	Memory       key.Binding
+	MemoryCM     key.Binding
+	MemoryCASS   key.Binding
 	Help         key.Binding
 	Back         key.Binding
 	Quit         key.Binding
@@ -95,6 +98,8 @@ var targetKeys = targetKeyMap{
 	SelectAgents: key.NewBinding(key.WithKeys(KeySelect), key.WithHelp(KeySelect, "pick agents")),
 	Edit:         key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit prompt")),
 	Memory:       key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "memory")),
+	MemoryCM:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "CM on/off")),
+	MemoryCASS:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "CASS on/off")),
 	Help:         key.NewBinding(key.WithKeys("?", "f1"), key.WithHelp("?", "help")),
 	Back:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
@@ -313,6 +318,8 @@ func targetHelpEntries() []helpEntry {
 		entry("pick agents", k.SelectAgents),
 		entry("edit prompt", k.Edit),
 		entry("memory", k.Memory),
+		entry("CM on/off", k.MemoryCM),
+		entry("CASS on/off", k.MemoryCASS),
 		entry("help", k.Help),
 		entry("back", k.Back),
 		entry("quit", k.Quit),
@@ -328,6 +335,8 @@ func targetOverlayEntries() []helpEntry {
 		entry("Pick specific agents", k.SelectAgents),
 		entry("Edit prompt before sending", k.Edit),
 		entry("Show / hide what memory adds", k.Memory),
+		entry("Send with CM's rules, or without", k.MemoryCM),
+		entry("Send with CASS's hits, or without", k.MemoryCASS),
 		entry("Toggle this help", k.Help),
 		entry("Back to command list", k.Back),
 		entry("Quit palette", k.Quit),

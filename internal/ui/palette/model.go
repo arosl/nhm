@@ -30,6 +30,8 @@
 //   - A selection another surface handed on (Options.Handed, the board's
 //     marks) is the only target: 1 sends to exactly it; the kind digits
 //     and the picker do not widen it (handed.go).
+//   - c and s in the target phase switch CM's rules and CASS's hits for
+//     the sends, shown on the target screen (memory.go, nhm-t63).
 //   - Catalog text is shown without terminal controls (clean).
 
 package palette
@@ -204,6 +206,9 @@ type Model struct {
 	vars   varsState
 	memory memoryState
 	env    sendEnv
+	// memChoice is the user's CM and CASS choice for the sends (c, s);
+	// an empty mode leaves the config's.
+	memChoice MemoryModes
 
 	// Theme and styles
 	theme  theme.Theme
@@ -937,6 +942,14 @@ func (m *Model) updateTargetPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, targetKeys.Memory):
 		m.toggleMemory()
+		return *m, nil
+
+	case key.Matches(msg, targetKeys.MemoryCM):
+		m.toggleCM()
+		return *m, nil
+
+	case key.Matches(msg, targetKeys.MemoryCASS):
+		m.toggleCASS()
 		return *m, nil
 
 	case key.Matches(msg, targetKeys.Target1):
@@ -2180,6 +2193,8 @@ func (m Model) viewTargetPhase() string {
 
 	// Selected command info
 	b.WriteString(m.renderSendingLine())
+	// nhm: what memory the send adds, switched with c and s (nhm-t63).
+	b.WriteString(m.renderMemoryChoice())
 
 	// ═══════════════════════════════════════════════════════════════
 	// TARGET OPTIONS with visual styling

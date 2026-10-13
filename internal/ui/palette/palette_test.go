@@ -1901,7 +1901,7 @@ func TestBackToThePaletteAndRecents(t *testing.T) {
 func TestMemoryPreviewFollowsTheDraftRevision(t *testing.T) {
 	var asked []string
 	var mu sync.Mutex
-	memory := func(_ context.Context, text string) (Memory, error) {
+	memory := func(_ context.Context, text string, _ MemoryModes) (Memory, error) {
 		mu.Lock()
 		asked = append(asked, text)
 		mu.Unlock()
@@ -2041,6 +2041,72 @@ func TestHandedSelectionIsTheOnlyTarget(t *testing.T) {
 	}
 	if m.phase != PhaseResult {
 		t.Fatalf("phase = %v", m.phase)
+	}
+}
+
+// c and s switch CM's rules and CASS's hits for the palette's sends
+// (nhm-t63): the target screen shows the state, the request carries the
+// choice as --with-memory and --no-cass would, an untouched choice
+// leaves the config's, and the memory preview follows the modes.
+func TestMemoryChoiceForTheSends(t *testing.T) {
+	rec := &sendRecorder{}
+	var asked []MemoryModes
+	var mu sync.Mutex
+	memory := func(_ context.Context, _ string, modes MemoryModes) (Memory, error) {
+		mu.Lock()
+		asked = append(asked, modes)
+		mu.Unlock()
+		return Memory{}, nil
+	}
+	sub := NewSubmitter(rec.send, nil, memory, func() (string, error) { return "op-m", nil })
+	base := send.Request{Session: "swarm", WorkspaceID: "w1",
+		Enrich: send.Enrichment{DefaultCM: enrich.BestEffort, DefaultCASS: enrich.Off, Check: true}}
+	m := NewWithOptions("swarm", testCommands, Options{Submitter: sub, Base: base, Bodies: Bodies{Dir: t.TempDir()},
+		KindKeys: KindKeys(kinds.NewRegistry().All())})
+	m.panes, m.paneCountsKnown, m.paneCounts = testPanes(), true, countPanes(testPanes())
+	m.width, m.height = 140, 60
+	m.phase, m.selected = PhaseTarget, &m.commands[0]
+	if got := m.withMemoryChoice(base); !reflect.DeepEqual(got, base) {
+		t.Fatalf("an untouched choice changed the request: %+v", got.Enrich)
+	}
+	if view := stripANSI(m.View()); !strings.Contains(view, "Memory: CM on · CASS off") {
+		t.Fatalf("view:\n%s", view)
+	}
+	// The preview, shown, follows a switch with a new revision.
+	m, _ = press(t, m, runeKey('m'))
+	first := m.memory.rev
+	m, _ = press(t, m, runeKey('c'))
+	m, _ = press(t, m, runeKey('s'))
+	if m.memory.rev == first || m.memory.modes != (MemoryModes{CM: enrich.Off, CASS: enrich.BestEffort}) {
+		t.Fatalf("preview rev %d modes %+v", m.memory.rev, m.memory.modes)
+	}
+	next, get := m.Update(memoryDueMsg{rev: m.memory.rev})
+	m = next.(Model)
+	get()
+	mu.Lock()
+	if len(asked) != 1 || asked[0] != (MemoryModes{CM: enrich.Off, CASS: enrich.BestEffort}) {
+		t.Fatalf("retrieved with %+v", asked)
+	}
+	mu.Unlock()
+	if view := stripANSI(m.View()); !strings.Contains(view, "Memory: CM off · CASS on") {
+		t.Fatalf("view:\n%s", view)
+	}
+	m, _ = press(t, m, runeKey('1'))
+	r := rec.waitRequests(t, 1)[0]
+	if r.Enrich.CM != enrich.Off || r.Enrich.CASS != enrich.BestEffort || !r.Enrich.Check ||
+		r.Enrich.DefaultCM != enrich.BestEffort {
+		t.Fatalf("request enrichment = %+v", r.Enrich)
+	}
+	// CASS off also skips the duplicate check, as --no-cass does.
+	m.memChoice.CASS = enrich.Off
+	if got := m.withMemoryChoice(base); got.Enrich.CASS != enrich.Off || got.Enrich.Check {
+		t.Fatalf("CASS off = %+v", got.Enrich)
+	}
+	// A config with CASS required turns it back on as required.
+	m.env.base.Enrich.DefaultCASS, m.memChoice.CASS = enrich.Required, enrich.Off
+	m.toggleCASS()
+	if m.memChoice.CASS != enrich.Required {
+		t.Fatalf("CASS back on = %q", m.memChoice.CASS)
 	}
 }
 

@@ -344,7 +344,7 @@ func TestSubmitterRequestsAndOutcomes(t *testing.T) {
 		return send.Result{OperationID: req.OperationID}, nil
 	}
 	var queries []string
-	memory := func(_ context.Context, text string) (Memory, error) {
+	memory := func(_ context.Context, text string, _ MemoryModes) (Memory, error) {
 		mu.Lock()
 		queries = append(queries, text)
 		mu.Unlock()
@@ -360,8 +360,8 @@ func TestSubmitterRequestsAndOutcomes(t *testing.T) {
 		return result(req)
 	}, nil, memory, func() (string, error) { return store.NewOperationID(time.Now()) })
 
-	s1, c1 := sub.Memory("first draft", 3)
-	s2, c2 := sub.Memory("fails", 4)
+	s1, c1 := sub.Memory("first draft", MemoryModes{}, 3)
+	s2, c2 := sub.Memory("fails", MemoryModes{}, 4)
 	if s2 <= s1 {
 		t.Fatalf("sequence %d then %d", s1, s2)
 	}
@@ -377,7 +377,7 @@ func TestSubmitterRequestsAndOutcomes(t *testing.T) {
 		t.Fatalf("a memory preview sends nothing: sends %d, queries %v", len(got), queries)
 	}
 	none := NewSubmitter(nil, nil, nil, nil)
-	if _, cmd := none.Memory("x", 1); cmd().(MemoryMsg).Err == nil {
+	if _, cmd := none.Memory("x", MemoryModes{}, 1); cmd().(MemoryMsg).Err == nil {
 		t.Fatal("memory with no retrieval")
 	}
 	if m := none.Reconcile("op-1")().(ReconcileMsg); m.Err == nil {

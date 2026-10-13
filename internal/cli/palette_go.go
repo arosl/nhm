@@ -242,20 +242,24 @@ func paletteReader(db *store.DB, jobs runner.Client) palette.Reader {
 }
 
 // paletteMemory is the memory preview's retrieval: nhm memory's, with the
-// modes and budgets a send of the palette uses (nhm's config).
+// modes a send of the palette uses (the palette's choice, else nhm's
+// config) and the config's budgets.
 func paletteMemory(projectRoot string) palette.MemoryFunc {
-	return func(ctx context.Context, text string) (palette.Memory, error) {
+	return func(ctx context.Context, text string, modes palette.MemoryModes) (palette.Memory, error) {
 		cfg, err := loadEnrichConfig()
 		if err != nil {
 			return palette.Memory{}, err
 		}
-		cmM, err := enrich.ParseMode(string(cfg.Memory.CM))
-		if err != nil {
-			return palette.Memory{}, fmt.Errorf("[memory] cm: %w", err)
+		cmM, cassM := modes.CM, modes.CASS
+		if cmM == "" {
+			if cmM, err = enrich.ParseMode(string(cfg.Memory.CM)); err != nil {
+				return palette.Memory{}, fmt.Errorf("[memory] cm: %w", err)
+			}
 		}
-		cassM, err := enrich.ParseMode(string(cfg.CASS.Context))
-		if err != nil {
-			return palette.Memory{}, fmt.Errorf("[cass] context: %w", err)
+		if cassM == "" {
+			if cassM, err = enrich.ParseMode(string(cfg.CASS.Context)); err != nil {
+				return palette.Memory{}, fmt.Errorf("[cass] context: %w", err)
+			}
 		}
 		cmc, cs, budgets := enrichClients(cfg)
 		q := enrich.QueryOf(text)

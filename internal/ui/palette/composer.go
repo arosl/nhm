@@ -86,13 +86,14 @@ func (c Composer) Update(msg tea.Msg) (Composer, tea.Cmd) {
 			return c, func() tea.Msg { return ComposeCanceledMsg{} }
 		case key.Matches(msg, composerKeys.Memory):
 			c.memory.toggle()
-			return c, c.memory.follow(c.editor.Value(), true)
+			return c, c.memory.follow(c.editor.Value(), MemoryModes{}, true)
 		}
 	}
 	var cmd tea.Cmd
 	c.editor, cmd = c.editor.Update(msg)
 	c.draft.Set(c.editor.Value())
-	return c, tea.Batch(cmd, c.memory.follow(c.editor.Value(), true))
+	// The host's send uses the config's modes: the preview does too.
+	return c, tea.Batch(cmd, c.memory.follow(c.editor.Value(), MemoryModes{}, true))
 }
 
 // View is the editor with its label, notice, memory preview and keys.

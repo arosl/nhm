@@ -105,7 +105,7 @@ func (m *Model) submit(p Payload, ts Targets) (tea.Model, tea.Cmd) {
 			return *m, nil
 		}
 	}
-	req, err := BuildRequest(m.env.base, p, ts, path)
+	req, err := BuildRequest(m.withMemoryChoice(m.env.base), p, ts, path)
 	if err != nil {
 		m.sub.err = err
 		return *m, nil

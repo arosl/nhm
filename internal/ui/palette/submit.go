@@ -147,9 +147,16 @@ type Memory struct {
 	CASS  enrich.Report
 }
 
-// MemoryFunc retrieves the memory for a draft's text, with the modes
-// and budgets a send would use. The caller wires it.
-type MemoryFunc func(ctx context.Context, text string) (Memory, error)
+// MemoryModes are the CM and CASS modes of a send. An empty mode is the
+// config's default, as a send with no --with-memory or --with-cass flag.
+type MemoryModes struct {
+	CM   enrich.Mode
+	CASS enrich.Mode
+}
+
+// MemoryFunc retrieves the memory for a draft's text, with the modes a
+// send would use and its budgets. The caller wires it.
+type MemoryFunc func(ctx context.Context, text string, modes MemoryModes) (Memory, error)
 
 // Deadlines of the async calls. A submission is not cancelled when the
 // popup closes; its deadline only bounds a hung call.
@@ -248,8 +255,9 @@ func (s *Submitter) next() uint64 {
 	return s.seq
 }
 
-// Memory starts a memory preview of text, made for draft revision rev.
-func (s *Submitter) Memory(text string, rev uint64) (uint64, tea.Cmd) {
+// Memory starts a memory preview of text with modes, made for draft
+// revision rev.
+func (s *Submitter) Memory(text string, modes MemoryModes, rev uint64) (uint64, tea.Cmd) {
 	seq := s.next()
 	return seq, func() tea.Msg {
 		if s.memory == nil {
@@ -257,7 +265,7 @@ func (s *Submitter) Memory(text string, rev uint64) (uint64, tea.Cmd) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), MemoryTimeout)
 		defer cancel()
-		m, err := s.memory(ctx, text)
+		m, err := s.memory(ctx, text, modes)
 		return MemoryMsg{Seq: seq, Rev: rev, Memory: m, Err: err}
 	}
 }

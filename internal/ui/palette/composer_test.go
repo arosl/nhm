@@ -57,7 +57,10 @@ func TestComposerIsThePalettesEditor(t *testing.T) {
 
 // The composer's memory preview follows the draft's revision.
 func TestComposerMemoryPreview(t *testing.T) {
-	sub := NewSubmitter(nil, nil, func(_ context.Context, text string) (Memory, error) {
+	sub := NewSubmitter(nil, nil, func(_ context.Context, text string, modes MemoryModes) (Memory, error) {
+		if modes != (MemoryModes{}) {
+			t.Errorf("the composer's preview should use the config's modes, got %+v", modes)
+		}
 		return Memory{Query: text, Block: "[for " + text + "]"}, nil
 	}, nil)
 	c := NewComposer("", "fix the tests", 100, 40, sub)
