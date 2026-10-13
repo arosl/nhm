@@ -14,10 +14,10 @@ func TestQuotaAndLimitsDispatch(t *testing.T) {
 		t.Fatalf("nhm quota = %d\n%s%s", code, out, errOut)
 	}
 	for _, verb := range [][]string{{"quota"}, {"quota", "check"}, {"limits"}} {
-		_, _, errOut := run(append(verb, "--help")...)
+		code, out, _ := run(append(verb, "--help")...)
 		want := "Usage: nhm " + verb[0]
-		if !strings.Contains(errOut, want) || strings.Contains(errOut, "unknown command") {
-			t.Errorf("nhm %s --help: stderr %q lacks %q", strings.Join(verb, " "), errOut, want)
+		if code != 0 || !strings.Contains(out, want) {
+			t.Errorf("nhm %s --help = %d, stdout %q lacks %q", strings.Join(verb, " "), code, out, want)
 		}
 	}
 	if !strings.Contains(usage, "nhm quota") || !strings.Contains(usage, "nhm limits") {

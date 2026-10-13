@@ -126,6 +126,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	if u, ok := leafHelp(args); ok {
+		fmt.Fprint(stdout, u)
+		return 0
+	}
 	switch args[0] {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)

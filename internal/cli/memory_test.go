@@ -141,7 +141,7 @@ func TestSendWithMemoryAndFeedback(t *testing.T) {
 		t.Fatalf("outcomes = %d %s", code, out)
 	}
 	// The help says only what is true: nothing runs the outcomes on its own.
-	if _, _, help := run("feedback", "--help"); strings.Contains(help, "maintain runs") || !strings.Contains(help, "nothing runs it on its own") {
+	if _, help, _ := run("feedback", "--help"); strings.Contains(help, "maintain runs") || !strings.Contains(help, "nothing runs it on its own") {
 		t.Fatalf("help = %s", help)
 	}
 	// Conflicting flags refuse before anything is sent.
