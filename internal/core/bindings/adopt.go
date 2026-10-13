@@ -159,15 +159,17 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, alias
 	if !ok || agent.Agent == "" {
 		return res, fmt.Errorf("%w: %s", ErrNoAgent, req.PaneID)
 	}
-	kind := agent.Agent
-	if req.Kind != "" && req.Kind != agent.Agent {
-		return res, fmt.Errorf("bindings: herdr sees a %s agent in %s, not %s", agent.Agent, req.PaneID, req.Kind)
-	}
+	// The session first: another agent in the pane since the review, of
+	// any kind, is the reviewed agent changed (refused).
 	if got := SessionKey(agent.AgentSession); req.ExpectedSession != "" && got != req.ExpectedSession {
 		if got == "" {
 			got = "none"
 		}
 		return res, fmt.Errorf("%w: the agent in %s has session %s, the review saw %s", ErrAgentChanged, req.PaneID, got, req.ExpectedSession)
+	}
+	kind := agent.Agent
+	if req.Kind != "" && req.Kind != agent.Agent {
+		return res, fmt.Errorf("bindings: herdr sees a %s agent in %s, not %s", agent.Agent, req.PaneID, req.Kind)
 	}
 	occ := occupantOf(ctx, env.Herdr, pane, agent, alias, req.Model)
 	occ.Kind = kind

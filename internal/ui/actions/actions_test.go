@@ -483,6 +483,53 @@ func TestGuardSubmitsOnce(t *testing.T) {
 	}
 }
 
+// TestGuardReleasesAnEndedOperation: on a guard that lives as long as its
+// surface (the board's), a request held with no Settle (a surface that
+// does not settle) or after a lost answer is released once its
+// operation's run has ended, and never while it may still run.
+func TestGuardReleasesAnEndedOperation(t *testing.T) {
+	n := 0
+	ended := map[string]bool{}
+	g := NewGuard(func() (string, error) { n++; return fmt.Sprintf("op-%d", n), nil })
+	if g.ReleaseEnded(func(id string) bool { return ended[id] }) != g {
+		t.Fatal("ReleaseEnded does not return its guard")
+	}
+	key := ReviewKey("spawn", Request{Params: map[string]string{"kind": "claude"}})
+	id, _ := g.Review(key)
+	if got, err := g.Submit(key); err != nil || got != id {
+		t.Fatalf("submit = %q %v", got, err)
+	}
+	// No Settle came; the operation still runs: held.
+	if _, err := g.Review(key); !errors.Is(err, ErrSubmitted) || !strings.Contains(err.Error(), id+" has not ended") {
+		t.Fatalf("review while it runs: %v", err)
+	}
+	ended[id] = true
+	next, err := g.Review(key)
+	if err != nil || next == id {
+		t.Fatalf("review after the run ended = %q %v", next, err)
+	}
+	// A lost answer keeps the hold only until the run ends.
+	if _, err := g.Submit(key); err != nil {
+		t.Fatal(err)
+	}
+	g.Settle(key, ErrNoAnswer)
+	if _, err := g.Submit(key); !errors.Is(err, ErrSubmitted) {
+		t.Fatalf("submit after a lost answer: %v", err)
+	}
+	ended[next] = true
+	if third, err := g.Review(key); err != nil || third == next {
+		t.Fatalf("review after the lost run ended = %q %v", third, err)
+	}
+	// Without ReleaseEnded, only Settle ends a hold.
+	plain := NewGuard(func() (string, error) { n++; return fmt.Sprintf("op-%d", n), nil })
+	pid, _ := plain.Review(key)
+	_, _ = plain.Submit(key)
+	ended[pid] = true
+	if _, err := plain.Review(key); !errors.Is(err, ErrSubmitted) {
+		t.Fatalf("a plain guard released a hold: %v", err)
+	}
+}
+
 func TestReviewKey(t *testing.T) {
 	req := Request{Targets: []ui.Target{bound1, bound2}, Params: map[string]string{"a": "1", "b": "2"}}
 	swapped := Request{Targets: []ui.Target{bound2, bound1}, Params: map[string]string{"b": "2", "a": "1"}}

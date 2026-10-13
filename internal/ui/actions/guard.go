@@ -16,7 +16,7 @@ var (
 	// after the review, or there was none); review it again.
 	ErrNotReviewed = errors.New("actions: the request changed since its review; review it again")
 	// ErrSubmitted: the review was submitted already.
-	ErrSubmitted = errors.New("actions: already submitted; its result is in recent operations")
+	ErrSubmitted = errors.New("actions: already submitted; recent operations shows it")
 )
 
 // Guard is one submission per review (plan-v4 section 4). Review fixes a
@@ -28,7 +28,10 @@ var (
 // new review of the same request is refused too, so two quick submits of
 // the same text never become two operations. A lost answer keeps the
 // hold: the operation may run on ("unknown" until the core reconciles
-// it), and this guard never makes a second id for it.
+// it), and this guard never makes a second id for it while it may. With
+// ReleaseEnded, a hold also ends when the operation's run has ended, so
+// a guard that lives as long as its surface (the board's) never blocks a
+// request for good.
 type Guard struct {
 	mu        sync.Mutex
 	newID     func() (string, error)
@@ -38,12 +41,39 @@ type Guard struct {
 	// held are the submitted requests whose answer did not come yet, by
 	// key, with their operation id.
 	held map[string]string
+	// ended reports whether an operation's run has ended; nil: only
+	// Settle ends a hold.
+	ended func(opID string) bool
 }
 
 // NewGuard returns a guard; newID makes operation ids (store.NewOperationID
 // in production).
 func NewGuard(newID func() (string, error)) *Guard {
 	return &Guard{newID: newID, held: map[string]string{}}
+}
+
+// ReleaseEnded makes a held request's hold end once ended(opID) reports
+// that its operation's run is over (runner.Client.Ended: its job has a
+// result, or its process has ended), also when no Settle came: a surface
+// that does not settle, or a lost answer, then holds the request only
+// while it may still run. ended must be false for an operation that may
+// still start or run. nil changes nothing. It returns g.
+func (g *Guard) ReleaseEnded(ended func(opID string) bool) *Guard {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ended = ended
+	return g
+}
+
+// holder returns the operation that holds key, or "": a hold whose run
+// has ended is released first. The caller holds g.mu.
+func (g *Guard) holder(key string) string {
+	id := g.held[key]
+	if id != "" && g.ended != nil && g.ended(id) {
+		delete(g.held, key)
+		return ""
+	}
+	return id
 }
 
 // Review starts the review of the request with key (ReviewKey) and
@@ -53,8 +83,8 @@ func NewGuard(newID func() (string, error)) *Guard {
 func (g *Guard) Review(key string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if id, ok := g.held[key]; ok {
-		return "", fmt.Errorf("%w (operation %s)", ErrSubmitted, id)
+	if id := g.holder(key); id != "" {
+		return "", fmt.Errorf("%w: operation %s has not ended", ErrSubmitted, id)
 	}
 	if key == g.key && g.opID != "" && !g.submitted {
 		return g.opID, nil
@@ -72,9 +102,10 @@ func (g *Guard) Review(key string) (string, error) {
 func (g *Guard) Submit(key string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if id := g.holder(key); id != "" {
+		return "", fmt.Errorf("%w: operation %s has not ended", ErrSubmitted, id)
+	}
 	switch {
-	case g.held[key] != "":
-		return "", fmt.Errorf("%w (operation %s)", ErrSubmitted, g.held[key])
 	case g.opID == "" || key != g.key:
 		return "", ErrNotReviewed
 	case g.submitted:

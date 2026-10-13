@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/arosl/nhm/internal/ui"
@@ -88,6 +89,19 @@ func (c Client) Wait(ctx context.Context, id string) (Result, error) {
 
 // Result reads a job's result; ok is false while it has none.
 func (c Client) Result(id string) (Result, bool, error) { return Read(c.JobDir, id) }
+
+// Ended reports whether job id's run is over: its result is written, or
+// the process that claimed it has ended (Gone). A job that is not
+// written, not claimed or still running has not ended: it may still run.
+func (c Client) Ended(id string) bool {
+	if !idPattern.MatchString(id) {
+		return false
+	}
+	if _, err := os.Stat(ResultPath(c.JobDir, id)); err == nil {
+		return true
+	}
+	return Claimed(c.JobDir, id) && Gone(c.JobDir, id)
+}
 
 // Recent lists the newest jobs, newest first.
 func (c Client) Recent(limit int) ([]Entry, error) { return List(c.JobDir, limit) }
