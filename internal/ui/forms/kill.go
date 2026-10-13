@@ -52,6 +52,9 @@ func NewKillForm(run Runner, c ui.Context) *KillForm { return &KillForm{run: run
 // Phase is where the form is.
 func (f *KillForm) Phase() Phase { return f.phase }
 
+// NoBeads reports whether every agent's retire waives the bead check.
+func (f *KillForm) NoBeads() bool { return f.noBeads }
+
 // Label is what the operator types: the workspace's label, else its id.
 func (f *KillForm) Label() string { return actions.KillLabel(f.ctx) }
 

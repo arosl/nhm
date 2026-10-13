@@ -536,6 +536,15 @@ func (sw *SpawnWizard) resultText() string {
 	return b.String()
 }
 
+// ResultText is an action's answer in the core's words: its status, its
+// lines, each target's status and reason, its warnings; terminal controls
+// removed.
+func ResultText(r actions.Result) string {
+	var b strings.Builder
+	writeResult(&b, r)
+	return b.String()
+}
+
 // writeResult writes an action's answer in the core's words.
 func writeResult(b *strings.Builder, r actions.Result) {
 	if r.Status != "" {
