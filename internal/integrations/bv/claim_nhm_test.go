@@ -28,7 +28,10 @@ func installClaimFakeBR(t *testing.T, showJSON, listJSON, updateScript string) (
 		}
 	}
 	calls = filepath.Join(t.TempDir(), "calls")
+	// An update script can change what the next show answers ($SHOW) and
+	// count its own calls ($STATE).
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + calls + "\n" +
+		"SHOW=" + filepath.Join(fixtures, "show.json") + "; STATE=" + filepath.Join(fixtures, "state") + "\n" +
 		"case \" $* \" in\n" +
 		"*' show '*) cat " + filepath.Join(fixtures, "show.json") + " ;;\n" +
 		"*' list '*) cat " + filepath.Join(fixtures, "list.json") + " ;;\n" +
@@ -124,26 +127,48 @@ func TestClaimWritesWithIfUnchangedFromTheRead(t *testing.T) {
 	}
 }
 
-// br's refusals map onto ntm's claim errors; an unknown failure stays
-// unknown; a database refusal names br's recovery and nhm never rebuilds.
+// br's refusals map onto ntm's claim errors after a new read; an unknown
+// failure stays unknown unless the read shows the claim; a database
+// refusal names br's recovery and nhm never rebuilds. The write never
+// retries itself: every update call follows its own read.
 func TestClaimMapsBrRefusals(t *testing.T) {
 	show := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"open","priority":2,"updated_at":"2026-10-13T00:00:00Z"}]`
+	const actor = "Actor/ntm-0123456789ab"
+	ours := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"in_progress","priority":2,"assignee":"` + actor + `","updated_at":"2026-10-13T00:00:01Z"}]`
+	others := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"in_progress","priority":2,"assignee":"Other","updated_at":"2026-10-13T00:00:01Z"}]`
+	moved := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"open","priority":2,"updated_at":"2026-10-13T00:00:02Z"}]`
+	const exit6 = `echo '{"error":{"code":"UPDATE_PRECONDITION_FAILED","message":"nhm-t1 changed since you read it","context":{"written":false}}}'; exit 6`
 	tests := []struct {
-		name   string
-		update string
-		check  func(error) bool
+		name    string
+		update  string
+		check   func(error) bool
+		updates int
 	}{
 		{
-			name:   "record moved since the read",
-			update: `echo '{"error":{"code":"UPDATE_PRECONDITION_FAILED","message":"nhm-t1 changed since you read it","context":{"written":false}}}'; exit 6`,
+			// A comment moved updated_at; the bead is still free: the
+			// claim reads again and writes with the new token.
+			name:   "record moved, then free",
+			update: `if [ ! -e "$STATE" ]; then : > "$STATE"; echo '` + moved + `' > "$SHOW"; ` + exit6 + `; fi; echo '` + claimedRow + `'`,
+			check:  func(err error) bool { return err == nil }, updates: 2,
+		},
+		{
+			name:   "record keeps moving",
+			update: exit6,
 			check: func(err error) bool {
-				return errors.Is(err, ErrBeadAlreadyClaimed) && !errors.Is(err, ErrBeadAssignmentIneligible)
+				return err != nil && !errors.Is(err, ErrBeadAlreadyClaimed) && !errors.Is(err, ErrBeadAssignmentIneligible)
 			},
+			updates: claimTries,
 		},
 		{
 			name:   "already assigned",
-			update: `echo '{"error":{"code":"VALIDATION_FAILED","message":"Validation failed: claim: issue nhm-t1 already assigned to Other"}}'; exit 4`,
-			check:  func(err error) bool { return errors.Is(err, ErrBeadAlreadyClaimed) },
+			update: `echo '` + others + `' > "$SHOW"; echo '{"error":{"code":"VALIDATION_FAILED","message":"Validation failed: claim: issue nhm-t1 already assigned to Other"}}'; exit 4`,
+			check:  func(err error) bool { return errors.Is(err, ErrBeadAlreadyClaimed) }, updates: 1,
+		},
+		{
+			// br committed, then reported a busy database: the claim is ours.
+			name:   "busy after the commit",
+			update: `echo '` + ours + `' > "$SHOW"; echo 'database is locked' >&2; exit 1`,
+			check:  func(err error) bool { return err == nil }, updates: 1,
 		},
 		{
 			name:   "blocked",
@@ -151,13 +176,15 @@ func TestClaimMapsBrRefusals(t *testing.T) {
 			check: func(err error) bool {
 				return errors.Is(err, ErrBeadAssignmentIneligible) && !errors.Is(err, ErrBeadAlreadyClaimed)
 			},
+			updates: 1,
 		},
 		{
 			name:   "unknown failure",
-			update: `echo 'segfault' >&2; exit 1`,
+			update: `echo 'database is locked' >&2; exit 1`,
 			check: func(err error) bool {
 				return err != nil && !errors.Is(err, ErrBeadAlreadyClaimed) && !errors.Is(err, ErrBeadAssignmentIneligible)
 			},
+			updates: 1,
 		},
 		{
 			name:   "database refusal",
@@ -166,14 +193,18 @@ func TestClaimMapsBrRefusals(t *testing.T) {
 				return err != nil && strings.Contains(err.Error(), "nhm does not rebuild it") &&
 					!errors.Is(err, ErrBeadAlreadyClaimed) && !errors.Is(err, ErrBeadAssignmentIneligible)
 			},
+			updates: 1,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			dir, calls := installClaimFakeBR(t, show, `[]`, test.update)
-			_, err := ClaimBeadForAssignment(t.Context(), dir, "nhm-t1", "Actor/ntm-0123456789ab")
+			_, err := ClaimBeadForAssignment(t.Context(), dir, "nhm-t1", actor)
 			if !test.check(err) {
 				t.Fatalf("claim error=%v", err)
+			}
+			if n := countUpdateCalls(fakeBRCalls(t, calls)); n != test.updates {
+				t.Fatalf("br update calls=%d, want %d", n, test.updates)
 			}
 			for _, line := range fakeBRCalls(t, calls) {
 				if strings.Contains(line, "sync") || strings.Contains(line, "doctor") {
@@ -181,6 +212,23 @@ func TestClaimMapsBrRefusals(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A project has one claim lock, whatever path names it.
+func TestClaimLockFollowsSymlinks(t *testing.T) {
+	project := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(project, link); err != nil {
+		t.Fatal(err)
+	}
+	direct, err := claimLockPath(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viaLink, err := claimLockPath(link)
+	if err != nil || viaLink != direct {
+		t.Fatalf("lock via link=%q %v, direct=%q", viaLink, err, direct)
 	}
 }
 

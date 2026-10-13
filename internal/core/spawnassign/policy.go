@@ -4,7 +4,8 @@
 // (FindProjectConfig, ProjectAssign) and internal/config/config.go
 // (AssignConfig, WorkSourceConfig.Policy) at commit 9d5ed977; see LICENSE in
 // this directory and PROVENANCE.md. Local changes: only the [assign] section
-// is read; the global file is nhm's config.
+// is read; the global file is nhm's config; an unknown key under [assign]
+// refuses.
 
 package spawnassign
 
@@ -94,8 +95,18 @@ func decodeAssign(path string, s *assignSection, missingOK bool) error {
 	if err != nil {
 		return err
 	}
-	_, err = toml.Decode(string(data), s)
-	return err
+	md, err := toml.Decode(string(data), s)
+	if err != nil {
+		return err
+	}
+	// A key under [assign] that nhm does not know refuses: a misspelled
+	// gate would otherwise load as no gate.
+	for _, key := range md.Undecoded() {
+		if len(key) > 0 && key[0] == "assign" {
+			return fmt.Errorf("unknown key %s", key.String())
+		}
+	}
+	return nil
 }
 
 // findProjectConfig walks up from startDir to the nearest .ntm/config.toml,

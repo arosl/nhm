@@ -12,8 +12,10 @@
 // ClaimBeadForAssignmentWithOperatorGatedLabels no longer wraps the claim in
 // withBeadsCorruptionRecovery; claimBeadForAssignmentAttempt claims through
 // br's engine (br update --claim --if-unchanged) under nhm's per-project
-// claim lock, with ntm's validation and mutex check on one br show read
-// (claim_nhm.go; ACFS acfs-f2mc.2 closure record). Left out: the direct
+// claim lock, with ntm's validation and mutex check on one br show read,
+// a write that never retries, and a new read after a refused or failed
+// write (claimBeadUnderLock; claim_nhm.go; ACFS acfs-f2mc.2 closure
+// record). Left out: the direct
 // SQLite claim, release and stale-adoption transactions and their content
 // hash repair, recoverCorruptBeadsDatabase and withBeadsCorruptionRecovery
 // (an automatic `br sync --import-only --rebuild` of a shared tracker), the
@@ -775,6 +777,11 @@ func ClaimBeadForAssignmentWithOperatorGatedLabels(ctx context.Context, dir, bea
 // the time between its check and its write; here such a claim can land
 // between the holder read (br list) and the write. The states anyone can
 // reach are ntm's (a direct claim can always add a second holder later).
+//
+// A write br refused without writing because the bead moved since the read
+// (exit 6) or names an assignee is decided again from a new read under the
+// same lock (claimTries in all); one that still moves leaves the outcome
+// unknown. The write itself never retries (runBrClaimWrite).
 func claimBeadForAssignmentAttempt(ctx context.Context, normalizedDir, beadID, actor string, gatedLabels []string) (BeadClaimResult, error) {
 	unlock, err := lockProjectClaims(ctx, normalizedDir)
 	if err != nil {
@@ -782,6 +789,21 @@ func claimBeadForAssignmentAttempt(ctx context.Context, normalizedDir, beadID, a
 	}
 	defer unlock()
 
+	var moved error
+	for try := 0; try < claimTries; try++ {
+		result, err := claimBeadUnderLock(ctx, normalizedDir, beadID, actor, gatedLabels)
+		if !errors.Is(err, errClaimRecordMoved) {
+			return result, err
+		}
+		moved = err
+	}
+	return BeadClaimResult{}, fmt.Errorf("claim %s: the bead changed between each read and write (%d tries); the claim's outcome is left unknown: %w",
+		beadID, claimTries, moved)
+}
+
+// claimBeadUnderLock is one read, check and write of the claim, under the
+// project's claim lock.
+func claimBeadUnderLock(ctx context.Context, normalizedDir, beadID, actor string, gatedLabels []string) (BeadClaimResult, error) {
 	output, err := runBdContext(ctx, normalizedDir, false, "show", beadID, "--json")
 	if err != nil {
 		return BeadClaimResult{}, claimReadError(beadID, err)
@@ -827,9 +849,9 @@ func claimBeadForAssignmentAttempt(ctx context.Context, normalizedDir, beadID, a
 	}
 
 	claimArgs := append(beadClaimArgs(beadID, actor), "--if-unchanged", updatedAt)
-	claimOutput, err := runBdContext(ctx, normalizedDir, false, claimArgs...)
+	claimOutput, err := runBrClaimWrite(ctx, normalizedDir, claimArgs...)
 	if err != nil {
-		return BeadClaimResult{}, claimWriteError(beadID, err)
+		return claimAfterWriteError(ctx, normalizedDir, beadID, actor, err)
 	}
 	result, err := parseBeadClaimOutput(claimOutput)
 	if err != nil {

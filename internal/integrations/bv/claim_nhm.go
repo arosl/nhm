@@ -6,6 +6,7 @@ package bv
 // acfs-f2mc.2).
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -32,7 +33,13 @@ func claimLockPath(normalizedDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(normalizedDir))
+	// One lock per project, whatever path names it: a symlinked path is
+	// the same project.
+	resolved, err := filepath.EvalSymlinks(normalizedDir)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(resolved))
 	return filepath.Join(root, "locks", "claims", hex.EncodeToString(sum[:16])+".lock"), nil
 }
 
@@ -126,23 +133,86 @@ func claimReadError(beadID string, err error) error {
 	return fmt.Errorf("read bead %s for the assignment claim: %w", beadID, err)
 }
 
-// claimWriteError maps br update --claim --if-unchanged's refusals onto
-// ntm's claim errors. br writes nothing on exit 6 (the record moved since the
-// read) and on a validation refusal (blocked, already assigned). Any other
-// failure leaves the outcome unknown and is returned as it is, so the
-// assignment ledger records the claim as uncertain.
-func claimWriteError(beadID string, err error) error {
+// claimTries bounds the reads of one claim: br's refusal of a write whose
+// read went stale is decided again from a new read.
+const claimTries = 3
+
+// errClaimRecordMoved: br wrote nothing because the bead moved since the
+// read (exit 6) or names an assignee; the next read decides.
+var errClaimRecordMoved = errors.New("the bead changed since the claim's read")
+
+// runBrClaimWrite runs the claim's write once. runBdContext retries a busy
+// database, and a retry of a write that br reported busy after its commit
+// would read nhm's own claim as another's; the claim reads again instead.
+func runBrClaimWrite(parent context.Context, dir string, args ...string) (string, error) {
+	if err := requireBeadsMutationContext(parent); err != nil {
+		return "", err
+	}
+	mu := workspaceBDMutex(dir)
+	if err := mu.LockContext(parent); err != nil {
+		return "", err
+	}
+	defer mu.Unlock()
+	args = append([]string{"--lock-timeout", "5000"}, args...)
+	ctx, cancel := context.WithTimeout(parent, DefaultTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "br", args...)
+	cmd.WaitDelay = time.Second
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		if parent.Err() != nil {
+			return "", parent.Err()
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("br timed out after %v", DefaultTimeout)
+		}
+		diagnostics := stderr.String()
+		if strings.TrimSpace(diagnostics) == "" {
+			diagnostics = stdout.String()
+		}
+		return "", fmt.Errorf("br %s: %w: %s", strings.Join(args, " "), err, diagnostics)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// claimAfterWriteError decides a failed claim write. br writes nothing on
+// exit 6 (the bead moved since the read) or when it names an assignee: the
+// next read decides. A blocked issue is ineligible, and a database refusal
+// names br's recovery. Any other failure may follow br's commit: the claim
+// holds when a new read shows the bead in progress for actor; otherwise
+// the error is returned as it is, so the ledger records the outcome as
+// unknown.
+func claimAfterWriteError(ctx context.Context, normalizedDir, beadID, actor string, err error) (BeadClaimResult, error) {
 	message := err.Error()
 	var exitErr *exec.ExitError
 	switch {
-	case (errors.As(err, &exitErr) && exitErr.ExitCode() == 6) || strings.Contains(message, "UPDATE_PRECONDITION_FAILED"):
-		return fmt.Errorf("%w: assignment claim precondition changed for %s: %v", ErrBeadAlreadyClaimed, beadID, err)
-	case strings.Contains(message, "already assigned to"):
-		return fmt.Errorf("%w: %v", ErrBeadAlreadyClaimed, err)
+	case (errors.As(err, &exitErr) && exitErr.ExitCode() == 6) || strings.Contains(message, "UPDATE_PRECONDITION_FAILED"),
+		strings.Contains(message, "already assigned to"):
+		return BeadClaimResult{}, fmt.Errorf("%w: %s: %v", errClaimRecordMoved, beadID, err)
 	case strings.Contains(message, "cannot claim blocked issue"):
-		return fmt.Errorf("%w: %s: br refused the claim of a blocked issue: %v", ErrBeadAssignmentIneligible, beadID, err)
+		return BeadClaimResult{}, fmt.Errorf("%w: %s: br refused the claim of a blocked issue: %v", ErrBeadAssignmentIneligible, beadID, err)
 	case brDatabaseRefusal(err):
-		return errBrDatabase(beadID, err)
+		return BeadClaimResult{}, errBrDatabase(beadID, err)
 	}
-	return err
+	if held, ok := claimHeldBy(ctx, normalizedDir, beadID, actor); ok {
+		return held, nil
+	}
+	return BeadClaimResult{}, err
+}
+
+// claimHeldBy reads the bead and reports whether it is in progress for
+// actor. A read that fails says nothing.
+func claimHeldBy(ctx context.Context, normalizedDir, beadID, actor string) (BeadClaimResult, bool) {
+	output, err := runBdContext(ctx, normalizedDir, false, "show", beadID, "--json")
+	if err != nil {
+		return BeadClaimResult{}, false
+	}
+	details, err := parseBeadAssignmentDetailsOutput(output)
+	if err != nil || strings.TrimSpace(details.ID) != beadID || strings.TrimSpace(details.Assignee) != actor ||
+		!strings.EqualFold(strings.TrimSpace(details.Status), "in_progress") {
+		return BeadClaimResult{}, false
+	}
+	return BeadClaimResult{ID: beadID, Title: details.Title, Actor: actor, Status: "in_progress", ClaimedAt: time.Now().UTC()}, true
 }

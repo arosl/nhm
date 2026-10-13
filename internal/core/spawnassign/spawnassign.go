@@ -11,10 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/arosl/nhm/internal/integrations/bv"
 	"github.com/arosl/nhm/internal/integrations/worksource"
 	"github.com/arosl/nhm/internal/robot"
+	nhmstore "github.com/arosl/nhm/internal/store"
 )
 
 // Error codes and hints of ntm's assignment preflight.
@@ -57,6 +59,10 @@ func Preflight(ctx context.Context, projectDir, strategy string, policy Policy,
 		return Plan{}, &PreflightError{Code: robot.ErrCodeInvalidFlag, Err: err,
 			Hint: "Use --strategy top-n, diverse, dependency-aware or skill-matched"}
 	}
+	if _, err := nhmstore.StateRoot(); err != nil {
+		return Plan{}, &PreflightError{Code: robot.ErrCodeInternalError, Err: fmt.Errorf("the assignment ledger needs nhm's state root: %w", err),
+			Hint: "Run nhm with HOME (or an absolute XDG_STATE_HOME) set"}
+	}
 	policyErr := bv.ConfigureProjectOperatorGatedLabels(projectDir, policy.OperatorGatedLabels)
 	if policyErr == nil {
 		policyErr = bv.ConfigureProjectWorkSourcePolicy(projectDir, policy.WorkSource)
@@ -88,19 +94,44 @@ func Preflight(ctx context.Context, projectDir, strategy string, policy Policy,
 	return Plan{ProjectDir: projectDir, Strategy: normalized, Policy: policy, Triage: restrictTriageToAssignable(nil, actionable)}, nil
 }
 
+// instanceIDPattern is an nhm instance id, the assignment ledger's name.
+var instanceIDPattern = regexp.MustCompile(`^inst-[0-9a-f]{12}$`)
+
+// ledgerUsable refuses an assignment whose ledger would not be the
+// instance's own: a name that is not an instance id, or no state root
+// (assignment.StorageDir would fall back to a shared temp directory, where
+// a later run with a state root never sees this run's barriers).
+func ledgerUsable(instanceID string) error {
+	if !instanceIDPattern.MatchString(instanceID) {
+		return fmt.Errorf("assignment ledger %q is not an nhm instance id", instanceID)
+	}
+	if _, err := nhmstore.StateRoot(); err != nil {
+		return fmt.Errorf("the assignment ledger needs nhm's state root: %w", err)
+	}
+	return nil
+}
+
 // Assign is ntm GetSpawn's orchestrator phase after the agents are up: it
 // claims and delivers one task per agent of out.Agents through the verified
 // plan, then applies ntm's output rules. Any agent without a claimed and
 // sent task makes the envelope ASSIGNMENT_FAILED; the caller decides what a
-// partial result means. session names the assignment ledger
-// ("<instance id>.<workspace id>"); prompt is --spawn-prompt, which prefixes
-// every work prompt. deps carries nhm's topology and delivery.
-func Assign(ctx context.Context, out *SpawnOutput, plan Plan, session, prompt string, deps *SpawnAssignmentDependencies) {
+// partial result means. instanceID names the assignment ledger: one per
+// instance, since its occupancy key, a binding id, is the instance's and
+// keeps its id across workspaces (ntm's ledger and pane ids share one tmux
+// session). prompt is --spawn-prompt, which prefixes every work prompt.
+// deps carries nhm's topology and delivery.
+func Assign(ctx context.Context, out *SpawnOutput, plan Plan, instanceID, prompt string, deps *SpawnAssignmentDependencies) {
 	out.Mode = "orchestrator"
 	out.AssignStrategy = plan.Strategy
+	if err := ledgerUsable(instanceID); err != nil {
+		out.Success, out.Error, out.ErrorCode = false, err.Error(), robot.ErrCodeInternalError
+		out.Hint = "Run nhm with HOME (or an absolute XDG_STATE_HOME) set"
+		ensureSpawnAssignmentCoverage(out)
+		return
+	}
 	policy := plan.Policy
 	assignments, assignmentErr := assignWorkToAgentsWithError(
-		ctx, out, plan.ProjectDir, session, out.AssignStrategy, &policy,
+		ctx, out, plan.ProjectDir, instanceID, out.AssignStrategy, &policy,
 		false, nil, deps, plan.Triage,
 		prompt, PromptContextOptions{}, nil,
 	)

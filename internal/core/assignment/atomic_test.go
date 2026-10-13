@@ -1309,6 +1309,7 @@ func TestCanonicalPaneIdentityRequiresPhysicalPaneID(t *testing.T) {
 		{name: "dispatch binding ID", assignment: &Assignment{DispatchTarget: "bnd-0000000000000043"}, want: "bnd-0000000000000043"},
 		{name: "short binding ID", assignment: &Assignment{OccupancyKey: "bnd-000000000000000"}, wantErr: true},
 		{name: "uppercase binding ID", assignment: &Assignment{OccupancyKey: "bnd-000000000000000A"}, wantErr: true},
+		{name: "non-hex binding ID", assignment: &Assignment{OccupancyKey: "bnd-000000000000000g"}, wantErr: true},
 		{name: "long binding ID", assignment: &Assignment{OccupancyKey: "bnd-999999999999999999999999999999999999"}, wantErr: true},
 		{name: "tmux pane ID", assignment: &Assignment{OccupancyKey: "%17"}, wantErr: true},
 		{name: "herdr pane ID", assignment: &Assignment{OccupancyKey: "wH:p1Y"}, wantErr: true},

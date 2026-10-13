@@ -106,7 +106,7 @@ func robotAssignPhase(ctx context.Context, ie *instanceEnv, res spawn.Result, sc
 		if err := core.RequireOwner(o, core.OwnerNhm); err != nil {
 			return err
 		}
-		spawnassign.Assign(ctx, out, plan, ie.inst.ID+"."+res.WorkspaceID, prompt, deps)
+		spawnassign.Assign(ctx, out, plan, ie.inst.ID, prompt, deps)
 		return nil
 	})
 	if err != nil {

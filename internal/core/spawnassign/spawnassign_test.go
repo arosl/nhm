@@ -180,7 +180,7 @@ func (w *world) deps() *SpawnAssignmentDependencies {
 func (w *world) assign(plan Plan) *SpawnOutput {
 	w.t.Helper()
 	out := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: append([]robot.SpawnedAgent(nil), w.agents...)}
-	Assign(context.Background(), out, plan, "inst-000000000000.w1", "", w.deps())
+	Assign(context.Background(), out, plan, "inst-000000000000", "", w.deps())
 	return out
 }
 
@@ -194,7 +194,7 @@ func planOf(ids ...string) Plan {
 
 func ledger(t *testing.T) *assignment.AssignmentStore {
 	t.Helper()
-	s, err := assignment.LoadStoreStrict("inst-000000000000.w1")
+	s, err := assignment.LoadStoreStrict("inst-000000000000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,6 +373,63 @@ func TestDispatchNoActuationNeedsNoOperation(t *testing.T) {
 	}
 }
 
+// The ledger is the instance's: a binding keeps its id and its assignment
+// when its pane moves to another workspace, so an assignment run there does
+// not give the agent a second task (review of 58c5e27).
+func TestAssignMovedBindingKeepsItsExclusion(t *testing.T) {
+	isolate(t)
+	w := newWorld(t)
+	b := w.bind("IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	if first := w.assign(planOf("bd-1")); !first.Success || !first.Assignments[0].PromptSent {
+		t.Fatalf("first=%+v", first)
+	}
+	ctx := context.Background()
+	moved, err := w.env.Bindings.Relocate(ctx, b.ID, b.Generation, bindings.Location{WorkspaceID: "w2", TabID: "w2:t1", PaneID: "w2:p1"},
+		bindings.Evidence{Kind: "test", Detail: "moved to w2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.herdr.mu.Lock()
+	delete(w.herdr.agents, "w1:p1")
+	w.herdr.agents["w2:p1"] = herdr.AgentInfo{PaneID: "w2:p1", WorkspaceID: "w2", Agent: "claude", AgentStatus: herdr.StatusIdle,
+		StateChangeSeq: u64(10), CompletionSeq: u64(10)}
+	w.herdr.mu.Unlock()
+	topo := Topology{Bindings: w.env.Bindings, Herdr: w.herdr, WorkspaceID: "w2", ProjectKey: "/p"}
+	deps := w.deps()
+	deps.ListOccupants, deps.ObserveOccupant = topo.ListOccupants, topo.ObserveOccupant
+	deps.Dispatch = SendPort{Env: w.env, Session: "swarm", WorkspaceID: "w2", ProjectRoot: "/p", ProjectKey: "/p"}
+	claims := w.tracker.claimCount()
+	out := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()),
+		Agents: []robot.SpawnedAgent{{Pane: moved.Slot, PaneID: "w2:p1", AgentMailName: "IcyKnoll", Type: "claude"}}}
+	Assign(ctx, out, planOf("bd-2"), "inst-000000000000", "", deps)
+	if out.Success || len(out.Assignments) != 1 || out.Assignments[0].Claimed || out.Assignments[0].PromptSent ||
+		!strings.Contains(out.Assignments[0].ClaimError, assignment.ErrTargetOccupied.Error()) {
+		t.Fatalf("second=%+v", out)
+	}
+	if w.tracker.claimCount() != claims || w.herdr.promptCount("w2:p1") != 0 {
+		t.Fatalf("claims %d -> %d, prompts in w2 %d", claims, w.tracker.claimCount(), w.herdr.promptCount("w2:p1"))
+	}
+}
+
+// A ledger that is not an instance's own refuses before anything is read.
+func TestAssignRefusesALedgerThatIsNotTheInstances(t *testing.T) {
+	isolate(t)
+	w := newWorld(t)
+	w.bind("IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	for _, name := range []string{"inst-000000000000.w1", "../x", ""} {
+		out := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: append([]robot.SpawnedAgent(nil), w.agents...)}
+		Assign(context.Background(), out, planOf("bd-1"), name, "", w.deps())
+		if out.Success || out.ErrorCode != robot.ErrCodeInternalError || len(out.Assignments) != 1 || w.tracker.claimCount() != 0 {
+			t.Fatalf("%q: out=%+v", name, out)
+		}
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_STATE_HOME", "relative")
+	if _, err := Preflight(context.Background(), "/p", "top-n", Policy{}, nil); err == nil {
+		t.Fatal("preflight without a state root passed")
+	}
+}
+
 // An outcome nobody can know (the reply was lost after the prompt) stays
 // sending; no later run sends again.
 func TestAssignUnknownOutcomeIsNeverResent(t *testing.T) {
@@ -426,7 +483,7 @@ func TestAssignRefusesReservations(t *testing.T) {
 	w.bind("IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
 	out := &SpawnOutput{Agents: w.agents}
 	plan := planOf("bd-1")
-	got, err := assignWorkToAgentsWithError(context.Background(), out, "/p", "inst-000000000000.w1", "top-n", &plan.Policy,
+	got, err := assignWorkToAgentsWithError(context.Background(), out, "/p", "inst-000000000000", "top-n", &plan.Policy,
 		true, nil, w.deps(), plan.Triage, "", PromptContextOptions{}, nil)
 	if err != nil || len(got) != 1 || got[0].ClaimError != errReservationsNotTaken.Error() || w.tracker.claimCount() != 0 {
 		t.Fatalf("got=%+v err=%v", got, err)
@@ -439,7 +496,7 @@ func TestAssignInitialPromptRidesInTheWorkPrompt(t *testing.T) {
 	w := newWorld(t)
 	w.bind("IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
 	out := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: w.agents}
-	Assign(context.Background(), out, planOf("bd-1"), "inst-000000000000.w1", "Read AGENTS.md first.", w.deps())
+	Assign(context.Background(), out, planOf("bd-1"), "inst-000000000000", "Read AGENTS.md first.", w.deps())
 	if !out.Success || w.herdr.promptCount("w1:p1") != 1 ||
 		!strings.HasPrefix(w.herdr.prompts["w1:p1"][0], "Read AGENTS.md first.\n\nWork on bead bd-1") {
 		t.Fatalf("out=%+v prompts=%v", out, w.herdr.prompts)
@@ -519,6 +576,21 @@ func TestLoadPolicyMergesByNtmRules(t *testing.T) {
 	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign\n")
 	if _, err := LoadPolicy(sub, global); err == nil {
 		t.Fatal("a broken project config was accepted")
+	}
+	// A misspelled key under [assign] refuses, in either file; keys of
+	// other sections of nhm's config are not the policy's.
+	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign]\noperator_gate_labels = [\"prod\"]\n")
+	if _, err := LoadPolicy(sub, global); err == nil || !strings.Contains(err.Error(), "operator_gate_labels") {
+		t.Fatalf("a misspelled project gate: %v", err)
+	}
+	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign.work_source]\nrequire_cleen = true\n")
+	if _, err := LoadPolicy(sub, global); err == nil {
+		t.Fatal("a misspelled work-source key was accepted")
+	}
+	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign]\n")
+	writeFile(t, global, "[quota]\nadmit_unknown = [\"x\"]\n[assign]\noperator_gated_labels = [\"prod\"]\n")
+	if p, err := LoadPolicy(sub, global); err != nil || strings.Join(p.OperatorGatedLabels, ",") != "prod" {
+		t.Fatalf("nhm's other sections: %+v %v", p, err)
 	}
 }
 

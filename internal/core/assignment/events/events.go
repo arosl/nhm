@@ -35,14 +35,14 @@ const (
 	WebhookBeadFailed     = "bead.failed"
 )
 
-// BusEvent is the interface that all events must implement
+// BusEvent is the interface that all bus events must implement
 type BusEvent interface {
 	EventType() string
 	EventTimestamp() time.Time
 	EventSession() string
 }
 
-// BaseEvent provides common fields for events
+// BaseEvent provides common fields for all events
 type BaseEvent struct {
 	Type      string    `json:"type"`
 	Timestamp time.Time `json:"timestamp"`
