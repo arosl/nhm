@@ -483,7 +483,9 @@ func (f *AgentForm) writeTargets(b *strings.Builder, st theme.Styles, fit func(s
 func (f *AgentForm) writeResult(b *strings.Builder, st theme.Styles, fit func(string) string) {
 	r := f.result
 	if f.err != nil && len(r.Targets) == 0 && len(r.Lines) == 0 {
-		if errors.Is(f.err, context.DeadlineExceeded) || r.OperationID == "" && !errors.Is(f.err, actions.ErrUnavailable) {
+		// No result at all: a lost answer is unknown; any other error
+		// (the job did not start, a refusal before the claim) ran nothing.
+		if actions.NoAnswer(f.err) {
 			b.WriteString(st.Warning.Render(fit("no answer: the outcome of operation "+f.opID+" is unknown; see recent operations")) + "\n")
 		}
 		b.WriteString(st.Error.Render(fit(cleanText(f.err.Error()))) + "\n")

@@ -151,7 +151,32 @@ var (
 	ErrNoOperationID = errors.New("actions: a form needs its operation id: submit it through the guard")
 	// ErrTargets: the targets do not fit the action's selection.
 	ErrTargets = errors.New("actions: wrong targets")
+	// ErrNoAnswer: the core's answer did not come in (the CLI's lost job
+	// matches it with errors.Is). The operation may run on; its record
+	// says how it ends, and nothing submits it again (plan-v4 section 4).
+	ErrNoAnswer = errors.New("actions: no answer from the core")
 )
+
+// StatusUnknown is the status of an operation, and of each of its
+// targets, whose answer did not come in.
+const StatusUnknown = "unknown"
+
+// NoAnswer reports whether err means the core's answer did not come in:
+// ErrNoAnswer, or the wait's deadline.
+func NoAnswer(err error) bool {
+	return errors.Is(err, ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// unknown is the result of a request whose answer did not come in: the
+// operation and each target are unknown, never failed.
+func unknown(req Request, opID string) Result {
+	out := Result{OperationID: firstNonEmpty(opID, req.OperationID), Status: StatusUnknown,
+		Lines: []string{"no answer from the core: the operation may run on; recent operations shows its record"}}
+	for _, t := range req.Targets {
+		out.Targets = append(out.Targets, TargetResult{Target: t, Status: StatusUnknown})
+	}
+	return out
+}
 
 // Unavailable says why the action cannot run in context c with core;
 // "" when it can. Surfaces show the reason, or hide an action that is not
@@ -244,7 +269,13 @@ func (a Action) Do(ctx context.Context, core Core, req Request) (Result, error) 
 	if err := a.checkTargets(req.Targets); err != nil {
 		return Result{}, err
 	}
-	return a.run(ctx, core, req)
+	res, err := a.run(ctx, core, req)
+	if NoAnswer(err) {
+		// The answer did not come in: unknown, never failed, under the
+		// operation id the core named, else the request's.
+		return unknown(req, res.OperationID), err
+	}
+	return res, err
 }
 
 // ByID returns the action with an ID.

@@ -288,8 +288,25 @@ func TestNoAnswerIsUnknown(t *testing.T) {
 	c := &agentCore{err: context.DeadlineExceeded}
 	f := agentForm(t, "agent.interrupt", c.core(), newGuard(), tBlue)
 	f.press("tab", "enter")
-	if v := f.View(80); f.Phase() != Failed || !strings.Contains(v, "unknown; see recent operations") {
+	if v := f.View(120); f.Phase() != Failed || !strings.Contains(v, "interrupt: unknown · operation op-1") ||
+		!strings.Contains(v, "BlueLake: unknown") || !strings.Contains(v, "recent operations shows its record") {
 		t.Fatalf("no answer (%s):\n%s", f.Phase(), v)
+	}
+	// A lost retire (the runner's lost job matches actions.ErrNoAnswer) is
+	// unknown too, never "failed", though retire fills a target row.
+	c = &agentCore{err: fmt.Errorf("operation op-1: %w", actions.ErrNoAnswer),
+		retireDry: lifecycle.RetireResult{MailName: "BlueLake", DryRun: true}}
+	r := agentForm(t, "agent.retire", c.core(), newGuard(), tBlue)
+	r.press("enter", "tab", "enter")
+	if v := r.View(120); !strings.Contains(v, "retire: unknown") || strings.Contains(v, "failed") {
+		t.Fatalf("lost retire (%s):\n%s", r.Phase(), v)
+	}
+	// A job that did not start ran nothing: an error, not unknown.
+	c = &agentCore{err: errors.New("the job did not start: no space left")}
+	n := agentForm(t, "agent.interrupt", c.core(), newGuard(), tBlue)
+	n.press("tab", "enter")
+	if v := n.View(120); strings.Contains(v, "unknown") || !strings.Contains(v, "no space left") {
+		t.Fatalf("not started (%s):\n%s", n.Phase(), v)
 	}
 	g := agentForm(t, "agent.interrupt", c.core(), newGuard(), tBlue)
 	g.press("tab")
