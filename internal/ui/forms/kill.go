@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -117,9 +118,9 @@ func (f *KillForm) StartReview() tea.Cmd {
 	if !f.CanReview() {
 		return nil
 	}
-	if l := f.Label(); clean(l) != l {
-		// The field takes no control bytes, so this label can never be
-		// typed: say so at once.
+	if l := f.Label(); clean(l) != l || strings.ContainsFunc(l, unicode.IsControl) {
+		// The field takes no control runes (a tab, a newline either), so
+		// this label can never be typed: say so at once.
 		f.review, f.typed, f.mismatch = actions.Result{}, "", false
 		f.phase, f.err = Refused, ErrLabelControls
 		return nil

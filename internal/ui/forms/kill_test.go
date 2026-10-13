@@ -125,6 +125,14 @@ func TestKillRefusesAnUntypableLabel(t *testing.T) {
 	if cmd := f.StartReview(); cmd != nil || f.Phase() != Refused || !errors.Is(f.Err(), ErrLabelControls) || f.Confirm() != nil {
 		t.Fatalf("label with controls: %v %v", f.Phase(), f.Err())
 	}
+	// A tab or a newline cannot be typed either (the re-check's low 7).
+	for _, l := range []string{"proj\ta", "proj\na"} {
+		c.WorkspaceLabel = l
+		f := NewKillForm(newRunner(t, "workspace.kill", fc.core()), c)
+		if cmd := f.StartReview(); cmd != nil || !errors.Is(f.Err(), ErrLabelControls) {
+			t.Fatalf("label %q: %v %v", l, f.Phase(), f.Err())
+		}
+	}
 }
 
 // --no-beads changes the checks: it drops the review, its answer and its

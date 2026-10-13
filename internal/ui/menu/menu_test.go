@@ -622,6 +622,18 @@ func TestClipCleans(t *testing.T) {
 	if got := clip("BlueLake: \x1b]0;pwned\x07it is \x1b[31mworking\u009b", 40); got != "BlueLake: it is working" {
 		t.Fatalf("clip = %q", got)
 	}
+	// One line, in columns: a newline or a tab is a space, a wide
+	// character takes two columns (the re-check's lows 5 and 8).
+	if got := clip("proj\nevil\tx", 40); got != "proj evil x" {
+		t.Fatalf("clip of a newline = %q", got)
+	}
+	if got := clip("ワークスペース", 7); lipgloss.Width(got) > 7 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("clip of wide characters = %q (%d columns)", got, lipgloss.Width(got))
+	}
+	// A last newline is no line of its own (the re-check's low 6).
+	if got := fit("a\nb\nc\n", 20, 3); got != "a\nb\nc" {
+		t.Fatalf("fit = %q", got)
+	}
 	c := ctxW
 	c.WorkspaceLabel = "proj\x1b[2J-a"
 	m := newMenu(c, &fakeCore{})

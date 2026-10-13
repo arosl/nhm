@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/ui"
@@ -494,6 +495,8 @@ func window(lines []string, first, last, n int) []string {
 // shows first (its title, its review) stays, and a cut view of three
 // lines or more says so. bubbletea would keep the tail instead.
 func fit(s string, width, height int) string {
+	// A last newline ends the last line; it is not a line of its own.
+	s = strings.TrimSuffix(s, "\n")
 	lines := strings.Split(s, "\n")
 	if height <= 0 || len(lines) <= height {
 		return s
@@ -527,12 +530,19 @@ func wrap(s string, width int) string {
 // width columns. Every line of outside text the menu shows (labels,
 // statuses, reasons, errors) passes it.
 func clip(s string, width int) string {
-	r := []rune(forms.Clean(s))
-	if len(r) <= width {
-		return string(r)
+	// One line: a newline, a return or a tab in outside text is a space.
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, forms.Clean(s))
+	// Columns, not runes: a wide character takes two.
+	if ansi.StringWidth(s) <= width {
+		return s
 	}
 	if width <= 1 {
-		return string(r[:max(0, width)])
+		return ansi.Truncate(s, max(0, width), "")
 	}
-	return string(r[:width-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }
