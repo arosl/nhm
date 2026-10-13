@@ -68,8 +68,9 @@ prompt goes to binding ID only while it is at generation G, as nhm
 --robot-spawn or nhm status --json reported it. A binding that changed
 since (an agent recycled or restarted in the same pane) is refused with
 generation_changed, and one that is gone with not_selected, before
-anything is typed. Without --all, --name or --pane, the pins are the
-selection; with them, a selected agent that is not pinned is refused.
+anything is typed. When every pinned binding is gone, the send is refused
+before its claim (exit 2). Without --all, --name or --pane, the pins are
+the selection; with them, a selected agent that is not pinned is refused.
 
 Per target: submitted, possibly submitted (herdr did not confirm; never
 retried), refused or failed. --wait then waits for each target (nhm

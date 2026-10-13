@@ -73,6 +73,13 @@ func TestSendIfGeneration(t *testing.T) {
 		t.Fatalf("pin with a selector = %d %v", code, tg)
 	}
 
+	// Every pinned binding gone: refused before the claim, exit 2, and
+	// never widened to the other agents.
+	code, _, _ = run("send", "swarm", "packet", "--if-generation", "bnd-gone:1", "--op-id", "op-pin5", "--socket", sock)
+	if code != exitRefused || len(h.sent()) != 1 {
+		t.Fatalf("only gone pins = %d, prompts %v", code, h.sent())
+	}
+
 	for _, bad := range []string{"bnd-x", "bnd-x:0", "bnd-x:two", ":3", "bnd-x:1,bnd-x:2"} {
 		if code, _, _ := run("send", "swarm", "x", "--if-generation", bad, "--socket", sock); code != exitRefused {
 			t.Errorf("--if-generation %q = %d, want %d", bad, code, exitRefused)
