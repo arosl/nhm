@@ -37,7 +37,7 @@ const maxPayload = 1 << 20
 const sendUsage = `Usage: nhm send <session> [prompt] [--all | --KIND | --type K | --pane N.M | --panes N.M,…]
                 [--name N]… [--state idle|done|working|blocked|between]… [--limit N] [--include-self]
                 [--msg M | --msg-file F|-] [-t KEY | --template KEY] [--bead ID] [--var k=v]… [--file F|-]
-                [--when ready|any] [--force] [--wait [--until done|idle|complete] [--timeout D]]
+                [--when any|ready] [--force] [--wait [--until done|idle|complete] [--timeout D]]
                 [--with-memory[=false]] [--with-cass | --no-cass] [--memory-query Q]
                 [--cass-check | --no-cass-check] [--if-generation ID:G]…
                 [--op-id ID] [--dry-run] [--project DIR] [--socket PATH] [--json]
@@ -58,8 +58,10 @@ ntm's builtins) or a .md path; --file fills {{file}}, --bead the bead_*
 placeholders, --var any placeholder. A placeholder that nothing fills
 refuses the send before anything goes out.
 
-The delivery gate refuses a blocked agent and an unsafe pane always, and
-a busy or unknown one unless --when any or --force. The operation is
+The delivery gate refuses a blocked agent (one at a dialog) and an unsafe
+pane always. A busy or unknown agent gets the prompt typed in, as ntm's
+send does (--when any, the default); --when ready refuses it instead,
+unless --force. The operation is
 claimed before the first prompt: the same --op-id never sends twice and
 returns the stored receipt. nhm never resends on its own.
 
@@ -173,8 +175,10 @@ func addSendFlags(fs *flag.FlagSet) *sendFlags {
 	fs.StringVar(&f.tmpl, "t", "", "a template key or .md file")
 	fs.StringVar(&f.bead, "bead", "", "fill bead_* placeholders from this bead")
 	fs.StringVar(&f.file, "file", "", "{{file}} with a template, the prompt without (- is stdin)")
-	fs.StringVar(&f.when, "when", "ready", "ready or any")
-	fs.BoolVar(&f.force, "force", false, "send to busy and unknown agents too")
+	// any, as ntm's send types into a busy pane (nhm-r0v); ready is nhm's
+	// no-interrupt send.
+	fs.StringVar(&f.when, "when", "any", "any (type into a busy agent, as ntm) or ready (refuse it)")
+	fs.BoolVar(&f.force, "force", false, "admit busy and unknown agents even with --when ready, and skip the duplicate check")
 	fs.BoolVar(&f.wait, "wait", false, "wait for each target after the send")
 	fs.StringVar(&f.until, "until", string(wait.UntilComplete), "with --wait: done, idle or complete")
 	fs.DurationVar(&f.timeout, "timeout", defaultWaitTimeout, "with --wait: the longest wait")
@@ -685,7 +689,9 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, err.Error(), "", *format, robotError, now)
 	}
-	req := send.Request{Message: text, OperationID: *opID, DryRun: *dryRun, Source: history.SourceRobot,
+	// WhenAny: ntm's robot send types into a busy pane (nhm-r0v); a
+	// blocked agent and an unsafe pane are still refused.
+	req := send.Request{Message: text, OperationID: *opID, DryRun: *dryRun, Source: history.SourceRobot, WhenAny: true,
 		Caller: ie.callerPane(ctx), Selector: pinSelection(send.Selector{All: *all, Panes: panes, Kinds: robotKinds(types)}, expect),
 		Expect: expect, Enrich: enrichment}
 	if err := ie.fillScope(ctx, &req, *sendS, ""); err != nil {

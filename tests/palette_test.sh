@@ -130,8 +130,8 @@ fi
 
 printf 'Reply on {{thread}}.\n' > "$work/prompt.md"
 palette_send "$work/prompt.md" w1 "$(grep $'^group\tall' <<< "$rows")" <<< "acfs-7" 2> /dev/null
-if [[ "$(cat "$work/sends")" == "send w1 --all -t $work/prompt.md --var thread=acfs-7" ]]; then
-  pass "the send is nhm send <ws> … -t FILE.md, with the thread as --var"
+if [[ "$(cat "$work/sends")" == "send w1 --all --when ready -t $work/prompt.md --var thread=acfs-7" ]]; then
+  pass "the send is nhm send <ws> … --when ready -t FILE.md, with the thread as --var"
 else
   fail "send: $(cat "$work/sends")"
 fi

@@ -118,10 +118,15 @@ func TestSendVerb(t *testing.T) {
 	if code, _, _ = run("send", "swarm", "other", "--cc", "--op-id", "op-v1", "--socket", sock); code != 2 {
 		t.Fatalf("conflict = %d", code)
 	}
-	// IcyKnoll works now: the gate refuses it (exit 3), --when any sends.
-	code, out, _ = run("send", "swarm", "again", "--name", "IcyKnoll", "--socket", sock)
+	// IcyKnoll works now. --when ready refuses it (exit 3); the default
+	// types the prompt in, as ntm's send does (nhm-r0v).
+	code, out, _ = run("send", "swarm", "again", "--name", "IcyKnoll", "--when", "ready", "--socket", sock)
 	if code != exitAdmission || !strings.Contains(out, "refused (busy)") {
-		t.Fatalf("busy = %d %s", code, out)
+		t.Fatalf("busy, --when ready = %d %s", code, out)
+	}
+	code, out, _ = run("send", "swarm", "again", "--name", "IcyKnoll", "--socket", sock)
+	if got := h.sent(); code != 0 || got[len(got)-1] != "w1:p1=again" {
+		t.Fatalf("busy, the default = %d %s %v", code, out, got)
 	}
 	// --msg-file - reads stdin; --wait records the completion.
 	stdin = strings.NewReader("from stdin")
@@ -235,10 +240,11 @@ func TestRobotSendContract(t *testing.T) {
 	if nf, code := robotJSON(t, "--robot-send-receipt=nope", sock); code != 1 || nf["error_code"] != "NOT_FOUND" {
 		t.Fatalf("unknown receipt = %d %v", code, nf)
 	}
-	// IcyKnoll is busy now: refused, not success.
+	// IcyKnoll is busy now: as ntm's robot send, the prompt is typed in
+	// (nhm-r0v).
 	busy, code := robotJSON(t, "--robot-send=swarm", "--panes=0.1", "--msg=hi", sock)
-	if code != 1 || busy["success"] != false || len(busy["failed"].([]any)) != 1 {
-		t.Fatalf("busy = %d %v", code, busy)
+	if got := h.sent(); code != 0 || busy["success"] != true || got[len(got)-1] != "w1:p1=hi" {
+		t.Fatalf("busy = %d %v %v", code, busy, got)
 	}
 	// --with-memory is best-effort: without cm the send goes on, and the
 	// injection says why it is empty.
