@@ -318,9 +318,7 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 			Statuses: []bindings.Status{bindings.Active, bindings.Displaced}}); err != nil {
 			return err
 		}
-		if err := m.readPeers(c, deps.DB, all, opts.ProjectKey); err != nil {
-			return err
-		}
+		m.readPeers(c, deps.DB, all, opts.ProjectKey)
 		return m.readLocal(c, deps.DB.SQL())
 	})
 	m.stage(SourceQuota, now, orDefault(opts.LocalTimeout, defaultLocalTimeout), ctx, func(c context.Context) error {
@@ -334,12 +332,14 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 
 // readPeers keeps every workspace's active bindings, of all projects, for
 // the mixed-workspace check: from the build's own list, or with a second
-// read when the build is for one project (nhm-8ze).
-func (m *Model) readPeers(ctx context.Context, db *store.DB, all []bindings.Binding, projectKey string) error {
+// read when the build is for one project (nhm-8ze). That read only serves
+// the check: when it fails, peers stay unset and the check sees the
+// build's rows, and the build goes on.
+func (m *Model) readPeers(ctx context.Context, db *store.DB, all []bindings.Binding, projectKey string) {
 	if projectKey != "" {
 		var err error
 		if all, err = bindings.NewStore(db).List(ctx, bindings.Filter{Statuses: []bindings.Status{bindings.Active}}); err != nil {
-			return err
+			return
 		}
 	}
 	m.peers = map[string][]peer{}
@@ -348,7 +348,6 @@ func (m *Model) readPeers(ctx context.Context, db *store.DB, all []bindings.Bind
 			m.peers[b.WorkspaceID] = append(m.peers[b.WorkspaceID], peer{b.ID, b.MailProjectKey})
 		}
 	}
-	return nil
 }
 
 // skipOrEnrich runs stage 3: the local files (guards, limits), the beads
