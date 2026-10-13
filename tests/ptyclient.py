@@ -182,6 +182,32 @@ def setsize(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def shell(cmd, timeout):
+    """Run cmd with bash, in a session of its own, for at most timeout
+    seconds. Return its exit status (None after the timeout) and its
+    output. After the timeout the whole process group gets SIGKILL: a
+    child of bash that holds the output pipe would hang a wait for EOF."""
+    p = subprocess.Popen(["bash", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, start_new_session=True)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+        return p.returncode, out
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        out, _ = p.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        # A process that left the group still holds the pipe.
+        out = ""
+        p.stdout.close()
+        p.wait()
+    return None, out
+
+
 def main():
     script, rawlog = sys.argv[1], sys.argv[2]
     cmd = sys.argv[sys.argv.index("--") + 1:]
@@ -261,14 +287,12 @@ def main():
             pump(0.5)
         elif verb in ("run", "check"):
             log("%s %s" % (verb, arg))
-            try:
-                p = subprocess.run(["bash", "-c", arg], capture_output=True, text=True, timeout=cmd_timeout)
-                sys.stderr.write(p.stdout + p.stderr)
-                code = p.returncode
-                log("exit %d" % code)
-            except subprocess.TimeoutExpired:
-                code = None
+            code, output = shell(arg, cmd_timeout)
+            sys.stderr.write(output)
+            if code is None:
                 log("killed after %g seconds" % cmd_timeout)
+            else:
+                log("exit %d" % code)
             if verb == "check":
                 if code != 0:
                     failed += 1

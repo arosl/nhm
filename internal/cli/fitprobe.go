@@ -101,7 +101,9 @@ func profileName(p termenv.Profile) string {
 // the probe never creates a file from its environment, and refuses
 // anything but a regular file. The Lstat keeps it from opening a FIFO;
 // O_NOFOLLOW and the Stat of the open file refuse what was swapped in
-// after the Lstat.
+// after the Lstat, and O_NONBLOCK makes the open of a FIFO swapped in fail
+// (ENXIO) instead of waiting for a reader. A regular file's writes do not
+// change with it.
 func openFitOut(path string) (*os.File, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -110,7 +112,7 @@ func openFitOut(path string) (*os.File, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
