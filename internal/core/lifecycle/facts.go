@@ -17,6 +17,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/arosl/nhm/internal/core/assignment"
 )
 
 // factTimeout bounds one external read.
@@ -333,16 +335,29 @@ type brIssue struct {
 	Assignee string `json:"assignee"`
 }
 
-// brList runs `br list --status S --assignee A --limit 0 --json`, whose
-// output is {"issues": [...], "has_more": ...}. A page that is not the
-// whole list is an error: a bead left out could be work in progress.
+// brList runs `br list --status S --limit 0 --json`, whose output is
+// {"issues": [...], "has_more": ...}, and keeps the agent's beads: those
+// assigned to it, and those a spawn assignment claimed for it (its name
+// with a "/ntm-<key>" suffix, which br's exact --assignee does not match;
+// nhm-i85). A page that is not the whole list is an error: a bead left out
+// could be work in progress.
 func brList(ctx context.Context, root string, db []string, status, agent string) ([]brIssue, error) {
-	args := append(brRead(db), "list", "--status", status, "--assignee", agent, "--limit", "0", "--json")
+	args := append(brRead(db), "list", "--status", status, "--limit", "0", "--json")
 	out, err := run(ctx, root, "br", args...)
 	if err != nil {
 		return nil, err
 	}
-	return parseBrList(out)
+	issues, err := parseBrList(out)
+	if err != nil {
+		return nil, err
+	}
+	var mine []brIssue
+	for _, is := range issues {
+		if assignment.ClaimedBy(is.Assignee, agent) {
+			mine = append(mine, is)
+		}
+	}
+	return mine, nil
 }
 
 // brRead are br's leading arguments for a read of db: the database, and
@@ -415,8 +430,8 @@ func parseBrList(out []byte) ([]brIssue, error) {
 	return *page.Issues, nil
 }
 
-// Assigned reads `br list --status in_progress --assignee A` and each
-// bead's comments.
+// Assigned reads the agent's beads in progress (brList) and each bead's
+// comments.
 func (c CLI) Assigned(ctx context.Context, root, agent string) ([]Bead, error) {
 	dbs, err := c.beadDBs(root)
 	if err != nil {
@@ -446,9 +461,6 @@ func assignedIn(ctx context.Context, root string, db []string, agent string) ([]
 	}
 	var beads []Bead
 	for _, is := range issues {
-		if is.Assignee != "" && is.Assignee != agent {
-			continue
-		}
 		b := Bead{ID: is.ID, Title: is.Title, Status: is.Status}
 		args := append(brRead(db), "comments", "list", is.ID, "--json")
 		out, err := run(ctx, root, "br", args...)
@@ -490,7 +502,7 @@ func IsHandoff(text string) bool {
 	return strings.Contains(strings.ToLower(first), "handoff")
 }
 
-// Closed reads `br list --status closed --assignee A`.
+// Closed reads the agent's closed beads (brList).
 func (c CLI) Closed(ctx context.Context, root, agent string) ([]string, error) {
 	dbs, err := c.beadDBs(root)
 	if err != nil {
@@ -504,7 +516,7 @@ func (c CLI) Closed(ctx context.Context, root, agent string) ([]string, error) {
 			return nil, err
 		}
 		for _, is := range issues {
-			if (is.Assignee == "" || is.Assignee == agent) && !seen[is.ID] {
+			if !seen[is.ID] {
 				seen[is.ID] = true
 				ids = append(ids, is.ID)
 			}
@@ -536,7 +548,9 @@ func (c CLI) InProgress(ctx context.Context, root string) (map[string][]string, 
 		for _, is := range issues {
 			if is.Assignee != "" && !seen[is.ID] {
 				seen[is.ID] = true
-				out[is.Assignee] = append(out[is.Assignee], is.ID)
+				// A spawn assignment's claim counts for its agent.
+				agent := assignment.ClaimActorBase(is.Assignee)
+				out[agent] = append(out[agent], is.ID)
 			}
 		}
 	}
@@ -555,10 +569,8 @@ func (c CLI) Known(ctx context.Context, root, agent string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		for _, is := range issues {
-			if is.Assignee == "" || is.Assignee == agent {
-				return true, nil
-			}
+		if len(issues) > 0 {
+			return true, nil
 		}
 	}
 	return false, nil

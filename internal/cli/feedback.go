@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/integrations/kinds"
@@ -238,7 +239,9 @@ func brBead(ctx context.Context, projectRoot, id string) (enrich.Bead, error) {
 	}
 	for _, r := range list {
 		if r.ID == id {
-			return enrich.Bead{Status: r.Status, Assignee: r.Assignee}, nil
+			// A spawn assignment's claim (<Mail name>/ntm-<key>) is its
+			// agent's (nhm-i85).
+			return enrich.Bead{Status: r.Status, Assignee: assignment.ClaimActorBase(r.Assignee)}, nil
 		}
 	}
 	return enrich.Bead{}, fmt.Errorf("br show %s: the bead is not in the answer", id)
