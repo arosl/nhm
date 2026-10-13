@@ -23,6 +23,7 @@ import (
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/board"
 	"github.com/arosl/nhm/internal/ui/dashboard"
+	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
 )
 
@@ -152,8 +153,18 @@ func runGoBoard(stderr io.Writer) int {
 	h := ie.herdr
 	// The action menu runs the table's actions on the core: a mutation is
 	// a runner job under the guard's operation id, so it outlives the board.
-	m, err := dashboard.New(dashboard.Config{Board: b, Context: c, Binary: bin, Inbox: inbox,
-		Core:           uiCore(ie, c, uiJobs(ie, c)),
+	jobs := uiJobs(ie, c)
+	core := uiCore(ie, c, jobs)
+	// The composer's memory preview is the palette's (nhm memory's
+	// retrieval, the send's modes and budgets); the send itself goes
+	// through the table. No project for the workspace: no preview.
+	var memory *palette.Submitter
+	if base, err := uiSendBase(ctx, ie, c); err == nil {
+		memory = palette.NewSubmitter(core.Send, paletteReader(ie.db, jobs), paletteMemory(base.ProjectRoot),
+			func() (string, error) { return store.NewOperationID(time.Now()) })
+	}
+	m, err := dashboard.New(dashboard.Config{Board: b, Context: c, Binary: bin, Inbox: inbox, Memory: memory,
+		Core:           core,
 		NewOperationID: func() (string, error) { return store.NewOperationID(time.Now()) },
 		History:        func() ([]history.HistoryEntry, error) { return history.ReadRecent(200) },
 		// The read view reads as nhm read --source recent does.

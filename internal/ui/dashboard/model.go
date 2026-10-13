@@ -60,6 +60,10 @@ type Config struct {
 	// Read reads a pane's last lines for the read view (space r); nil
 	// leaves the read view out.
 	Read func(ctx context.Context, paneID string, lines int) (string, error)
+	// Memory serves the composer's memory preview (the palette's
+	// Submitter); the send itself goes through the action table. nil: no
+	// preview.
+	Memory *palette.Submitter
 	// Now is time.Now in production.
 	Now func() time.Time
 	// CallTimeout bounds each call a key starts (default 5 s).

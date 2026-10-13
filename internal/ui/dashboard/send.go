@@ -73,7 +73,7 @@ func (m *Model) openSend(a actions.Action) tea.Cmd {
 	}
 	label := "to " + strings.Join(who, ", ")
 	m.send = sendState{targets: frozen, names: names, label: label,
-		composer: palette.NewComposer(label, "", max(m.width-4, 40), max(m.height-12, 5), nil)}
+		composer: palette.NewComposer(label, "", max(m.width-4, 40), max(m.height-12, 5), m.cfg.Memory)}
 	m.view = viewSend
 	return m.send.composer.Init()
 }
