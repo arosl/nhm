@@ -60,9 +60,26 @@ func (m *modes) filter() {
 	m.list.fit(len(m.rows), m.listHeight())
 }
 
-// listHeight is the rows in sight: the frame takes three lines, the
-// column header one, and the selected mode's description two.
-func (m *modes) listHeight() int { return max(1, m.high-6) }
+// lines is the body's layout at the view's height: the column header from
+// 2 body lines, the selected mode's description (a blank line and the
+// text) from 5, and the rows in sight.
+func (m *modes) lines() (header, desc bool, list int) {
+	_, _, body := frameLines(m.high)
+	header, desc = body >= 2, body >= 5
+	list = body
+	if header {
+		list--
+	}
+	if desc {
+		list -= 2
+	}
+	return header, desc, max(1, list)
+}
+
+func (m *modes) listHeight() int {
+	_, _, list := m.lines()
+	return list
+}
 
 func (m *modes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -139,17 +156,20 @@ func (m *modes) View() string {
 		for i, r := range m.rows {
 			rows[i] = modeRow(r.Code, r.Name, r.Category, r.Tier)
 		}
-		desc := clean(m.rows[m.list.cursor].ShortDesc)
-		body = strings.Join([]string{
-			dim.Render(ansi.Truncate("  "+modeRow("CODE", "NAME", "CATEGORY", "TIER"), m.width, "…")),
-			m.list.render(rows, m.width, m.listHeight()),
-			"",
-			dim.Render(ansi.Truncate(desc, m.width, "…")),
-		}, "\n")
+		header, desc, list := m.lines()
+		var parts []string
+		if header {
+			parts = append(parts, dim.Render(ansi.Truncate("  "+modeRow("CODE", "NAME", "CATEGORY", "TIER"), m.width, "…")))
+		}
+		parts = append(parts, m.list.render(rows, m.width, list))
+		if desc {
+			parts = append(parts, "", dim.Render(ansi.Truncate(clean(m.rows[m.list.cursor].ShortDesc), m.width, "…")))
+		}
+		body = strings.Join(parts, "\n")
 	}
 	return frame("modes", note, body, []components.KeyHint{
 		{Key: "↑/↓", Desc: "move"}, {Key: "enter", Desc: "explain"}, {Key: "a", Desc: "all tiers"}, {Key: "esc", Desc: "back"},
-	}, m.width)
+	}, m.width, m.high)
 }
 
 func modeRow(code, name, category, tier string) string {

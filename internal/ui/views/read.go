@@ -117,7 +117,10 @@ func (r *readView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return r, nil
 }
 
-func (r *readView) panelHeight() int { return max(1, r.high-3) }
+func (r *readView) panelHeight() int {
+	_, _, body := frameLines(r.high)
+	return body
+}
 
 func (r *readView) layout() {
 	r.panel.SetSize(r.width, r.panelHeight())
@@ -160,5 +163,5 @@ func (r *readView) View() string {
 	}
 	return frame(r.Title(), r.note(), r.panel.View(), []components.KeyHint{
 		{Key: "↑/↓", Desc: "scroll"}, pause, {Key: "r", Desc: "read again"}, {Key: "esc", Desc: "back"},
-	}, r.width)
+	}, r.width, r.high)
 }

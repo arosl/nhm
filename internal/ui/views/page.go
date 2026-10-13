@@ -115,7 +115,10 @@ func (p *page) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, nil
 }
 
-func (p *page) panelHeight() int { return max(1, p.high-3) }
+func (p *page) panelHeight() int {
+	_, _, body := frameLines(p.high)
+	return body
+}
 
 func (p *page) layout() {
 	p.panel.SetSize(p.width, p.panelHeight())
@@ -158,19 +161,44 @@ func (p *page) status() string {
 func (p *page) View() string {
 	return frame(p.title, p.status(), p.panel.View(), []components.KeyHint{
 		{Key: "↑/↓", Desc: "scroll"}, {Key: "r", Desc: "refresh"}, {Key: "esc", Desc: "back"},
-	}, p.width)
+	}, p.width, p.high)
 }
 
-// frame lays out a view: the title and its note, a blank line, the body
-// and the key hints.
-func frame(title, note, body string, hints []components.KeyHint, width int) string {
+// frameLines says which of the frame's lines a view of height h shows,
+// so the view fits even a small popup (a terminal program taller than its
+// window loses its top): the blank line under the title from 5 lines, the
+// key hints from 3. body is what is left for the view's own lines, at
+// least one.
+func frameLines(h int) (blank, help bool, body int) {
+	blank, help = h >= 5, h >= 3
+	body = h - 1
+	if blank {
+		body--
+	}
+	if help {
+		body--
+	}
+	return blank, help, max(1, body)
+}
+
+// frame lays out a view of height h: the title and its note, a blank
+// line, the body and the key hints, each as frameLines allows.
+func frame(title, note, body string, hints []components.KeyHint, width, h int) string {
 	t := theme.Current()
 	head := lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render(title)
 	if note != "" {
 		head += "  " + note
 	}
-	help := components.RenderHelpBar(components.HelpBarOptions{Hints: hints, Width: width})
-	return strings.Join([]string{ansi.Truncate(head, width, "…"), "", body, help}, "\n")
+	blank, help, _ := frameLines(h)
+	lines := []string{ansi.Truncate(head, width, "…")}
+	if blank {
+		lines = append(lines, "")
+	}
+	lines = append(lines, body)
+	if help {
+		lines = append(lines, components.RenderHelpBar(components.HelpBarOptions{Hints: hints, Width: width}))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderChecks is nhm doctor's text, with the results in colour. The

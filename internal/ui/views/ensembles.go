@@ -73,9 +73,25 @@ func (e *ensembles) refreshRuns() tea.Cmd {
 	return load(e.runsReq, e.env.timeout(), func(context.Context) (any, error) { return ensemble.List(dir) })
 }
 
-// listHeight is the rows in sight: the frame takes three lines, the tabs
-// and the column header two.
-func (e *ensembles) listHeight() int { return max(1, e.high-5) }
+// lines is the body's layout at the view's height: the tabs from 2 body
+// lines, the column header from 3, and the rows in sight.
+func (e *ensembles) lines() (tabs, header bool, list int) {
+	_, _, body := frameLines(e.high)
+	tabs, header = body >= 2, body >= 3
+	list = body
+	if tabs {
+		list--
+	}
+	if header {
+		list--
+	}
+	return tabs, header, max(1, list)
+}
+
+func (e *ensembles) listHeight() int {
+	_, _, list := e.lines()
+	return list
+}
 
 func (e *ensembles) rowCount() int {
 	if e.tab == tabRuns {
@@ -222,7 +238,7 @@ func (e *ensembles) View() string {
 			hints = append(hints, components.KeyHint{Key: "s", Desc: "stop"})
 		}
 		hints = append(hints, components.KeyHint{Key: "esc", Desc: "back"})
-		return frame(e.detail.title, e.detail.status(), e.detail.panel.View(), hints, e.width)
+		return frame(e.detail.title, e.detail.status(), e.detail.panel.View(), hints, e.width, e.high)
 	}
 	t := theme.Current()
 	dim := lipgloss.NewStyle().Foreground(t.Overlay)
@@ -274,12 +290,16 @@ func (e *ensembles) View() string {
 		}
 	}
 	hints = append(hints, components.KeyHint{Key: "esc", Desc: "back"})
-	body = strings.Join([]string{
-		ansi.Truncate(strings.Join(tabs, "   "), e.width, "…"),
-		dim.Render(ansi.Truncate("  "+header, e.width, "…")),
-		body,
-	}, "\n")
-	return frame("ensembles", note, body, hints, e.width)
+	showTabs, showHeader, _ := e.lines()
+	var parts []string
+	if showTabs {
+		parts = append(parts, ansi.Truncate(strings.Join(tabs, "   "), e.width, "…"))
+	}
+	if showHeader {
+		parts = append(parts, dim.Render(ansi.Truncate("  "+header, e.width, "…")))
+	}
+	body = strings.Join(append(parts, body), "\n")
+	return frame("ensembles", note, body, hints, e.width, e.high)
 }
 
 // runsNote is the runs list's note: loading, the time of the answer, or

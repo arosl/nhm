@@ -509,7 +509,9 @@ func TestViewsFitTheWindow(t *testing.T) {
 		Inbox: func(context.Context, ui.Target) (string, error) { return long, nil }}
 	target := ui.Target{BindingID: "bnd-1", Generation: 1}
 	for _, id := range append(slices.Clone(IDs), ForIDs...) {
-		for _, size := range [][2]int{{40, 12}, {100, 30}} {
+		// 22x2 is what the menu gives a view in herdr's popup at a 40x12
+		// client: 60% of it, less the border and the menu's two lines.
+		for _, size := range [][2]int{{22, 2}, {22, 3}, {22, 4}, {30, 6}, {40, 12}, {100, 30}} {
 			v, ok := New(id, env)
 			if !ok {
 				v, _ = NewFor(id, env, target)
