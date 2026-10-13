@@ -27,6 +27,16 @@ func TestHealthFor(t *testing.T) {
 		},
 		Absent: []bindings.Binding{{ID: "bnd-9", WorkspaceID: "w1", PaneID: "w1:p9", Slot: "1.1", Kind: "codex", MailName: "BlueLake"},
 			{ID: "bnd-8", WorkspaceID: "w2", PaneID: "w2:p8", Kind: "codex"}},
+		// The rate-limited claude waits for the later reset of its
+		// pool's limited windows; an open window, a past reset and
+		// another pool do not count.
+		Quota: []Quota{
+			{PoolID: "claude", Window: "five_hour", Limited: true, ResetsAt: "2026-10-13T20:00:00Z"},
+			{PoolID: "claude", Window: "seven_day", Limited: true, ResetsAt: "2026-10-13T21:00:00Z"},
+			{PoolID: "claude", Window: "seven_day_opus", Limited: false, ResetsAt: "2026-10-14T19:00:00Z"},
+			{PoolID: "claude", Window: "old", Limited: true, ResetsAt: "2026-10-13T18:00:00Z"},
+			{PoolID: "codex", Window: "five_hour", Limited: true, ResetsAt: "2026-10-14T19:00:00Z"},
+		},
 	}
 	now := time.Date(2026, 10, 13, 19, 0, 0, 0, time.UTC)
 	out := HealthFor(m, Workspace{ID: "w1", Label: "swarm"}, "json", now)
@@ -46,7 +56,8 @@ func TestHealthFor(t *testing.T) {
 	}
 	// As ntm, a rate limit is a count, not an error; the line is under
 	// "_nhm" (review of ea6f0fc).
-	if a := out.Agents[3]; a.RateLimitCount != 1 || a.LastError != "" || a.NHM.(map[string]any)["limit"] != "You've hit your limit" || a.Pane != 4 {
+	if a := out.Agents[3]; a.RateLimitCount != 1 || a.LastError != "" || a.NHM.(map[string]any)["limit"] != "You've hit your limit" || a.Pane != 4 ||
+		a.BackoffRemaining != 7200 {
 		t.Errorf("rate limited = %+v", a)
 	}
 	if a := out.Agents[5]; a.Restarts != 1 || a.AgentType != "codex" || a.Confidence != 0 {

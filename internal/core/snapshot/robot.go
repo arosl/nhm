@@ -334,9 +334,9 @@ func HealthFor(m *Model, ws Workspace, format string, now time.Time) robot.Sessi
 		case a.State == herdr.StatusBlocked:
 			h.Health, h.LastError = robot.HealthBlocked, "the agent waits for a person (herdr: blocked)"
 		case a.Limit != "":
-			// As ntm: a count, no last_error. The line is free text with
-			// no reset time, so backoff_remaining stays 0.
+			// As ntm: a count and the wait, no last_error.
 			h.Health, h.RateLimitCount = robot.HealthRateLimited, 1
+			h.BackoffRemaining = backoff(m, a.Kind, now)
 			if x, ok := h.NHM.(map[string]any); ok {
 				x["limit"] = a.Limit
 			}
@@ -354,6 +354,25 @@ func HealthFor(m *Model, ws Workspace, format string, now time.Time) robot.Sessi
 			NHM: map[string]any{"binding_id": b.ID, "mail_name": b.MailName, "pane_id": b.PaneID}})
 	}
 	return out
+}
+
+// backoff is the seconds until the kind's quota pool resets: the latest
+// reset of its limited windows, as the agent waits for all of them; 0
+// when no limited window names a reset time in the future.
+func backoff(m *Model, kind string, now time.Time) int {
+	pool := kinds.Lookup(kind).QuotaPool
+	wait := 0
+	for _, q := range m.Quota {
+		if q.PoolID != pool || !q.Limited || q.ResetsAt == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, q.ResetsAt)
+		if err != nil || !t.After(now) {
+			continue
+		}
+		wait = max(wait, int(t.Sub(now).Seconds()))
+	}
+	return wait
 }
 
 // paneTarget is a pane's address in robot output: its slot, or its herdr
