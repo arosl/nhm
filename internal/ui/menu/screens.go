@@ -28,6 +28,10 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 	switch a.Kind {
 	case actions.KindSurface:
 		cmd := m.surface(a.ID)
+		if cmd == nil {
+			// It was there when the menu looked.
+			return nil, errors.New("not available here")
+		}
 		id := a.ID
 		return &execScreen{cmd: tea.ExecProcess(cmd, func(err error) tea.Msg { return surfaceEnded{id: id, err: err} })}, nil
 	case actions.KindView:

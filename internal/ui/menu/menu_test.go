@@ -166,6 +166,8 @@ func TestRowsShowWhatCanOpen(t *testing.T) {
 	if diag := ids(m.Rows("diagnostics")); !strings.Contains(diag, "diag.doctor") {
 		t.Errorf("diagnostics = %q", diag)
 	}
+	// A menu whose palettes are there (it looks for surfaces once).
+	m = newMenu(ctxW, &fakeCore{})
 	m.env.Surface = func(id string) *exec.Cmd {
 		if id == "palette" || id == "palette.go" {
 			return exec.Command("true")
@@ -541,6 +543,34 @@ func TestClipCleans(t *testing.T) {
 		Targets: []actions.TargetResult{{Name: "Icy\x1b[1mKnoll", Status: "refused", Reason: "\x07it is working"}}}, 60)
 	if strings.ContainsAny(text, "\x1b\x07") {
 		t.Fatalf("targets text = %q", text)
+	}
+}
+
+// The menu looks for each surface once, not on every render (the
+// review's L5); it builds the command again only to run it, and a surface
+// gone by then is a note.
+func TestSurfaceLookedUpOnce(t *testing.T) {
+	m := newMenu(ctxW, &fakeCore{})
+	calls, there := 0, true
+	m.env.Surface = func(id string) *exec.Cmd {
+		calls++
+		if !there {
+			return nil
+		}
+		return exec.Command("true")
+	}
+	for range 5 {
+		_ = m.View()
+		press(m, "down")
+	}
+	looked := calls
+	if looked == 0 || looked > 4 {
+		t.Fatalf("%d lookups for 5 renders", looked)
+	}
+	there = false
+	press(m, "a")
+	if m.open != nil || !strings.Contains(m.note, "not available") || calls != looked+1 {
+		t.Fatalf("a gone surface: open %T, note %q, %d lookups", m.open, m.note, calls)
 	}
 }
 

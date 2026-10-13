@@ -67,6 +67,8 @@ type Model struct {
 	// stack holds the screens under the open one: a form a view opened
 	// returns to that view.
 	stack []screen
+	// surfaces is whether each surface is there, looked up once.
+	surfaces map[string]bool
 }
 
 // screen is what the menu shows instead of its list: a form, a view, the
@@ -97,7 +99,7 @@ type surfaceEnded struct {
 
 // New returns the menu for env.
 func New(env Env) *Model {
-	return &Model{env: env, theme: theme.Current(), width: 80, height: 24}
+	return &Model{env: env, theme: theme.Current(), width: 80, height: 24, surfaces: map[string]bool{}}
 }
 
 // Init implements tea.Model.
@@ -110,7 +112,7 @@ func (m *Model) Rows(level string) []actions.Action {
 		if m.shown(a) {
 			out = append(out, a)
 		}
-		if a.ID == "palette" && level == "" && m.surface(paletteGo.ID) != nil {
+		if a.ID == "palette" && level == "" && m.hasSurface(paletteGo.ID) {
 			out = append(out, paletteGo)
 		}
 	}
@@ -125,18 +127,30 @@ func (m *Model) shown(a actions.Action) bool {
 	case actions.KindGroup:
 		return true
 	case actions.KindSurface:
-		return m.surface(a.ID) != nil
+		return m.hasSurface(a.ID)
 	case actions.KindView:
 		return m.canView(a.ID)
 	}
 	return a.Visible()
 }
 
+// surface is the command of a surface, built when the menu runs it.
 func (m *Model) surface(id string) *exec.Cmd {
 	if m.env.Surface == nil {
 		return nil
 	}
 	return m.env.Surface(id)
+}
+
+// hasSurface reports whether a surface is there. It looks once per
+// surface: the rows and their keys ask on every render.
+func (m *Model) hasSurface(id string) bool {
+	ok, seen := m.surfaces[id]
+	if !seen {
+		ok = m.surface(id) != nil
+		m.surfaces[id] = ok
+	}
+	return ok
 }
 
 func (m *Model) canView(id string) bool {
@@ -295,7 +309,7 @@ func (m *Model) run(a actions.Action) tea.Cmd {
 func (m *Model) unavailable(a actions.Action) string {
 	switch a.Kind {
 	case actions.KindSurface:
-		if m.surface(a.ID) == nil {
+		if !m.hasSurface(a.ID) {
 			return "not available here"
 		}
 		return ""
