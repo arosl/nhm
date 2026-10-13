@@ -43,12 +43,15 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 	var force bool
 	fs.BoolVar(&force, "force", false, "")
 	fs.BoolVar(&force, "interrupt-force", false, "")
-	noWait := fs.Bool("no-wait", false, "")
+	var noWait, all bool
+	fs.BoolVar(&noWait, "no-wait", false, "")
+	fs.BoolVar(&noWait, "interrupt-no-wait", false, "")
 	var panes, types listFlag
 	fs.Var(&panes, "panes", "")
 	fs.Var(&types, "type", "")
 	// ntm's --all adds the user pane; nhm keeps none.
-	fs.Bool("all", false, "")
+	fs.BoolVar(&all, "all", false, "")
+	fs.BoolVar(&all, "interrupt-all", false, "")
 	dryRun := fs.Bool("dry-run", false, "")
 	opID := fs.String("op-id", "", "")
 	socket := fs.String("socket", "", "")
@@ -141,14 +144,20 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 		// An identical retry sends nothing: it reports the operation and
 		// whether its message went out.
 		out.Operation = &robot.OperationInfo{OperationID: res.OperationID, Kind: wait.VerbInterrupt, Status: res.Status, Replayed: true}
-		if msg != "" {
-			if stored, err := send.Stored(ctx, ie.db, sendOp); err == nil {
-				out.MessageSent = anySubmitted(stored)
-			}
+		stored, serr := send.Stored(ctx, ie.db, sendOp)
+		if msg != "" && serr == nil {
+			out.MessageSent = anySubmitted(stored)
 		}
-		if res.Status != "done" {
+		switch {
+		case res.Status != "done":
 			out.Success, out.ErrorCode = false, robot.ErrCodeInternalError
 			out.Error = fmt.Sprintf("operation %s was claimed before with status %s; nothing was sent again", res.OperationID, res.Status)
+		case msg != "" && serr != nil:
+			// The first run stopped before its message (no agent was
+			// ready, or the run died): the replay does not guess.
+			out.Success, out.ErrorCode = false, robot.ErrCodeInternalError
+			out.Error = fmt.Sprintf("operation %s interrupted the agents but recorded no message; the message was not sent", res.OperationID)
+			out.Hint = "Send it with --robot-send=SESSION --msg=..., or interrupt again with a new --op-id"
 		}
 		return robotInterruptWrite(stdout, out)
 	}
@@ -169,24 +178,25 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 		case wait.InterruptSent:
 			out.Interrupted = append(out.Interrupted, key)
 			sent = append(sent, list[i])
-		case wait.InterruptSkipped:
-			out.ReadyForInput = append(out.ReadyForInput, key)
-		case wait.InterruptWouldSend:
-			out.WouldAffect = append(out.WouldAffect, key)
+		case wait.InterruptSkipped, wait.InterruptWouldSend:
+			if *dryRun {
+				// ntm's dry run names every target in order, the ones at
+				// their prompt too.
+				out.WouldAffect = append(out.WouldAffect, key)
+			} else {
+				out.ReadyForInput = append(out.ReadyForInput, key)
+			}
 		default:
 			out.Failed = append(out.Failed, robot.InterruptError{Pane: key, Reason: t.Status + ": " + t.Reason})
 		}
 	}
 	if *dryRun {
-		// ntm's dry run names every target, the ones at their prompt too.
-		out.WouldAffect = append(out.WouldAffect, out.ReadyForInput...)
-		out.ReadyForInput = []string{}
 		out.CompletedAt = time.Now().UTC()
 		return robotInterruptWrite(stdout, out)
 	}
 
 	switch {
-	case *noWait:
+	case noWait:
 		out.ReadyForInput = append(out.ReadyForInput, out.Interrupted...)
 	case len(sent) > 0:
 		ready := robotInterruptWait(ctx, ie, bs, sent, timeout)

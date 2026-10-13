@@ -65,17 +65,19 @@ func TestRobotInterruptRuForm(t *testing.T) {
 }
 
 // --force sends every agent its key; --no-wait reports them ready at once;
-// a dry run sends nothing and names every target.
+// a dry run sends nothing and names every target, in target order.
+// ntm's --interrupt-* spellings are taken.
 func TestRobotInterruptForceNoWaitDryRun(t *testing.T) {
 	s, inst, h := newSendInstance(t)
 	ownNhm(t, inst)
+	h.status["w1:p2"] = "working"
 	keys := interruptKeys(s, h)
 	t.Setenv("HERDR_PANE_ID", "")
 	out, code := robotJSON(t, "--robot-interrupt=swarm", "--dry-run", "--socket", s.SocketPath)
 	if code != 0 || out["dry_run"] != true || strings.Join(strs(out["would_affect"]), ",") != "0.1,1.1" || len(keys()) != 0 {
 		t.Fatalf("dry run = %d %v, keys %v", code, out, keys())
 	}
-	out, code = robotJSON(t, "--robot-interrupt=swarm", "--interrupt-force", "--no-wait", "--socket", s.SocketPath)
+	out, code = robotJSON(t, "--robot-interrupt=swarm", "--interrupt-force", "--interrupt-no-wait", "--interrupt-all", "--socket", s.SocketPath)
 	if code != 0 || strings.Join(strs(out["interrupted"]), ",") != "0.1,1.1" || len(strs(out["ready_for_input"])) != 2 || len(keys()) != 2 {
 		t.Fatalf("force = %d %v, keys %v", code, out, keys())
 	}
@@ -96,6 +98,16 @@ func TestRobotInterruptTimesOut(t *testing.T) {
 	}
 	if out, code = robotJSON(t, "--robot-interrupt=swarm", "--panes=9.9", "--socket", s.SocketPath); code != 1 || out["error_code"] != "PANE_NOT_FOUND" {
 		t.Fatalf("no pane = %d %v", code, out)
+	}
+	// With --msg, no agent was ready, so no message went out; a replay of
+	// the op id says so instead of success.
+	args := []string{"--robot-interrupt=swarm", "--panes=0.1", "--msg=Fix it", "--op-id=int-2", "--timeout=200ms", "--socket", s.SocketPath}
+	if out, code = robotJSON(t, args...); code != 1 || out["error_code"] != "TIMEOUT" || out["message_sent"] != false {
+		t.Fatalf("timeout with a message = %d %v", code, out)
+	}
+	out, code = robotJSON(t, args...)
+	if code != 1 || out["error_code"] != "INTERNAL_ERROR" || out["message_sent"] != false || !strings.Contains(out["error"].(string), "recorded no message") {
+		t.Fatalf("replay without a message = %d %v", code, out)
 	}
 }
 
