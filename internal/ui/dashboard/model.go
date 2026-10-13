@@ -56,6 +56,9 @@ type Config struct {
 	// History reads the recent send history (history.ReadRecent); nil
 	// leaves the history panel out.
 	History func() ([]history.HistoryEntry, error)
+	// Read reads a pane's last lines for the read view (space r); nil
+	// leaves the read view out.
+	Read func(ctx context.Context, paneID string, lines int) (string, error)
 	// Now is time.Now in production.
 	Now func() time.Time
 	// CallTimeout bounds each call a key starts (default 5 s).
@@ -73,6 +76,7 @@ const (
 	viewUsage
 	viewActions
 	viewForm
+	viewRead
 )
 
 // tickEvery is how often the program lets the feeds start the reads that
@@ -125,6 +129,8 @@ type Model struct {
 	history          *panels.HistoryPanel
 	historySeq       uint64
 	historyAt        time.Time
+
+	read readState
 }
 
 // inboxState is the inbox view's request and its answer.
@@ -176,10 +182,11 @@ func New(cfg Config) (*Model, error) {
 	m.keys.MailRefresh.SetEnabled(cfg.Board.Mail != nil)
 	if cfg.NewOperationID != nil {
 		m.guard = actions.NewGuard(cfg.NewOperationID)
-		for _, a := range actions.Space() {
-			if a.Visible() && agentform.Supports(a.ID) {
-				m.menu = append(m.menu, a)
-			}
+	}
+	for _, a := range actions.Space() {
+		// The forms need the guard; the read view is the board's own.
+		if a.ID == readActionID && cfg.Read != nil || m.guard != nil && a.Visible() && agentform.Supports(a.ID) {
+			m.menu = append(m.menu, a)
 		}
 	}
 	m.keys.Actions.SetEnabled(len(m.menu) > 0)
@@ -330,11 +337,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastBinary = now
 			m.upgraded = m.cfg.Binary.Check() != nil
 		}
-		cmds := []tea.Cmd{m.tick()}
+		cmds := []tea.Cmd{m.tick(), m.readTick(now)}
 		if m.history != nil && !m.b.Paused() && now.Sub(m.historyAt) >= historyEvery {
 			cmds = append(cmds, m.readHistory())
 		}
 		return m, tea.Batch(cmds...)
+	case readMsg:
+		m.readUpdate(msg)
+		return m, nil
 	case historyMsg:
 		if msg.seq == m.historySeq && m.history != nil {
 			m.history.SetEntries(m.workspaceHistory(msg.entries), msg.err)
@@ -378,6 +388,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch m.view {
+	case viewRead:
+		return m, m.readKey(msg)
 	case viewForm:
 		cmd := m.form.Update(msg)
 		m.track(m.form)
@@ -395,9 +407,13 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		for _, a := range m.menu {
-			if msg.String() == a.Board.Space {
-				return m, m.openForm(a)
+			if msg.String() != a.Board.Space {
+				continue
 			}
+			if a.ID == readActionID {
+				return m, m.openRead()
+			}
+			return m, m.openForm(a)
 		}
 		return m, nil
 	}

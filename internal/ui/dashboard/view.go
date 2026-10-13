@@ -27,6 +27,9 @@ const (
 // View renders the board.
 func (m *Model) View() string {
 	w, h := max(m.width, minWidth), max(m.height, minHeight)
+	if m.view == viewRead {
+		return m.readView(w, h)
+	}
 	main := m.mainView(w, h)
 	var modal string
 	switch m.view {
@@ -430,7 +433,8 @@ func (m *Model) actionsBody() string {
 	dim := lipgloss.NewStyle().Foreground(m.theme.Overlay)
 	for _, a := range m.menu {
 		line := fmt.Sprintf("%s  %-10s %s", a.Board.Space, a.Label, a.Help)
-		if why := a.Unavailable(m.cfg.Context, m.cfg.Core); why != "" {
+		// The read view is the board's own, not a handler of the table.
+		if why := a.Unavailable(m.cfg.Context, m.cfg.Core); why != "" && a.ID != readActionID {
 			line = dim.Render(line + " — " + why)
 		}
 		lines = append(lines, line)

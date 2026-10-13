@@ -156,6 +156,13 @@ func runGoBoard(stderr io.Writer) int {
 		Core:           uiCore(ie, c, uiJobs(ie, c)),
 		NewOperationID: func() (string, error) { return store.NewOperationID(time.Now()) },
 		History:        func() ([]history.HistoryEntry, error) { return history.ReadRecent(200) },
+		// The read view reads as nhm read --source recent does.
+		Read: func(ctx context.Context, pane string, lines int) (string, error) {
+			strip := true
+			out, err := h.PaneRead(ctx, herdr.PaneReadParams{PaneID: pane, Source: herdr.ReadRecent, Format: herdr.FormatText,
+				Lines: &lines, StripANSI: &strip})
+			return out.Text, err
+		},
 		Zoom: func(ctx context.Context, ws, pane string) error {
 			if err := h.WorkspaceFocus(ctx, ws); err != nil {
 				return err

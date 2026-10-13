@@ -590,6 +590,77 @@ func TestHistoryPanelOnTheBoard(t *testing.T) {
 	}
 }
 
+// space r reads the cursor's pane, cleaned and bounded; it follows the
+// pane on the tick until p pauses it; scrolling back pauses it too; two
+// marked agents are refused; an older read's answer is dropped.
+func TestReadView(t *testing.T) {
+	var mu sync.Mutex
+	reads := 0
+	text := "line 1\nline 2\n\x1b]0;evil\x07\x1b[2Jline 3"
+	m := newModel(t, Config{Read: func(_ context.Context, pane string, lines int) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reads++
+		if pane != "w1:p1" || lines != ReadLines {
+			return "", errors.New("wrong pane " + pane)
+		}
+		return text, nil
+	}})
+	cmd := press(m, "space", "r")
+	if m.view != viewRead || cmd == nil {
+		t.Fatalf("view %d", m.view)
+	}
+	m.Update(cmd())
+	raw := m.View()
+	if v := ansi.Strip(raw); !strings.Contains(v, "read IcyKnoll · w1:p1 · following") || !strings.Contains(v, "line 3") ||
+		strings.Contains(raw, "evil") || strings.Contains(raw, "\x1b[2J") {
+		t.Fatalf("read view:\n%s", ansi.Strip(raw))
+	}
+	// The tick reads again while following.
+	_, tick := m.Update(tickMsg(time.Now().Add(2 * time.Second)))
+	runAll(m, tick)
+	if reads != 2 {
+		t.Fatalf("%d reads after a tick", reads)
+	}
+	press(m, "p")
+	_, tick = m.Update(tickMsg(time.Now().Add(10 * time.Second)))
+	runAll(m, tick)
+	if reads != 2 || !strings.Contains(plain(m), "paused") {
+		t.Fatalf("%d reads while paused:\n%s", reads, plain(m))
+	}
+	stale := readMsg{seq: m.read.seq - 1, text: "stale"}
+	m.Update(stale)
+	if strings.Contains(plain(m), "stale") {
+		t.Fatal("an older read was taken")
+	}
+	press(m, "esc")
+	if m.view != viewMain {
+		t.Fatal("esc did not close the read view")
+	}
+	press(m, "x", "j", "x", "space", "r")
+	if m.view != viewMain || !strings.Contains(plain(m), "read takes one agent") {
+		t.Fatalf("two marks:\n%s", plain(m))
+	}
+}
+
+// runAll runs a command, batches too, and hands each message back.
+func runAll(m *Model, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runAll(m, c)
+		}
+		return
+	}
+	if _, isTick := msg.(tickMsg); isTick {
+		return // the next tick is the test's to send
+	}
+	m.Update(msg)
+}
+
 // Disabled keys do nothing: space, ctrl+w and tab until their actions
 // exist.
 func TestNoDeadKeys(t *testing.T) {
