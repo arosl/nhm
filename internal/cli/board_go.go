@@ -86,6 +86,9 @@ func openGoBoard(stderr io.Writer) int {
 // pane. It acts on the workspace it was opened for and never falls back
 // to the focused one.
 func runGoBoard(stderr io.Writer) int {
+	// The path the board was started by, before anything changes the
+	// working directory: an upgrade switches the links it resolves through.
+	launch, launchErr := board.LaunchPath()
 	c, err := popupContext()
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm board: %v\n", err)
@@ -148,9 +151,14 @@ func runGoBoard(stderr io.Writer) int {
 		return exitRefused
 	}
 	defer b.Close()
-	bin, err := board.WatchBinary("")
-	if err != nil {
-		fmt.Fprintf(stderr, "nhm board: warning: %v; the board cannot see an upgrade\n", err)
+	// A board that cannot see an upgrade takes no actions (it fails closed).
+	var bin *board.Binary
+	if launchErr == nil {
+		bin, launchErr = board.WatchBinary(launch)
+	}
+	if launchErr != nil {
+		fmt.Fprintf(stderr, "nhm board: %v; the board takes no actions\n", launchErr)
+		bin = board.Unwatched(launchErr)
 	}
 	h := ie.herdr
 	// The action menu runs the table's actions on the core: a mutation is

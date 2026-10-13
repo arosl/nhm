@@ -112,9 +112,11 @@ type Model struct {
 	filterText string
 	filterPrev string
 
-	status     string
-	statusErr  bool
-	upgraded   bool
+	status    string
+	statusErr bool
+	// frozen is why the board takes no mutations (an upgrade on disk, a
+	// binary it cannot watch); once set, it stays until the board ends.
+	frozen     error
 	lastBinary time.Time
 
 	inbox inboxState
@@ -349,9 +351,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		now := time.Time(msg)
 		m.b.Tick(now)
-		if m.cfg.Binary != nil && !m.upgraded && now.Sub(m.lastBinary) >= binaryEvery {
+		if now.Sub(m.lastBinary) >= binaryEvery {
+			// The banner's check; every mutation checks again itself.
 			m.lastBinary = now
-			m.upgraded = m.cfg.Binary.Check() != nil
+			_ = m.Frozen()
 		}
 		cmds := []tea.Cmd{m.tick(), m.readTick(now)}
 		if m.history != nil && !m.b.Paused() && now.Sub(m.historyAt) >= historyEvery {
@@ -680,7 +683,12 @@ func (m *Model) track(f *forms.AgentForm) {
 // it is never dropped or swapped for the row in its place.
 func (m *Model) openForm(a actions.Action) tea.Cmd {
 	tg := m.b.Sel.Targets()
-	switch {
+	switch err := m.Frozen(); {
+	case err != nil:
+		// The form refuses at its confirm too (WithFrozen).
+		m.view = viewMain
+		m.say(true, err.Error())
+		return nil
 	case tg.From == board.FromNone:
 		m.view = viewMain
 		m.say(true, "no agent: move the cursor to one, or mark some with x")
@@ -715,17 +723,16 @@ func (m *Model) openForm(a actions.Action) tea.Cmd {
 	return f.Init()
 }
 
-// Upgraded reports whether the binary changed on disk: the board then
-// refuses new mutations until it is reopened.
-func (m *Model) Upgraded() bool { return m.upgraded }
-
-// Frozen returns board.ErrUpgraded after an upgrade on disk, else nil.
-// Every mutation the board starts checks it first.
+// Frozen returns why the board takes no new mutations, else nil:
+// board.ErrUpgraded after an upgrade on disk, board.ErrUnwatched when it
+// cannot watch its binary. It checks the binary each time (a stat), so a
+// confirm right after an upgrade is refused too. Every mutation the board
+// starts, and every surface it hands a selection to, checks it first.
 func (m *Model) Frozen() error {
-	if m.upgraded {
-		return board.ErrUpgraded
+	if m.frozen == nil && m.cfg.Binary != nil {
+		m.frozen = m.cfg.Binary.Check()
 	}
-	return nil
+	return m.frozen
 }
 
 // rowName is a row's name: the Mail name, else herdr's name, else the

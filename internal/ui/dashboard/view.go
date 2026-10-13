@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -180,9 +181,13 @@ func (m *Model) header(w int) string {
 	for _, p := range m.b.Problems(m.cfg.Now()) {
 		lines = append(lines, warn.Render(ansi.Truncate("not fresh: "+board.Clean(p), w, "…")))
 	}
-	if m.upgraded {
+	switch err := m.frozen; {
+	case errors.Is(err, board.ErrUpgraded):
 		lines = append(lines, lipgloss.NewStyle().Foreground(m.theme.Error).Bold(true).Render(
 			ansi.Truncate("nhm was upgraded on disk: this board takes no new actions; reopen it (prefix+d)", w, "…")))
+	case err != nil:
+		lines = append(lines, lipgloss.NewStyle().Foreground(m.theme.Error).Bold(true).Render(
+			ansi.Truncate(board.Clean(err.Error()), w, "…")))
 	}
 	if m.b.Model() == nil && len(m.b.Problems(m.cfg.Now())) == 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(m.theme.Overlay).Render("reading…"))

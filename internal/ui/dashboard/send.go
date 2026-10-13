@@ -33,7 +33,11 @@ type paletteMsg struct {
 func (m *Model) openPalette() tea.Cmd {
 	m.view = viewMain
 	tg := m.b.Sel.Targets()
-	switch {
+	switch err := m.Frozen(); {
+	case err != nil:
+		// The palette sends: a frozen board hands it no selection.
+		m.say(true, err.Error())
+		return nil
 	case tg.From == board.FromNone:
 		m.say(true, "no agent: move the cursor to one, or mark some with x")
 		return nil
@@ -78,7 +82,11 @@ type sentMsg struct {
 // composer. An invalid mark, an unbound agent or no agent refuses it.
 func (m *Model) openSend(a actions.Action) tea.Cmd {
 	tg := m.b.Sel.Targets()
-	switch {
+	switch err := m.Frozen(); {
+	case err != nil:
+		m.view = viewMain
+		m.say(true, err.Error())
+		return nil
 	case tg.From == board.FromNone:
 		m.view = viewMain
 		m.say(true, "no agent: move the cursor to one, or mark some with x")

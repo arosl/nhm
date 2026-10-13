@@ -92,6 +92,92 @@ func TestBinaryWatch(t *testing.T) {
 	}
 }
 
+// An install as install.sh does it: the new release goes in beside the
+// old one, and the links switch (releases/<version>, current). The old
+// file does not change; the board still sees the upgrade, by its launch
+// path (the plugin's "<plugin dir>/../nhm", a link through current).
+func TestBinaryWatchSeesALinkSwitch(t *testing.T) {
+	dir := t.TempDir()
+	release := func(name, version string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, "releases", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "releases", name, "nhm"), []byte(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		relink(t, name, filepath.Join(dir, "releases", version))
+		relink(t, filepath.Join("releases", version), filepath.Join(dir, "current"))
+	}
+	release("0.1.6@aaa.1", "0.1.6")
+	launch := filepath.Join(dir, "nhm")
+	if err := os.Symlink(filepath.Join("current", "nhm"), launch); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "releases", "0.1.6@aaa.1", "nhm")
+	w, err := WatchBinary(launch)
+	if err != nil || w.Path() != old {
+		t.Fatalf("WatchBinary = %v, %v", w, err)
+	}
+	if err := w.Check(); err != nil {
+		t.Fatalf("before the install: %v", err)
+	}
+	release("0.1.7@bbb.2", "0.1.7")
+	if err := w.Check(); !errors.Is(err, ErrUpgraded) {
+		t.Fatalf("after current switched to a new release: %v", err)
+	}
+	if data, err := os.ReadFile(old); err != nil || string(data) != "0.1.6@aaa.1" {
+		t.Fatalf("the old release changed: %q, %v", data, err)
+	}
+	// The same version installed again: releases/<version> switches.
+	w, _ = WatchBinary(launch)
+	release("0.1.7@ccc.3", "0.1.7")
+	if err := w.Check(); !errors.Is(err, ErrUpgraded) {
+		t.Fatalf("after the same version was installed again: %v", err)
+	}
+}
+
+// relink points the link at target by one rename, as install.sh does.
+func relink(t *testing.T, target, link string) {
+	t.Helper()
+	tmp := link + ".new"
+	if err := os.Symlink(target, tmp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A board that cannot watch its binary is frozen from the start.
+func TestUnwatchedBinaryIsFrozen(t *testing.T) {
+	if _, err := WatchBinary(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("a missing binary was watched")
+	}
+	err := Unwatched(errors.New("no such file")).Check()
+	if !errors.Is(err, ErrUnwatched) || !strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("Check = %v", err)
+	}
+}
+
+// The launch path is os.Args[0] made absolute, a relative one too.
+func TestLaunchPathIsAbsolute(t *testing.T) {
+	arg0 := os.Args[0]
+	t.Cleanup(func() { os.Args[0] = arg0 })
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Args[0] = filepath.Join("..", "nhm")
+	if got, err := LaunchPath(); err != nil || got != filepath.Join(filepath.Dir(cwd), "nhm") {
+		t.Fatalf("LaunchPath = %q, %v", got, err)
+	}
+	os.Args[0] = arg0
+	if got, err := LaunchPath(); err != nil || !filepath.IsAbs(got) {
+		t.Fatalf("LaunchPath = %q, %v", got, err)
+	}
+}
+
 func TestCleanRemovesControls(t *testing.T) {
 	in := "a\x1b[2J\x1b[Hb\x1b]0;evil\x07c\x1b]8;;http://x\x1b\\d\x07\x08e\r\n\tf\u009bg\x1bPh"
 	if got := Clean(in); got != "abcde\n\tfgh" {

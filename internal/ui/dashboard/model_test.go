@@ -369,8 +369,9 @@ func TestTableKeepsTheCursorInView(t *testing.T) {
 	}
 }
 
-// After the binary changes on disk, the board says so and refuses new
-// mutations.
+// After the binary changes on disk, the board refuses new mutations at
+// once, with no tick between, and says so. The palette and the composer
+// do not open either: they would send.
 func TestUpgradeFreezes(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "nhm")
@@ -381,7 +382,10 @@ func TestUpgradeFreezes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := newModel(t, Config{Binary: w})
+	ic := &interruptCore{}
+	palettes := 0
+	m := newModel(t, Config{Binary: w, Core: ic.core(), NewOperationID: opIDs(),
+		OpenPalette: func(context.Context, ui.Context) error { palettes++; return nil }})
 	m.Update(tickMsg(time.Now()))
 	if m.Frozen() != nil {
 		t.Fatal("frozen before an upgrade")
@@ -392,9 +396,37 @@ func TestUpgradeFreezes(t *testing.T) {
 	if err := os.Rename(bin+".new", bin); err != nil {
 		t.Fatal(err)
 	}
+	if !errors.Is(m.Frozen(), board.ErrUpgraded) {
+		t.Fatal("not frozen before the next tick")
+	}
 	m.Update(tickMsg(time.Now().Add(2 * time.Second)))
-	if !errors.Is(m.Frozen(), board.ErrUpgraded) || !strings.Contains(plain(m), "upgraded on disk") {
+	if !strings.Contains(plain(m), "upgraded on disk") {
+		t.Fatalf("no banner:\n%s", plain(m))
+	}
+	for _, k := range []string{"x", "s", "a"} {
+		cmd := press(m, "space", k)
+		runAll(m, cmd)
+		if m.view != viewMain || !strings.Contains(plain(m), "reopen the board") {
+			t.Fatalf("space %s on a frozen board: view %d\n%s", k, m.view, plain(m))
+		}
+	}
+	if len(ic.asked) != 0 || palettes != 0 {
+		t.Fatalf("a frozen board acted: %v, %d palettes", ic.asked, palettes)
+	}
+}
+
+// A board that cannot watch its binary is frozen from the start, and
+// says why.
+func TestUnwatchedBoardTakesNoActions(t *testing.T) {
+	ic := &interruptCore{}
+	m := newModel(t, Config{Binary: board.Unwatched(errors.New("no launch path")), Core: ic.core(), NewOperationID: opIDs()})
+	m.Update(tickMsg(time.Now()))
+	if !errors.Is(m.Frozen(), board.ErrUnwatched) || !strings.Contains(plain(m), "cannot be watched") {
 		t.Fatalf("not frozen:\n%s", plain(m))
+	}
+	press(m, "space", "x")
+	if m.view != viewMain || len(ic.asked) != 0 {
+		t.Fatalf("view %d, asked %v", m.view, ic.asked)
 	}
 }
 
