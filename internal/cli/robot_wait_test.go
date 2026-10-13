@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -76,24 +75,42 @@ func TestRobotWaitTransitionTimesOut(t *testing.T) {
 	}
 }
 
-// --exit-on-error: a gone agent ends the wait at once with AGENT_ERROR;
-// the other agent, still working, does not hold it to the deadline.
+// --exit-on-error: a gone agent ends the wait at once with ntm's
+// AGENT_ERROR sentence; the other agent, still working, does not hold it
+// to the deadline.
 func TestRobotWaitExitOnError(t *testing.T) {
+	var mu sync.Mutex
+	icy := "working"
 	s, _, _ := waitInstance(t, func(pane string) map[string]any {
 		if pane == "w1:p2" {
 			return nil
 		}
-		return agentMap(pane, "claude", "working", 4, 0)
+		mu.Lock()
+		defer mu.Unlock()
+		return agentMap(pane, "claude", icy, 4, 0)
 	})
 	start := time.Now()
 	code, v := robotWaitRun(t, "--robot-wait=swarm", "--exit-on-error", "--timeout=10s", "--poll=5ms", "--socket", s.SocketPath)
 	agents, _ := v["agents"].([]any)
+	targets, _ := v["_nhm"].(map[string]any)["targets"].([]any)
 	if code != 1 || v["error_code"] != "AGENT_ERROR" || len(agents) != 1 || agents[0].(map[string]any)["pane"] != "1.1" ||
-		!strings.Contains(v["error"].(string), "continuity_lost") {
+		v["error"] != "agent error detected in pane '1.1'" || len(targets) != 2 || targets[1].(map[string]any)["outcome"] != "continuity_lost" {
 		t.Fatalf("exit on error = %d %v", code, v)
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Fatalf("exit on error waited %s", d)
+	}
+	// Without the flag, as in ntm, the gone agent holds the wait to its
+	// deadline, though IcyKnoll meets idle at once; the answer is TIMEOUT
+	// with the gone one pending.
+	mu.Lock()
+	icy = "idle"
+	mu.Unlock()
+	start = time.Now()
+	code, v = robotWaitRun(t, "--robot-wait=swarm", "--timeout=300ms", "--poll=5ms", "--socket", s.SocketPath)
+	pending, _ := v["agents_pending"].([]any)
+	if code != 1 || v["error_code"] != "TIMEOUT" || len(pending) != 1 || pending[0] != "1.1" || time.Since(start) < 300*time.Millisecond {
+		t.Fatalf("without exit on error = %d %v after %s", code, v, time.Since(start))
 	}
 }
 
@@ -109,7 +126,7 @@ func TestRobotWaitRefusals(t *testing.T) {
 		code int
 		ec   string
 	}{
-		{[]string{"--condition=complete"}, 2, "NOT_IMPLEMENTED"},
+		{[]string{"--condition=stalled"}, 2, "NOT_IMPLEMENTED"},
 		{[]string{"--wait-until=idle,healthy"}, 2, "NOT_IMPLEMENTED"},
 		{[]string{"--condition=finished"}, 1, "INVALID_FLAG"},
 		{[]string{"--wait-timeout=0s"}, 1, "INVALID_FLAG"},
@@ -128,8 +145,16 @@ func TestRobotWaitRefusals(t *testing.T) {
 	if code, v := robotWaitRun(t, "--robot-wait=", "--socket", s.SocketPath); code != 1 || v["error_code"] != "INVALID_FLAG" {
 		t.Errorf("no session = %d %v", code, v)
 	}
-	// Without --transition an idle agent meets idle at once.
-	if code, v := robotWaitRun(t, "--robot-wait=swarm", "--wait-panes=w1:p1", "--socket", s.SocketPath); code != 0 || v["success"] != true {
-		t.Errorf("idle = %d %v", code, v)
+	// Without --transition an idle agent meets idle at once, and
+	// complete, which herdr's hooks make the same state. --type takes
+	// ntm's short name.
+	for _, extra := range []string{"--wait-panes=w1:p1", "--condition=complete", "--type=cc"} {
+		args := []string{"--robot-wait=swarm", "--socket", s.SocketPath, extra}
+		if extra != "--wait-panes=w1:p1" {
+			args = append(args, "--panes=0.1")
+		}
+		if code, v := robotWaitRun(t, args...); code != 0 || v["success"] != true {
+			t.Errorf("%s = %d %v", extra, code, v)
+		}
 	}
 }

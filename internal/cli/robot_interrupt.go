@@ -85,7 +85,7 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "Use --robot-status to list available sessions", *format, robotError, now)
 	}
 	bs := bindings.NewStore(ie.db)
-	sel := wait.Selector{Kinds: types}
+	sel := wait.Selector{Kinds: robotKinds(types)}
 	if len(panes) == 0 {
 		sel.Exclude = ie.callerPane(ctx)
 	}

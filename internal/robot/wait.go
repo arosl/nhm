@@ -17,6 +17,7 @@ const (
 // Wait conditions nhm answers, ntm's names.
 const (
 	WaitConditionIdle       = "idle"
+	WaitConditionComplete   = "complete"
 	WaitConditionGenerating = "generating"
 	WaitConditionHealthy    = "healthy"
 )

@@ -686,7 +686,7 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, err.Error(), "", *format, robotError, now)
 	}
 	req := send.Request{Message: text, OperationID: *opID, DryRun: *dryRun, Source: history.SourceRobot,
-		Caller: ie.callerPane(ctx), Selector: pinSelection(send.Selector{All: *all, Panes: panes, Kinds: types}, expect),
+		Caller: ie.callerPane(ctx), Selector: pinSelection(send.Selector{All: *all, Panes: panes, Kinds: robotKinds(types)}, expect),
 		Expect: expect, Enrich: enrichment}
 	if err := ie.fillScope(ctx, &req, *sendS, ""); err != nil {
 		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "list sessions: nhm --robot-status", *format, robotError, now)

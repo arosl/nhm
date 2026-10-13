@@ -13,6 +13,7 @@ import (
 	"github.com/arosl/nhm/compat"
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
 )
 
@@ -135,6 +136,28 @@ func hasRobotFlag(args []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// robotKinds maps ntm's --type values to nhm's kinds: a kind's name,
+// its short flag (cc, cod) or ntm's type name (antigravity). Another
+// value stays as given, so it matches no agent, as in ntm.
+func robotKinds(types []string) []string {
+	out := make([]string, len(types))
+	for i, t := range types {
+		v := strings.ToLower(t)
+		out[i] = v
+		if a, ok := kinds.Default().ByFlag(v); ok {
+			out[i] = a.Name
+			continue
+		}
+		for _, a := range kinds.All() {
+			if a.NTMType == v {
+				out[i] = a.Name
+				break
+			}
+		}
+	}
+	return out
 }
 
 // unknownRobotFlag returns the first --robot-* flag this nhm does not
