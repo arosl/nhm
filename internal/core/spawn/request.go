@@ -56,6 +56,9 @@ type Request struct {
 	WorkspaceID string
 	// Add refuses a missing workspace instead of creating it.
 	Add bool
+	// Safety refuses a workspace that exists already: --robot-spawn's
+	// --spawn-safety, as ntm refuses to reuse a session (ErrSessionExists).
+	Safety bool
 	// ProjectRoot is the agents' cwd and the Agent Mail project key.
 	ProjectRoot string
 	ProjectID   string

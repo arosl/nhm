@@ -164,6 +164,8 @@ var (
 	ErrRefused          = errors.New("admission refused the spawn")
 	ErrNoWorkspace      = errors.New("no such workspace")
 	ErrAmbiguousSession = errors.New("the session label names more than one workspace")
+	// ErrSessionExists: Request.Safety, and the session's workspace exists.
+	ErrSessionExists = errors.New("spawn safety")
 )
 
 // Ready reports whether every agent became ready.
@@ -198,6 +200,11 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 	if ws == "" && req.Add {
 		return res, fmt.Errorf("%w: %s (nhm add needs an existing workspace; nhm spawn creates it)", ErrNoWorkspace, req.Session)
+	}
+	if ws != "" && req.Safety {
+		// ntm's words (internal/robot/spawn.go, setSpawnSafetyConflict).
+		return res, fmt.Errorf("%w: session '%s' already exists (--spawn-safety mode prevents reuse; use 'nhm kill %s' first)",
+			ErrSessionExists, req.Session, req.Session)
 	}
 	res.WorkspaceID, res.WorkspaceNew = ws, ws == ""
 	kickoff, err := kickoffBody(req)
