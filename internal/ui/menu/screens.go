@@ -478,6 +478,10 @@ func (s *confirmScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	switch k.String() {
 	case "esc":
 		return nil, true
+	case "r":
+		if s.f.CanReview() {
+			return s.f.StartReview(), false
+		}
 	case "enter":
 		switch s.f.Phase() {
 		case forms.Reviewed:
@@ -510,7 +514,11 @@ func (s *confirmScreen) View(width, _ int) string {
 		if err := s.f.Err(); err != nil {
 			b.WriteString("\n" + clip(err.Error(), width) + "\n")
 		}
-		b.WriteString("\nenter or esc: back\n")
+		if s.f.CanReview() {
+			b.WriteString("\nr: read again · enter or esc: back\n")
+		} else {
+			b.WriteString("\nenter or esc: back\n")
+		}
 	}
 	return b.String()
 }

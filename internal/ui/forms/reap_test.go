@@ -166,13 +166,20 @@ func TestReapRefusalsAndFailures(t *testing.T) {
 	if f.Phase() != Failed || f.Confirm() != nil {
 		t.Fatalf("a failed review: %v", f.Phase())
 	}
-	// The confirm's refusal (the owner, say) is the form's error.
-	fc = &fakeCore{reapRes: [][]lifecycle.ReapItem{reapReview}}
-	f = NewReapForm(newRunner(t, "workspace.reap", fc.core()), ctxW, time.Minute)
+	// A failed review runs again: nothing was submitted (the review's L4).
+	fc.reapErr, fc.reapRes = nil, [][]lifecycle.ReapItem{reapReview}
+	if !f.CanReview() {
+		t.Fatal("a failed review cannot run again")
+	}
 	f.Update(do(t, f.StartReview()))
+	if f.Phase() != Reviewed {
+		t.Fatalf("the review again: %v %v", f.Phase(), f.Err())
+	}
+	// The confirm's refusal (the owner, say) is the form's error, and the
+	// form never reviews after its confirm went out.
 	fc.reapErr = fmt.Errorf("%w: nhm does not own this server", lifecycle.ErrRefused)
 	f.Update(do(t, f.Confirm()))
-	if f.Phase() != Failed || !errors.Is(f.Err(), lifecycle.ErrRefused) {
-		t.Fatalf("a refused reap: %v %v", f.Phase(), f.Err())
+	if f.Phase() != Failed || !errors.Is(f.Err(), lifecycle.ErrRefused) || f.CanReview() || f.StartReview() != nil {
+		t.Fatalf("a refused reap: %v %v, can review %v", f.Phase(), f.Err(), f.CanReview())
 	}
 }

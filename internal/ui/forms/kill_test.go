@@ -92,17 +92,26 @@ func TestKillReviewRefusesOrFails(t *testing.T) {
 		t.Fatalf("refused review: %v %+v", f.Phase(), f.Review())
 	}
 	fc = &fakeCore{killErr: errors.New("herdr: socket closed")}
-	if f := reviewedKill(t, fc.core()); f.Phase() != Failed {
+	f = reviewedKill(t, fc.core())
+	if f.Phase() != Failed {
 		t.Fatalf("failed review: %v", f.Phase())
 	}
-	// A kill that stops partway is no success.
-	fc = &fakeCore{killErr: errYes}
-	f = reviewedKill(t, fc.core())
+	// A failed review runs again: nothing was submitted (the review's L4).
+	fc.killErr = errYes
+	if !f.CanReview() {
+		t.Fatal("a failed review cannot run again")
+	}
+	f.Update(do(t, f.StartReview()))
+	if f.Phase() != Reviewed {
+		t.Fatalf("the checks again: %v %v", f.Phase(), f.Err())
+	}
+	// A kill that stops partway is no success, and the form never
+	// reviews after its confirm went out.
 	f.Type("proj-a")
 	fc.killRes, fc.killErr = lifecycle.KillResult{Refusals: []string{"BlueLake: it is working"}}, fmt.Errorf("%w: BlueLake", lifecycle.ErrRefused)
 	f.Update(do(t, f.Confirm()))
-	if f.Phase() != Failed || f.Result().Status != "refused" {
-		t.Fatalf("a refused kill: %v %+v", f.Phase(), f.Result())
+	if f.Phase() != Failed || f.Result().Status != "refused" || f.CanReview() || f.StartReview() != nil {
+		t.Fatalf("a refused kill: %v %+v, can review %v", f.Phase(), f.Result(), f.CanReview())
 	}
 }
 

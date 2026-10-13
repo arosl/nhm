@@ -38,10 +38,22 @@ func TestConfirmFormStopsARunOnce(t *testing.T) {
 	if f.Phase() != Done || asked[1] != "stop run-1 op-1" || f.Result().Status != ensemble.RunStopped {
 		t.Fatalf("stop: %v %v %+v", f.Phase(), asked, f.Result())
 	}
+	if f.CanReview() || f.StartReview() != nil {
+		t.Fatal("the form reviewed after its confirm went out")
+	}
 	status = ensemble.RunStopped
 	g := NewConfirmForm(newRunner(t, "ensemble.stop", core), req)
 	g.Update(do(t, g.StartReview()))
 	if g.Phase() != Refused || g.Confirm() != nil {
 		t.Fatalf("a stopped run: %v %v", g.Phase(), g.Err())
+	}
+	// A refused review runs again: nothing was submitted (the review's L4).
+	status = ensemble.RunRunning
+	if !g.CanReview() {
+		t.Fatal("a refused review cannot run again")
+	}
+	g.Update(do(t, g.StartReview()))
+	if g.Phase() != Reviewed {
+		t.Fatalf("the review again: %v %v", g.Phase(), g.Err())
 	}
 }

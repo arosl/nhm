@@ -19,6 +19,9 @@ type ConfirmForm struct {
 	review  actions.Result
 	result  actions.Result
 	err     error
+	// submitted is true once the confirm went out: the form never reviews
+	// again after it.
+	submitted bool
 }
 
 // NewConfirmForm is a form for req, the request as it will be submitted.
@@ -39,9 +42,13 @@ func (f *ConfirmForm) Result() actions.Result { return f.result }
 // Err is the error the form ended with.
 func (f *ConfirmForm) Err() error { return f.err }
 
+// CanReview reports whether the dry run may run again: until the confirm
+// goes out, also after a review that failed or refused.
+func (f *ConfirmForm) CanReview() bool { return !f.submitted && f.phase != Running }
+
 // StartReview runs the dry run under the review's operation id.
 func (f *ConfirmForm) StartReview() tea.Cmd {
-	if f.phase >= Running {
+	if !f.CanReview() {
 		return nil
 	}
 	key, opID, err := f.run.review(f.req)
@@ -67,7 +74,7 @@ func (f *ConfirmForm) Confirm() tea.Cmd {
 	}
 	req := f.req
 	req.OperationID = opID
-	f.phase, f.request = Running, nextRequest()
+	f.phase, f.request, f.submitted = Running, nextRequest(), true
 	return f.run.do(f.request, req)
 }
 

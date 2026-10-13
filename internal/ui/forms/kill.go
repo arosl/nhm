@@ -36,6 +36,9 @@ type KillForm struct {
 	progress *lifecycle.RecentOperation
 	result   actions.Result
 	err      error
+	// submitted is true once the confirm went out: the form never reviews
+	// again after it.
+	submitted bool
 }
 
 type killTick struct{ request uint64 }
@@ -77,10 +80,14 @@ func (f *KillForm) Result() actions.Result { return f.result }
 // Err is the error the form ended with.
 func (f *KillForm) Err() error { return f.err }
 
+// CanReview reports whether the checks may run again: until the confirm
+// goes out, also after a review that failed or refused.
+func (f *KillForm) CanReview() bool { return !f.submitted && f.phase != Running }
+
 // SetNoBeads passes retire's --no-beads to every agent. It drops the
 // review: run it again.
 func (f *KillForm) SetNoBeads(v bool) {
-	if f.phase >= Running || v == f.noBeads {
+	if !f.CanReview() || v == f.noBeads {
 		return
 	}
 	f.noBeads = v
@@ -102,7 +109,7 @@ func (f *KillForm) request0() actions.Request {
 // StartReview runs the checks. The review is of the kill as it will be
 // submitted, so its operation id is the kill's.
 func (f *KillForm) StartReview() tea.Cmd {
-	if f.phase >= Running {
+	if !f.CanReview() {
 		return nil
 	}
 	req := f.request0()
@@ -133,7 +140,7 @@ func (f *KillForm) Confirm() tea.Cmd {
 	}
 	req := withParam(f.request0(), actions.ParamConfirm, strings.TrimSpace(f.typed))
 	req.OperationID = opID
-	f.opID, f.phase, f.request = opID, Running, nextRequest()
+	f.opID, f.phase, f.request, f.submitted = opID, Running, nextRequest(), true
 	return tea.Batch(f.run.do(f.request, req), f.tick())
 }
 

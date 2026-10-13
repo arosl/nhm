@@ -31,6 +31,9 @@ type ReapForm struct {
 	key     string
 	result  actions.Result
 	err     error
+	// submitted is true once the confirm went out: the form never reviews
+	// again after it.
+	submitted bool
 }
 
 // NewReapForm is a reap of c's workspace with an idle limit (nhm reap's
@@ -58,9 +61,13 @@ func (f *ReapForm) Result() actions.Result { return f.result }
 // Err is the error the form ended with.
 func (f *ReapForm) Err() error { return f.err }
 
+// CanReview reports whether the dry run may run again: until the confirm
+// goes out, also after a review that failed or refused.
+func (f *ReapForm) CanReview() bool { return !f.submitted && f.phase != Running }
+
 // SetIdle changes the idle limit. It drops the review: run it again.
 func (f *ReapForm) SetIdle(d time.Duration) {
-	if f.phase >= Running || d == f.idle {
+	if !f.CanReview() || d == f.idle {
 		return
 	}
 	f.idle = d
@@ -82,7 +89,7 @@ func (f *ReapForm) request0(set []lifecycle.ReapTarget) actions.Request {
 
 // StartReview starts the dry run.
 func (f *ReapForm) StartReview() tea.Cmd {
-	if f.phase >= Running {
+	if !f.CanReview() {
 		return nil
 	}
 	f.drop()
@@ -110,7 +117,7 @@ func (f *ReapForm) Confirm() tea.Cmd {
 	}
 	req := f.request0(f.set)
 	req.OperationID = opID
-	f.phase, f.request = Running, nextRequest()
+	f.phase, f.request, f.submitted = Running, nextRequest(), true
 	return f.run.do(f.request, req)
 }
 

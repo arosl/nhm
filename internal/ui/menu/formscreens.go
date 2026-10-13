@@ -65,17 +65,17 @@ func (s *reapScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case "esc", "q":
 		return nil, true
 	case "left", "-":
-		if ph < forms.Running {
+		if s.f.CanReview() {
 			s.f.SetIdle(max(0, s.f.Idle()-idleStep))
 			return s.f.StartReview(), false
 		}
 	case "right", "+":
-		if ph < forms.Running {
+		if s.f.CanReview() {
 			s.f.SetIdle(s.f.Idle() + idleStep)
 			return s.f.StartReview(), false
 		}
 	case "r":
-		if ph < forms.Running {
+		if s.f.CanReview() {
 			return s.f.StartReview(), false
 		}
 	case "enter":
@@ -108,7 +108,11 @@ func (s *reapScreen) View(width, _ int) string {
 		if err := s.f.Err(); err != nil {
 			b.WriteString("\n" + clip(err.Error(), width) + "\n")
 		}
-		fmt.Fprintf(&b, "\nenter or esc: close · ←/→ idle −/+%s · r: dry run again\n", idleStep)
+		if s.f.CanReview() {
+			fmt.Fprintf(&b, "\nenter or esc: close · ←/→ idle −/+%s · r: dry run again\n", idleStep)
+		} else {
+			b.WriteString("\nenter or esc: close\n")
+		}
 	case forms.Running:
 		b.WriteString("retiring one agent at a time, through retire's checks…\n" + running + "\n")
 	}
@@ -137,12 +141,18 @@ func (s *killScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 	case "esc":
 		return nil, true
 	case "ctrl+b":
-		if ph < forms.Running {
+		if s.f.CanReview() {
 			s.f.SetNoBeads(!s.f.NoBeads())
 			s.typed.set("")
 			return s.f.StartReview(), false
 		}
 		return nil, false
+	case "r":
+		// While the label is typed, r is a letter of it.
+		if ph != forms.Reviewed && s.f.CanReview() {
+			s.typed.set("")
+			return s.f.StartReview(), false
+		}
 	case "enter":
 		switch ph {
 		case forms.Reviewed:
@@ -179,7 +189,7 @@ func (s *killScreen) View(width, _ int) string {
 		b.WriteString("\nctrl+b: the agents worked no beads · esc: close\n")
 	case forms.Refused:
 		b.WriteString("kill refuses; nothing was closed:\n" + targetsText(s.f.Review(), width))
-		b.WriteString("\nctrl+b: the agents worked no beads · enter or esc: close\n")
+		b.WriteString("\nr: check again · ctrl+b: the agents worked no beads · enter or esc: close\n")
 	case forms.Running:
 		b.WriteString("killing…\n")
 		if p := s.f.Progress(); p != nil {
@@ -194,7 +204,11 @@ func (s *killScreen) View(width, _ int) string {
 		if err := s.f.Err(); err != nil {
 			b.WriteString("\n" + clip(err.Error(), width) + "\n")
 		}
-		b.WriteString("\nenter or esc: close\n")
+		if s.f.CanReview() {
+			b.WriteString("\nr: check again · enter or esc: close\n")
+		} else {
+			b.WriteString("\nenter or esc: close\n")
+		}
 	}
 	return b.String()
 }
