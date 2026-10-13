@@ -482,6 +482,25 @@ func TestAssignEnrichedRetryKeepsItsPreparedContext(t *testing.T) {
 	}
 }
 
+// A kept context is its prompt's: a key that comes back with another
+// prompt finds an error, never the old record (review of 6ab2808).
+func TestPreparedContextIsItsPromptsOnly(t *testing.T) {
+	dir := t.TempDir()
+	ex := enrich.Exposure{BindingID: "bnd-0000000000000001", Generation: 1, BeadID: "bd-1"}
+	if err := writePrepared(dir, "k1", assignment.PromptSHA256("ctx\n\nWork on bead bd-1"), ex); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readPrepared(dir, "k1", "ctx\n\nWork on bead bd-1"); err != nil || got == nil || got.BeadID != "bd-1" {
+		t.Fatalf("its prompt: %+v %v", got, err)
+	}
+	if got, err := readPrepared(dir, "k1", "Work on bead bd-2"); err == nil || got != nil {
+		t.Fatalf("another prompt: %+v %v", got, err)
+	}
+	if got, err := readPrepared(dir, "k2", "anything"); err != nil || got != nil {
+		t.Fatalf("no kept context: %+v %v", got, err)
+	}
+}
+
 // A kept context that cannot be read does not stop the delivery (the
 // prompt is fixed in the ledger), and the operation says why it has no
 // record (review of 6ab2808).

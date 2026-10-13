@@ -150,7 +150,7 @@ func (p SendPort) Dispatch(ctx context.Context, req assignment.DispatchRequest) 
 	// delivery. One that cannot be read leaves the delivery without its
 	// record (the prompt itself is fixed in the ledger), and the operation
 	// says why.
-	prepared, preparedErr := readPrepared(p.PreparedDir, req.IdempotencyKey)
+	prepared, preparedErr := readPrepared(p.PreparedDir, req.IdempotencyKey, req.Prompt)
 	if preparedErr != nil {
 		scope["prepared_error"] = preparedErr.Error()
 	}

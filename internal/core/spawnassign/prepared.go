@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/redaction"
@@ -103,10 +104,10 @@ func (p SendPort) Prepare(ctx context.Context, o Occupant, key, beadID, query, p
 	}
 	plan := enrich.PlanFor(retr, given, p.Env.Budgets.BlockBytes)
 	ex := enrich.Exposure{BindingID: b.ID, Generation: b.Generation, ContextGeneration: cg, BeadID: beadID, Plan: plan, Retrieval: retr}
-	if err := writePrepared(p.PreparedDir, key, ex); err != nil {
+	out := PreparedPrompt{Prompt: enrich.Frame(plan.Block, prompt)}
+	if err := writePrepared(p.PreparedDir, key, assignment.PromptSHA256(out.Prompt), ex); err != nil {
 		return PreparedPrompt{}, err
 	}
-	out := PreparedPrompt{Prompt: enrich.Frame(plan.Block, prompt)}
 	if retr.CM.Enabled {
 		ids, bytes := includedItems(plan.CM)
 		out.Memory = &robot.CMInjectionInfo{Enabled: true, RulesInjected: ids, TokensAdded: bytes / 4, SkippedReason: skipReason(retr.CM)}
@@ -148,16 +149,23 @@ func preparedPath(dir, key string) (string, error) {
 	return filepath.Join(dir, key+".json"), nil
 }
 
+// keptContext is a kept exposure and the checksum of the framed prompt it
+// was prepared with: only a delivery of that prompt records it.
+type keptContext struct {
+	PromptSHA256 string          `json:"prompt_sha256"`
+	Exposure     enrich.Exposure `json:"exposure"`
+}
+
 // writePrepared keeps an exposure for key: written whole (a temporary file
 // renamed into place), readable by the user only. The block's text is not
 // kept: it is in the recorded prompt, and the record needs only the items.
-func writePrepared(dir, key string, ex enrich.Exposure) error {
+func writePrepared(dir, key, promptSHA256 string, ex enrich.Exposure) error {
 	path, err := preparedPath(dir, key)
 	if err != nil {
 		return err
 	}
 	ex.Plan.Block = ""
-	data, err := json.Marshal(ex)
+	data, err := json.Marshal(keptContext{PromptSHA256: promptSHA256, Exposure: ex})
 	if err != nil {
 		return err
 	}
@@ -192,8 +200,10 @@ func removePrepared(dir, key string) {
 	}
 }
 
-// readPrepared is the exposure kept for key, or nil when none was.
-func readPrepared(dir, key string) (*enrich.Exposure, error) {
+// readPrepared is the exposure kept for key, when it was prepared with
+// prompt; nil when none was kept. A kept exposure of another prompt (a key
+// that came back for a new intent) is an error, never a record.
+func readPrepared(dir, key, prompt string) (*enrich.Exposure, error) {
 	if dir == "" {
 		return nil, nil
 	}
@@ -208,9 +218,12 @@ func readPrepared(dir, key string) (*enrich.Exposure, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ex enrich.Exposure
-	if err := json.Unmarshal(data, &ex); err != nil {
+	var kept keptContext
+	if err := json.Unmarshal(data, &kept); err != nil {
 		return nil, fmt.Errorf("prepared context %s: %w", path, err)
 	}
-	return &ex, nil
+	if kept.PromptSHA256 != assignment.PromptSHA256(prompt) {
+		return nil, fmt.Errorf("prepared context %s was prepared with another prompt", path)
+	}
+	return &kept.Exposure, nil
 }
