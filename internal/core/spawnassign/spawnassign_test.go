@@ -532,6 +532,10 @@ func TestAssignUnreadablePreparedContextStillDelivers(t *testing.T) {
 	if ex, err := enrich.Exposures(context.Background(), w.db, OperationID(key, 2)); err != nil || len(ex) != 0 {
 		t.Fatalf("an unreadable context was recorded: %+v %v", ex, err)
 	}
+	// The intent is delivered, so the unreadable file goes too (nhm-nca).
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the unreadable kept context stays after delivery: %v", err)
+	}
 }
 
 // A failed send proves no actuation only when the store has no operation of

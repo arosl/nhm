@@ -185,11 +185,10 @@ func (p SendPort) Dispatch(ctx context.Context, req assignment.DispatchRequest) 
 	switch target.Status {
 	case send.StatusSubmitted:
 		receipt.DeliveryID = assignment.DispatchDeliveryID(req.Target, DeliveryProtocol, req.IdempotencyKey)
-		if prepared != nil {
-			// The operation holds the exposure now; no later attempt
-			// sends this intent.
-			removePrepared(p.PreparedDir, req.IdempotencyKey)
-		}
+		// The operation holds the exposure now, or says why it could not
+		// (prepared_error); no later attempt sends this intent, so the kept
+		// context goes either way (nhm-nca).
+		removePrepared(p.PreparedDir, req.IdempotencyKey)
 		return receipt, nil
 	case send.StatusRefused, send.StatusFailed:
 		return receipt, assignment.GuaranteeNoActuation(fmt.Errorf("%s (%s): %s", target.Status, target.ErrorCode, target.Result.Reason))
