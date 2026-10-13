@@ -163,10 +163,15 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 	if a.ModelFlag != "" && !strings.HasPrefix(a.ModelFlag, "-") {
 		return Adapter{}, fmt.Errorf("kinds.%s.model_flag: %q is not a flag", name, a.ModelFlag)
 	}
-	for _, k := range a.InterruptKeys {
+	a.InterruptKeys = slices.Clone(a.InterruptKeys)
+	for i, k := range a.InterruptKeys {
+		if oldCtrlKey.MatchString(k) {
+			k = "ctrl+" + k[len("C-"):]
+		}
 		if !KeyAllowed(k) {
 			return Adapter{}, fmt.Errorf("kinds.%s.interrupt_keys: %q is not a herdr key name nhm allows", name, k)
 		}
+		a.InterruptKeys[i] = k
 	}
 	return a, nil
 }
@@ -293,13 +298,18 @@ func hasControl(s string) bool {
 }
 
 // keyNames are the herdr key names a config kind may use: herdr's
-// canonical names (herdr agent send-keys --help: "esc"). Ctrl chords are
-// C-a … C-z.
+// canonical names (herdr agent send-keys --help: "esc") that herdr 0.9.3
+// takes (pane.send_keys, probed for nhm-1b2). herdr refuses home, end,
+// pageup, pagedown and delete. Ctrl chords are herdr's ctrl+a … ctrl+z.
 var keyNames = map[string]bool{"esc": true, "escape": true, "enter": true, "tab": true, "backspace": true,
-	"space": true, "up": true, "down": true, "left": true, "right": true, "home": true, "end": true,
-	"pageup": true, "pagedown": true, "delete": true}
+	"space": true, "up": true, "down": true, "left": true, "right": true}
 
-var ctrlKey = regexp.MustCompile(`^C-[a-z]$`)
+var ctrlKey = regexp.MustCompile(`^ctrl\+[a-z]$`)
+
+// oldCtrlKey is nhm's old spelling of a ctrl chord, C-a … C-z. herdr
+// refuses it (invalid_key), but for C-c, so a config kind's key in it is
+// read as ctrl+a … ctrl+z.
+var oldCtrlKey = regexp.MustCompile(`^C-[a-z]$`)
 
 // KeyAllowed reports a herdr key name that nhm sends.
 func KeyAllowed(k string) bool { return keyNames[k] || ctrlKey.MatchString(k) }
