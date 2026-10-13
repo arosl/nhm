@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arosl/nhm/internal/core/ensemble"
-	"github.com/arosl/nhm/internal/ui/menu"
+	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/tui/components"
 )
 
@@ -68,13 +68,13 @@ func fixed(s string, err error) Text {
 	return func(context.Context) (string, error) { return s, err }
 }
 
-// Every view is a view row of the menu, and the menu's view rows that
+// Every view is a view row of the action table, and the view rows that
 // this package owns all open (the split with nhm-qbi.4).
 func TestNewOpensTheMenuRows(t *testing.T) {
 	for _, id := range IDs {
-		it, ok := menu.ByID(id)
-		if !ok || it.Kind != menu.KindView || it.Selection != "" && it.Selection != menu.SelectNone {
-			t.Errorf("%s: menu row %+v, %v", id, it, ok)
+		it, ok := actions.ByID(id)
+		if !ok || it.Kind != actions.KindView || it.Selection != "" && it.Selection != actions.SelectNone {
+			t.Errorf("%s: action row %+v, %v", id, it, ok)
 		}
 		v, ok := New(id, Env{})
 		if !ok || v.Title() == "" {
