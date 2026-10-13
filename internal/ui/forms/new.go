@@ -1,36 +1,34 @@
 package forms
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/arosl/nhm/internal/ui/runner"
+	"github.com/arosl/nhm/internal/ui"
+	"github.com/arosl/nhm/internal/ui/actions"
 )
 
-// NewForm is the menu's new: a label and a project directory, then a
-// herdr workspace with that label and the project as its cwd, with no
-// agent.
+// NewForm is the menu's new (workspace.new): a label and a project
+// directory, then a herdr workspace with that label and the project as
+// its cwd, with no agent.
 type NewForm struct {
-	job     tracker
+	run     Runner
+	ctx     ui.Context
 	label   string
 	project string
 
-	phase       Phase
-	workspaceID string
-	err         error
+	phase   Phase
+	request uint64
+	result  actions.Result
+	err     error
 }
 
-// NewNewForm is a new workspace; project starts as the captured pane's
-// project.
-func NewNewForm(jobs Jobs, project string) *NewForm {
-	return &NewForm{job: tracker{jobs: jobs}, project: project}
+// NewNewForm is a new workspace; the project starts as c's directory.
+func NewNewForm(run Runner, c ui.Context) *NewForm {
+	return &NewForm{run: run, ctx: c, project: c.Cwd}
 }
 
 // Phase is where the form is.
@@ -40,11 +38,8 @@ func (f *NewForm) Phase() Phase { return f.phase }
 func (f *NewForm) Label() string   { return f.label }
 func (f *NewForm) Project() string { return f.project }
 
-// WorkspaceID is the created workspace.
-func (f *NewForm) WorkspaceID() string { return f.workspaceID }
-
-// JobID is the job, once it started.
-func (f *NewForm) JobID() string { return f.job.id }
+// Result is new's answer.
+func (f *NewForm) Result() actions.Result { return f.result }
 
 // Err is the error the form ended with, or why it refused a confirm.
 func (f *NewForm) Err() error { return f.err }
@@ -65,16 +60,8 @@ func (f *NewForm) SetProject(s string) {
 // Validate checks the fields; nhm new checks the rest (a label in use, a
 // directory that is not there).
 func (f *NewForm) Validate() error {
-	label := strings.TrimSpace(f.label)
-	switch {
-	case label == "":
-		return errors.New("give the workspace a label")
-	case utf8.RuneCountInString(label) > 128:
-		return errors.New("the label is longer than 128 characters")
-	case strings.HasPrefix(label, "-"):
-		return errors.New("a label must not start with '-'")
-	case strings.IndexFunc(label, unicode.IsControl) >= 0:
-		return errors.New("the label holds a control character")
+	if err := actions.ValidLabel(f.label); err != nil {
+		return err
 	}
 	if p := strings.TrimSpace(f.project); p == "" || !filepath.IsAbs(p) {
 		return errors.New("give the project as an absolute directory")
@@ -91,37 +78,27 @@ func (f *NewForm) Confirm() tea.Cmd {
 		f.err = err
 		return nil
 	}
-	f.phase, f.err = Running, nil
-	return f.job.start(runner.VerbNew, runner.NewRequest{Label: strings.TrimSpace(f.label),
-		Project: filepath.Clean(strings.TrimSpace(f.project))})
+	req := actions.Request{Context: f.ctx, Params: map[string]string{actions.ParamLabel: strings.TrimSpace(f.label),
+		actions.ParamProject: filepath.Clean(strings.TrimSpace(f.project))}}
+	key, _, err := f.run.review(req)
+	if err == nil {
+		req.OperationID, err = f.run.Guard.Submit(key)
+	}
+	if err != nil {
+		f.err = err
+		return nil
+	}
+	f.phase, f.request, f.err = Running, nextRequest(), nil
+	return f.run.do(f.request, req)
 }
 
-// Update takes the job's messages.
+// Update takes the action's answer.
 func (f *NewForm) Update(msg tea.Msg) tea.Cmd {
-	if f.phase != Running {
-		return nil
-	}
-	cmd, done := f.job.handle(msg)
-	if !done {
-		return cmd
-	}
-	f.phase = Failed
-	if f.err = f.job.startErr; f.err != nil {
-		return nil
-	}
-	r := *f.job.ended
-	var out struct {
-		WorkspaceID string `json:"workspace_id"`
-	}
-	if len(r.Result) > 0 {
-		if err := json.Unmarshal(r.Result, &out); err != nil {
-			f.err = fmt.Errorf("new's result cannot be read: %w", err)
-			return nil
+	if m, ok := msg.(done); ok && m.request == f.request && f.phase == Running {
+		f.result, f.err, f.phase = m.res, m.err, Done
+		if m.err != nil {
+			f.phase = Failed
 		}
-	}
-	f.workspaceID = out.WorkspaceID
-	if f.err = jobError(r); f.err == nil {
-		f.phase = Done
 	}
 	return nil
 }

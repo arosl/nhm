@@ -4,160 +4,113 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/arosl/nhm/internal/core/lifecycle"
-	"github.com/arosl/nhm/internal/ui/runner"
+	"github.com/arosl/nhm/internal/ui/actions"
 )
-
-type fakeKillReader struct {
-	review    lifecycle.KillResult
-	reviewErr error
-	ops       []*lifecycle.RecentOperation
-	read      []string
-}
-
-func (f *fakeKillReader) ReviewKill(context.Context, lifecycle.KillRequest) (lifecycle.KillResult, error) {
-	return f.review, f.reviewErr
-}
-
-func (f *fakeKillReader) ReadOperation(_ context.Context, id string) (lifecycle.RecentOperation, error) {
-	f.read = append(f.read, id)
-	var op *lifecycle.RecentOperation
-	if len(f.ops) > 0 {
-		op = f.ops[0]
-		if len(f.ops) > 1 {
-			f.ops = f.ops[1:]
-		}
-	}
-	if op == nil {
-		return lifecycle.RecentOperation{}, lifecycle.ErrNoOperation
-	}
-	return *op, nil
-}
 
 var errYes = fmt.Errorf("%w: kill closes the workspace and retires its agents: give --yes", lifecycle.ErrRefused)
 
-func reviewedKill(t *testing.T, read *fakeKillReader, jobs *fakeJobs) *KillForm {
+func reviewedKill(t *testing.T, core actions.Core) *KillForm {
 	t.Helper()
-	f := NewKillForm(read, jobs, "w1", "proj-a")
+	f := NewKillForm(newRunner(t, "workspace.kill", core), ctxW)
 	f.Update(do(t, f.StartReview()))
 	return f
 }
 
-func pollKill(t *testing.T, f *KillForm) {
-	t.Helper()
-	f.Update(do(t, f.Update(killTick{request: f.request})))
-}
-
-// A wrong label starts nothing; the right one starts one kill job, whose
-// id is the kill's operation id.
+// The review fixes the kill's id; a wrong label starts nothing; the right
+// one submits once, under the review's id.
 func TestKillConfirmsByTypedLabel(t *testing.T) {
-	read, jobs := &fakeKillReader{review: lifecycle.KillResult{WorkspaceID: "w1", Refusals: []string{}}, reviewErr: errYes}, &fakeJobs{}
-	f := reviewedKill(t, read, jobs)
-	if f.Phase() != Reviewed {
-		t.Fatalf("phase = %v %v", f.Phase(), f.Err())
+	fc := &fakeCore{killRes: lifecycle.KillResult{WorkspaceID: "w1", Refusals: []string{},
+		Agents: []lifecycle.RetireResult{{MailName: "IcyKnoll", BindingID: "b1", DryRun: true}}}, killErr: errYes}
+	f := reviewedKill(t, fc.core())
+	if f.Phase() != Reviewed || f.OperationID() != "op-1" || f.Review().Targets[0].Name != "IcyKnoll" {
+		t.Fatalf("review: %v %q %v", f.Phase(), f.OperationID(), f.Err())
+	}
+	if k := fc.kills[0]; k.Yes || k.OperationID != "" {
+		t.Fatalf("the review asked %+v", k)
 	}
 	f.Type("proj-b")
-	if f.Confirm() != nil || !f.Mismatch() || len(jobs.started) != 0 {
+	if f.Confirm() != nil || !f.Mismatch() || len(fc.kills) != 1 {
 		t.Fatal("a wrong label started the kill")
 	}
 	f.Type(" proj-a ")
+	fc.killRes, fc.killErr = lifecycle.KillResult{OperationID: "op-1", Closed: true, Refusals: []string{}}, nil
 	cmd := f.Confirm()
-	if cmd == nil || f.Confirm() != nil {
+	if cmd == nil || f.Confirm() != nil || f.Phase() != Running {
 		t.Fatalf("confirm: %v", f.Phase())
 	}
-	if f.Update(do(t, cmd)) == nil || f.OperationID() != "op-1" {
-		t.Fatalf("no poll after the start: %q", f.OperationID())
+	f.Update(do(t, cmd))
+	if k := fc.kills[1]; !k.Yes || k.OperationID != "op-1" || k.WorkspaceID != "w1" {
+		t.Fatalf("the kill asked %+v", k)
 	}
-	if len(jobs.started) != 1 || jobs.started[0].verb != runner.VerbKill ||
-		jobs.started[0].req != (runner.KillRequest{WorkspaceID: "w1"}) {
-		t.Fatalf("started = %+v", jobs.started)
+	if f.Phase() != Done || f.Result().Status != "closed" {
+		t.Fatalf("end: %v %+v %v", f.Phase(), f.Result(), f.Err())
 	}
 }
 
-// The form follows the record until it is final.
-func TestKillFollowsItsRecord(t *testing.T) {
-	now := time.Now()
-	closing := &lifecycle.RecentOperation{OperationID: "op-1", Status: lifecycle.KillClosing}
-	closed := &lifecycle.RecentOperation{OperationID: "op-1", Status: lifecycle.KillClosed, Completed: &now}
-	read, jobs := &fakeKillReader{reviewErr: errYes, ops: []*lifecycle.RecentOperation{nil, closing, closed}}, &fakeJobs{}
-	f := reviewedKill(t, read, jobs)
+// While the kill runs, the form reads its record.
+func TestKillShowsProgress(t *testing.T) {
+	fc := &fakeCore{killErr: errYes}
+	core := fc.core()
+	reads := 0
+	core.Operation = func(_ context.Context, id string) (lifecycle.RecentOperation, error) {
+		reads++
+		if reads == 1 {
+			return lifecycle.RecentOperation{}, lifecycle.ErrNoOperation
+		}
+		return lifecycle.RecentOperation{OperationID: id, Status: lifecycle.KillClosing,
+			Targets: []lifecycle.OperationTarget{{Status: lifecycle.KillRetired}}}, nil
+	}
+	f := reviewedKill(t, core)
 	f.Type("proj-a")
-	f.Update(do(t, f.Confirm()))
-	for i := 0; i < 3; i++ {
-		if f.Phase() != Running {
-			t.Fatalf("poll %d: phase %v", i, f.Phase())
+	if f.Confirm() == nil {
+		t.Fatal("no confirm")
+	}
+	for i := 0; i < 2; i++ {
+		if next := f.Update(do(t, f.Update(killTick{request: f.request}))); next == nil {
+			t.Fatalf("read %d: no next read", i)
 		}
-		pollKill(t, f)
 	}
-	if f.Phase() != Done || f.Err() != nil || f.Status().Operation.Status != lifecycle.KillClosed {
-		t.Fatalf("end: %v %v", f.Phase(), f.Err())
+	if p := f.Progress(); p == nil || p.Status != lifecycle.KillClosing || len(p.Targets) != 1 {
+		t.Fatalf("progress = %+v", p)
 	}
-	if strings.Join(read.read, ",") != "op-1,op-1,op-1" {
-		t.Fatalf("read %v", read.read)
-	}
-	// A late tick of the finished kill does nothing.
-	if f.Update(killTick{request: f.request}) != nil {
-		t.Fatal("a tick after the end polled again")
-	}
-}
-
-func TestKillEndsWithoutAFinalRecord(t *testing.T) {
-	stopped := time.Now()
-	cases := []struct {
-		name string
-		op   *lifecycle.RecentOperation
-		code int
-		msg  string
-		want string
-	}{
-		{"refused at its own checks", nil, runner.CodeRefused, "refused: IcyKnoll: it is working", "no record"},
-		{"stopped partway", &lifecycle.RecentOperation{Status: lifecycle.KillStopped, Completed: &stopped}, runner.CodeRefused,
-			"BlueLake: refused", "stopped"},
-		{"died partway", &lifecycle.RecentOperation{Status: lifecycle.KillDispatching}, runner.CodeError, "", "no final outcome"},
-	}
-	for _, c := range cases {
-		read, jobs := &fakeKillReader{reviewErr: errYes, ops: []*lifecycle.RecentOperation{c.op}}, &fakeJobs{}
-		f := reviewedKill(t, read, jobs)
-		f.Type("proj-a")
-		f.Update(do(t, f.Confirm()))
-		jobs.end(t, "op-1", c.code, c.msg, nil)
-		pollKill(t, f)
-		if f.Phase() != Failed || f.Err() == nil || !strings.Contains(f.Err().Error(), c.want) {
-			t.Errorf("%s: %v %v", c.name, f.Phase(), f.Err())
-		}
+	// The kill's answer ends the reads.
+	f.Update(done{request: f.request, res: actions.Result{Status: "closed"}})
+	if f.Phase() != Done || f.Update(killTick{request: f.request}) != nil {
+		t.Fatalf("after the end: %v", f.Phase())
 	}
 }
 
 func TestKillReviewRefusesOrFails(t *testing.T) {
-	refused := &fakeKillReader{review: lifecycle.KillResult{Refusals: []string{"IcyKnoll: it is working"}},
-		reviewErr: fmt.Errorf("%w: IcyKnoll: it is working", lifecycle.ErrRefused)}
-	f := reviewedKill(t, refused, &fakeJobs{})
+	fc := &fakeCore{killRes: lifecycle.KillResult{Refusals: []string{"IcyKnoll: it is working"}},
+		killErr: fmt.Errorf("%w: IcyKnoll: it is working", lifecycle.ErrRefused)}
+	f := reviewedKill(t, fc.core())
 	f.Type("proj-a")
-	if f.Phase() != Refused || f.Confirm() != nil {
-		t.Fatalf("refused review: %v", f.Phase())
+	if f.Phase() != Refused || f.Confirm() != nil || f.Review().Lines[0] != "IcyKnoll: it is working" {
+		t.Fatalf("refused review: %v %+v", f.Phase(), f.Review())
 	}
-	if f := reviewedKill(t, &fakeKillReader{reviewErr: errors.New("herdr: socket closed")}, &fakeJobs{}); f.Phase() != Failed {
+	fc = &fakeCore{killErr: errors.New("herdr: socket closed")}
+	if f := reviewedKill(t, fc.core()); f.Phase() != Failed {
 		t.Fatalf("failed review: %v", f.Phase())
 	}
-	f = reviewedKill(t, &fakeKillReader{reviewErr: errYes}, &fakeJobs{startErr: errors.New("runner: kill did not start")})
+	// A kill that stops partway is no success.
+	fc = &fakeCore{killErr: errYes}
+	f = reviewedKill(t, fc.core())
 	f.Type("proj-a")
+	fc.killRes, fc.killErr = lifecycle.KillResult{Refusals: []string{"BlueLake: it is working"}}, fmt.Errorf("%w: BlueLake", lifecycle.ErrRefused)
 	f.Update(do(t, f.Confirm()))
-	if f.Phase() != Failed || !strings.Contains(f.Err().Error(), "did not start") {
-		t.Fatalf("failed start: %v %v", f.Phase(), f.Err())
+	if f.Phase() != Failed || f.Result().Status != "refused" {
+		t.Fatalf("a refused kill: %v %+v", f.Phase(), f.Result())
 	}
 }
 
-// --no-beads changes the checks: it drops the review and its answer.
+// --no-beads changes the checks: it drops the review, its answer and its
+// id.
 func TestKillEditDropsTheReview(t *testing.T) {
-	jobs := &fakeJobs{}
-	f := NewKillForm(&fakeKillReader{reviewErr: errYes}, jobs, "w1", "  ")
-	if f.Label() != "w1" {
-		t.Fatalf("a blank label = %q, not the workspace id", f.Label())
-	}
+	fc := &fakeCore{killErr: errYes}
+	f := NewKillForm(newRunner(t, "workspace.kill", fc.core()), ctxW)
 	old := f.StartReview()
 	f.SetNoBeads(true)
 	f.Update(do(t, old))
@@ -165,9 +118,12 @@ func TestKillEditDropsTheReview(t *testing.T) {
 		t.Fatalf("a stale review was taken: %v", f.Phase())
 	}
 	f.Update(do(t, f.StartReview()))
-	f.Type("w1")
+	if f.OperationID() != "op-2" {
+		t.Fatalf("an edited review kept id %q", f.OperationID())
+	}
+	f.Type("proj-a")
 	f.Update(do(t, f.Confirm()))
-	if len(jobs.started) != 1 || !jobs.started[0].req.(runner.KillRequest).NoBeads {
-		t.Fatalf("started = %+v", jobs.started)
+	if k := fc.kills[len(fc.kills)-1]; !k.Yes || !k.NoBeads || k.OperationID != "op-2" {
+		t.Fatalf("the kill asked %+v", k)
 	}
 }

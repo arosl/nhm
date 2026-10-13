@@ -2,105 +2,74 @@ package forms
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/arosl/nhm/internal/core/lifecycle"
-	"github.com/arosl/nhm/internal/ui/runner"
+	"github.com/arosl/nhm/internal/ui"
+	"github.com/arosl/nhm/internal/ui/actions"
 )
 
-// KillReader runs kill's checks and reads the kill's record, in the
-// menu's context. Neither changes anything.
-type KillReader interface {
-	// ReviewKill is lifecycle.KillWith without Yes.
-	ReviewKill(ctx context.Context, req lifecycle.KillRequest) (lifecycle.KillResult, error)
-	// ReadOperation is lifecycle.ReadOperation: lifecycle.ErrNoOperation
-	// until the kill claims its record.
-	ReadOperation(ctx context.Context, id string) (lifecycle.RecentOperation, error)
-}
+// KillPoll is how often a running kill's record is read.
+const KillPoll = time.Second
 
-// KillStatus is what is known of a started kill.
-type KillStatus struct {
-	// Operation is the kill's record; nil until the kill claims it, after
-	// its checks pass again.
-	Operation *lifecycle.RecentOperation
-	// Ended is set once the kill's job ended.
-	Ended *runner.Result
-}
-
-// KillForm is the menu's kill: the checks, then the workspace's label
-// typed as the confirmation, then the kill as a job of its own, so it
+// KillForm is the menu's kill (workspace.kill): the checks, then the
+// workspace's label typed as the confirmation, then the kill under the
+// review's operation id. The kill runs as a job of its own, so it
 // outlives the popup, also when it closes the popup's own workspace
-// (plan-v4 section 4). The job's id is the kill's operation id: the form,
-// and recent operations after the popup closed, follow its record.
+// (plan-v4 section 4). While it runs, the form reads its record: each
+// agent's receipt as it ends.
 type KillForm struct {
-	read        KillReader
-	jobs        Jobs
-	workspaceID string
-	label       string
-	noBeads     bool
+	run     Runner
+	ctx     ui.Context
+	noBeads bool
 
 	phase    Phase
 	request  uint64
-	review   lifecycle.KillResult
+	review   actions.Result
+	key      string
+	opID     string
 	typed    string
 	mismatch bool
-	opID     string
-	status   KillStatus
+	progress *lifecycle.RecentOperation
+	result   actions.Result
 	err      error
-}
-
-type killReviewed struct {
-	request uint64
-	res     lifecycle.KillResult
-	err     error
-}
-
-type killStarted struct {
-	request uint64
-	id      string
-	err     error
 }
 
 type killTick struct{ request uint64 }
 
-type killPolled struct {
+type killProgress struct {
 	request uint64
-	status  KillStatus
+	op      lifecycle.RecentOperation
+	err     error
 }
 
-// NewKillForm is a kill of a workspace; label is the label the operator
-// types (the workspace id when it has none).
-func NewKillForm(read KillReader, jobs Jobs, workspaceID, label string) *KillForm {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		label = workspaceID
-	}
-	return &KillForm{read: read, jobs: jobs, workspaceID: workspaceID, label: label}
-}
+// NewKillForm is a kill of c's workspace.
+func NewKillForm(run Runner, c ui.Context) *KillForm { return &KillForm{run: run, ctx: c} }
 
 // Phase is where the form is.
 func (f *KillForm) Phase() Phase { return f.phase }
 
-// Label is what the operator must type.
-func (f *KillForm) Label() string { return f.label }
+// Label is what the operator types: the workspace's label, else its id.
+func (f *KillForm) Label() string { return actions.KillLabel(f.ctx) }
 
-// Review is the checks' result: each agent's retire dry run and the
-// refusals.
-func (f *KillForm) Review() lifecycle.KillResult { return f.review }
+// Review is the checks' answer: each agent's retire checks, and the
+// refusals (Lines).
+func (f *KillForm) Review() actions.Result { return f.review }
 
 // Mismatch is true after a confirm with a typed label that does not match.
 func (f *KillForm) Mismatch() bool { return f.mismatch }
 
-// OperationID is the kill's record id (its job's id), once it started.
+// OperationID is the kill's record id, once the review fixed it.
 func (f *KillForm) OperationID() string { return f.opID }
 
-// Status is what is known of the started kill.
-func (f *KillForm) Status() KillStatus { return f.status }
+// Progress is the running kill's record, as last read.
+func (f *KillForm) Progress() *lifecycle.RecentOperation { return f.progress }
+
+// Result is the kill's answer.
+func (f *KillForm) Result() actions.Result { return f.result }
 
 // Err is the error the form ended with.
 func (f *KillForm) Err() error { return f.err }
@@ -112,27 +81,37 @@ func (f *KillForm) SetNoBeads(v bool) {
 		return
 	}
 	f.noBeads = v
-	f.request, f.review, f.err, f.typed, f.mismatch = 0, lifecycle.KillResult{}, nil, "", false
+	f.request, f.review, f.key, f.opID, f.err, f.typed, f.mismatch = 0, actions.Result{}, "", "", nil, "", false
 	f.phase = Editing
 }
 
 // Type sets the typed label.
-func (f *KillForm) Type(s string) {
-	f.typed, f.mismatch = s, false
+func (f *KillForm) Type(s string) { f.typed, f.mismatch = s, false }
+
+func (f *KillForm) request0() actions.Request {
+	p := map[string]string{}
+	if f.noBeads {
+		p[actions.ParamNoBeads] = "1"
+	}
+	return actions.Request{Context: f.ctx, Params: p}
 }
 
-// StartReview runs the checks.
+// StartReview runs the checks. The review is of the kill as it will be
+// submitted, so its operation id is the kill's.
 func (f *KillForm) StartReview() tea.Cmd {
 	if f.phase >= Running {
 		return nil
 	}
-	f.phase, f.request, f.review, f.err, f.typed, f.mismatch = Reviewing, nextRequest(), lifecycle.KillResult{}, nil, "", false
-	read, id := f.read, f.request
-	req := lifecycle.KillRequest{WorkspaceID: f.workspaceID, NoBeads: f.noBeads}
-	return func() tea.Msg {
-		res, err := read.ReviewKill(context.Background(), req)
-		return killReviewed{request: id, res: res, err: err}
+	req := f.request0()
+	key, opID, err := f.run.review(req)
+	f.review, f.err, f.typed, f.mismatch = actions.Result{}, nil, "", false
+	if err != nil {
+		f.phase, f.err = Failed, err
+		return nil
 	}
+	req.OperationID = opID
+	f.key, f.opID, f.phase, f.request = key, opID, Reviewing, nextRequest()
+	return f.run.do(f.request, withParam(req, actions.ParamDryRun, "1"))
 }
 
 // Confirm starts the kill when the typed label matches. It submits once.
@@ -140,94 +119,71 @@ func (f *KillForm) Confirm() tea.Cmd {
 	if f.phase != Reviewed {
 		return nil
 	}
-	if strings.TrimSpace(f.typed) != f.label {
+	if strings.TrimSpace(f.typed) != f.Label() {
 		f.mismatch = true
 		return nil
 	}
-	f.phase, f.request = Running, nextRequest()
-	jobs, rid := f.jobs, f.request
-	req := runner.KillRequest{WorkspaceID: f.workspaceID, NoBeads: f.noBeads}
-	return func() tea.Msg {
-		id, err := jobs.Start(runner.VerbKill, req)
-		return killStarted{request: rid, id: id, err: err}
+	opID, err := f.run.Guard.Submit(f.key)
+	if err != nil {
+		f.err = err
+		return nil
 	}
+	req := withParam(f.request0(), actions.ParamConfirm, strings.TrimSpace(f.typed))
+	req.OperationID = opID
+	f.opID, f.phase, f.request = opID, Running, nextRequest()
+	return tea.Batch(f.run.do(f.request, req), f.tick())
 }
 
-// Update takes the review, the job's start and the poll ticks.
+func (f *KillForm) tick() tea.Cmd {
+	if f.run.Core.Operation == nil {
+		return nil
+	}
+	id := f.request
+	return tea.Tick(KillPoll, func(time.Time) tea.Msg { return killTick{request: id} })
+}
+
+// Update takes the action's answers and the record's progress.
 func (f *KillForm) Update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
-	case killReviewed:
-		if m.request != f.request || f.phase != Reviewing {
+	case done:
+		if m.request != f.request {
 			return nil
 		}
-		f.review = m.res
-		switch {
-		case len(m.res.Refusals) > 0:
-			f.phase, f.err = Refused, m.err
-		case m.err == nil, errors.Is(m.err, lifecycle.ErrRefused):
-			// The checks pass: kill without Yes refuses only for the yes.
-			f.phase = Reviewed
-		default:
-			f.phase, f.err = Failed, m.err
+		switch f.phase {
+		case Reviewing:
+			f.review = m.res
+			switch {
+			case m.err == nil && m.res.Status == "checked":
+				f.phase = Reviewed
+			case m.res.Status == "refused":
+				f.phase, f.err = Refused, m.err
+			default:
+				f.phase, f.err = Failed, m.err
+			}
+		case Running:
+			f.result, f.err, f.phase = m.res, m.err, Done
+			if m.err != nil || m.res.Status != "closed" {
+				f.phase = Failed
+			}
 		}
-	case killStarted:
-		if m.request != f.request || f.phase != Running {
-			return nil
-		}
-		f.opID = m.id
-		if m.err != nil {
-			f.phase, f.err = Failed, m.err
-			return nil
-		}
-		return f.tick()
 	case killTick:
 		if m.request != f.request || f.phase != Running {
 			return nil
 		}
-		jobs, read, rid, id := f.jobs, f.read, f.request, f.opID
+		read, rid, id := f.run.Core.Operation, f.request, f.opID
 		return func() tea.Msg {
-			// The job's end first: kill writes its record before it ends,
-			// so an ended kill with no record has none.
-			var st KillStatus
-			if r, ok, err := jobs.Result(id); ok && err == nil {
-				st.Ended = &r
-			}
-			if op, err := read.ReadOperation(context.Background(), id); err == nil {
-				st.Operation = &op
-			}
-			return killPolled{request: rid, status: st}
+			op, err := read(context.Background(), id)
+			return killProgress{request: rid, op: op, err: err}
 		}
-	case killPolled:
+	case killProgress:
 		if m.request != f.request || f.phase != Running {
 			return nil
 		}
-		f.status = m.status
-		op, ended := m.status.Operation, m.status.Ended
-		detail := ""
-		if ended != nil {
-			detail = ended.Error
+		if m.err == nil {
+			op := m.op
+			f.progress = &op
 		}
-		switch {
-		case op != nil && op.Completed != nil:
-			f.phase = Done
-			if op.Status != lifecycle.KillClosed {
-				f.phase, f.err = Failed, fmt.Errorf("the kill stopped (%s): %s", op.Status, detail)
-			}
-		case ended != nil && op == nil:
-			// It ended before its record: its checks refused this time, or
-			// it could not run. Nothing was closed.
-			f.phase, f.err = Failed, &JobError{Code: ended.Code, Message: "the kill ended with no record: " + detail}
-		case ended != nil:
-			f.phase, f.err = Failed, fmt.Errorf("the kill ended at %q with no final outcome: %s; recent operations shows its record",
-				op.Status, detail)
-		default:
-			return f.tick()
-		}
+		return f.tick()
 	}
 	return nil
-}
-
-func (f *KillForm) tick() tea.Cmd {
-	id := f.request
-	return tea.Tick(JobPoll, func(time.Time) tea.Msg { return killTick{request: id} })
 }

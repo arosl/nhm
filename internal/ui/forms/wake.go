@@ -1,35 +1,34 @@
 package forms
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/ui"
-	"github.com/arosl/nhm/internal/ui/runner"
+	"github.com/arosl/nhm/internal/ui/actions"
 )
 
 // ErrNoRecipients refuses a wake with no recipient: the menu never reads
 // an empty pick as "every agent".
 var ErrNoRecipients = errors.New("pick at least one agent: a wake from the menu never means every agent")
 
-// WakeForm is the menu's wake: pick the recipients, run one pass as a
-// job, read the decision per agent.
+// WakeForm is the menu's wake (workspace.wake): the picked agents, one
+// pass, a decision per agent.
 type WakeForm struct {
-	job        tracker
+	run        Runner
+	ctx        ui.Context
 	recipients []ui.Target
 
-	phase  Phase
-	report wake.Report
-	err    error
+	phase   Phase
+	request uint64
+	result  actions.Result
+	err     error
 }
 
-// NewWakeForm is a wake with no recipient yet.
-func NewWakeForm(jobs Jobs) *WakeForm { return &WakeForm{job: tracker{jobs: jobs}} }
+// NewWakeForm is a wake in c with no recipient yet.
+func NewWakeForm(run Runner, c ui.Context) *WakeForm { return &WakeForm{run: run, ctx: c} }
 
 // Phase is where the form is.
 func (f *WakeForm) Phase() Phase { return f.phase }
@@ -37,21 +36,17 @@ func (f *WakeForm) Phase() Phase { return f.phase }
 // Recipients are the picked agents.
 func (f *WakeForm) Recipients() []ui.Target { return f.recipients }
 
-// JobID is the job, once it started.
-func (f *WakeForm) JobID() string { return f.job.id }
-
-// Report is the pass's report: a decision per recipient, with its reason.
-func (f *WakeForm) Report() wake.Report { return f.report }
+// Result is the pass's answer: each agent's decision, with its reason.
+func (f *WakeForm) Result() actions.Result { return f.result }
 
 // Err is the error the form ended with, or why it refused a confirm.
 func (f *WakeForm) Err() error { return f.err }
 
 // SetRecipients takes the picker's agents.
 func (f *WakeForm) SetRecipients(ts []ui.Target) {
-	if f.phase >= Running {
-		return
+	if f.phase < Running {
+		f.recipients, f.err = slices.Clone(ts), nil
 	}
-	f.recipients, f.err = slices.Clone(ts), nil
 }
 
 // Confirm runs the pass once. With no recipient it refuses.
@@ -63,32 +58,26 @@ func (f *WakeForm) Confirm() tea.Cmd {
 		f.err = ErrNoRecipients
 		return nil
 	}
-	f.phase, f.err = Running, nil
-	return f.job.start(runner.VerbWake, runner.WakeRequest{Recipients: slices.Clone(f.recipients)})
+	req := actions.Request{Context: f.ctx, Targets: slices.Clone(f.recipients)}
+	key, _, err := f.run.review(req)
+	if err == nil {
+		req.OperationID, err = f.run.Guard.Submit(key)
+	}
+	if err != nil {
+		f.err = err
+		return nil
+	}
+	f.phase, f.request, f.err = Running, nextRequest(), nil
+	return f.run.do(f.request, req)
 }
 
-// Update takes the job's messages.
+// Update takes the action's answer.
 func (f *WakeForm) Update(msg tea.Msg) tea.Cmd {
-	if f.phase != Running {
-		return nil
-	}
-	cmd, done := f.job.handle(msg)
-	if !done {
-		return cmd
-	}
-	f.phase = Failed
-	if f.err = f.job.startErr; f.err != nil {
-		return nil
-	}
-	r := *f.job.ended
-	if len(r.Result) > 0 {
-		if err := json.Unmarshal(r.Result, &f.report); err != nil {
-			f.err = fmt.Errorf("wake's result cannot be read: %w", err)
-			return nil
+	if m, ok := msg.(done); ok && m.request == f.request && f.phase == Running {
+		f.result, f.err, f.phase = m.res, m.err, Done
+		if m.err != nil {
+			f.phase = Failed
 		}
-	}
-	if f.err = jobError(r); f.err == nil {
-		f.phase = Done
 	}
 	return nil
 }
