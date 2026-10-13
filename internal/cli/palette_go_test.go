@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +78,25 @@ func TestPaletteReaderAsksTheJob(t *testing.T) {
 	}
 	if res, err := read(ctx, "op-runs"); err != nil || !res.InProgress || res.OperationID != "op-runs" {
 		t.Fatalf("a running job = %+v %v", res, err)
+	}
+	// Claimed by a process that ended (killed) with no result and no
+	// record: nothing was sent, never "the core still runs this send".
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runner.JobPath(jobs.JobDir, "op-killed"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	claim := filepath.Join(jobs.JobDir, "op-killed.run")
+	if err := os.WriteFile(claim, []byte(strconv.Itoa(dead.Process.Pid)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.Claimed(jobs.JobDir, "op-killed") || !runner.Gone(jobs.JobDir, "op-killed") {
+		t.Fatal("setup: the claim is not the runner's, or its process is not gone")
+	}
+	if res, err := read(ctx, "op-killed"); res.InProgress || !errors.Is(err, sql.ErrNoRows) || !strings.Contains(err.Error(), "ended") {
+		t.Fatalf("a killed job = %+v %v", res, err)
 	}
 	if err := runner.Finish(jobs.JobDir, runner.Result{ID: "op-refused", Verb: runner.VerbSend, Code: exitRefused,
 		Error: "no agent matches the selection"}); err != nil {

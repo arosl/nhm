@@ -261,25 +261,37 @@ func paletteEngine(c ui.Context) (string, error) {
 
 // paletteReader reads what the core recorded for a send. With no record
 // yet, the job decides: one that still runs is in progress; one that
-// ended with an error refused before the claim, so nothing was sent.
+// ended with an error refused before the claim, so nothing was sent; so
+// did one whose process ended with no result, because the core records a
+// send before its first prompt.
 func paletteReader(db *store.DB, jobs runner.Client) palette.Reader {
 	return func(ctx context.Context, id string) (send.Result, error) {
-		res, err := send.Stored(ctx, db, id)
-		if !errors.Is(err, sql.ErrNoRows) {
-			return res, err
-		}
-		r, done, rerr := jobs.Result(id)
-		switch {
-		case rerr != nil:
-			return send.Result{}, rerr
-		case done && r.Error != "":
-			return send.Result{}, fmt.Errorf("%s: %w", r.Error, err)
-		case !done:
+		for again := true; ; again = false {
+			res, err := send.Stored(ctx, db, id)
+			if !errors.Is(err, sql.ErrNoRows) {
+				return res, err
+			}
+			r, done, rerr := jobs.Result(id)
+			ended := rerr == nil && !done && jobs.Ended(id)
+			switch {
+			case rerr != nil:
+				return send.Result{}, rerr
+			case done && r.Error != "":
+				return send.Result{}, fmt.Errorf("%s: %w", r.Error, err)
+			case done:
+				return res, err
+			case ended && again:
+				// It ended between the reads: its record or result may
+				// be newer than they are.
+				continue
+			case ended:
+				return send.Result{}, fmt.Errorf("its job ended before the core recorded the send: %w", err)
+			}
 			if _, serr := os.Stat(runner.JobPath(jobs.JobDir, id)); serr == nil {
 				return send.Result{OperationID: id, InProgress: true}, nil
 			}
+			return res, err
 		}
-		return res, err
 	}
 }
 
