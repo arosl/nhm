@@ -83,14 +83,15 @@ type Request struct {
 	// Enrich is the kickoff's CM and CASS enrichment (plan-v8 2.13:
 	// kickoffs default to best-effort CM).
 	Enrich send.Enrichment
-	// Assign appends the next_bead prompt. The caller asked for the
-	// explicit yes before it set this.
-	Assign       bool
-	StaggerMode  string
-	StaggerDelay time.Duration
-	ReadyTimeout time.Duration
-	TrustFolder  bool
-	Force        bool
+	// AssignOptions are spawn --assign's choices as text, "" without it.
+	// They enter the fingerprint only: a rerun of the operation with other
+	// choices is refused (nhm-cvw).
+	AssignOptions string
+	StaggerMode   string
+	StaggerDelay  time.Duration
+	ReadyTimeout  time.Duration
+	TrustFolder   bool
+	Force         bool
 	// AllowUnguarded records an exception for a missing guard, for this
 	// launch only.
 	AllowUnguarded bool

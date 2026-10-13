@@ -18,7 +18,10 @@
 // the loop); the coverage key is the slot; replays compare the occupancy
 // key with the binding id; enrichSpawnWorkPrompt prepares the context
 // through nhm's enrichment for the occupant and the intent's key
-// (prepared.go).
+// (prepared.go); an optional per-occupant Preamble goes ahead of the
+// initial prompt (occupantInitialPrompt), and an optional SelectWork picks
+// the work in place of the strategies (selectedWork), each item with its
+// own work prompt if it has one (workItem.prompt, workPromptFor) (nhm-cvw).
 
 package spawnassign
 
@@ -122,8 +125,13 @@ func assignWorkToAgentsWithError(ctx context.Context, output *SpawnOutput, workD
 		return spawnAgentPlanErrors(readyAgents, fmt.Errorf("spawn assignment canceled after triage: %w", err)), err
 	}
 
-	// Get work items based on strategy
-	workItems := getWorkItemsForStrategy(triage, strategy, readyAgents)
+	// Get work items based on strategy, or nhm's SelectWork
+	var workItems []workItem
+	if deps.SelectWork != nil {
+		readyAgents, workItems = selectedWork(deps, triage, readyAgents)
+	} else {
+		workItems = getWorkItemsForStrategy(triage, strategy, readyAgents)
+	}
 	if len(workItems) == 0 {
 		ledgerExists, err := deps.AssignmentLedgerExists(session)
 		if err != nil {
@@ -231,7 +239,7 @@ func assignWorkToAgentsWithError(ctx context.Context, output *SpawnOutput, workD
 		spawnAssignment.Pane = occupant.Slot
 		target := occupant.Target()
 		occupancy := occupant.BindingID
-		basePrompt := composeSpawnWorkPrompt(initialPrompt, generateWorkPrompt(item))
+		basePrompt := composeSpawnWorkPrompt(occupantInitialPrompt(deps, occupant, initialPrompt), workPromptFor(item))
 		prompt := basePrompt
 		agentName := ""
 		idempotencyKey := ""
@@ -687,6 +695,7 @@ type workItem struct {
 	Type        string
 	Reasons     []string
 	MatchReason string // How the strategy paired this item with its agent slot (recorded in the envelope)
+	prompt      string // nhm: SelectWork's own work prompt (workPromptFor)
 }
 
 // getWorkItemsForStrategy returns work items based on the selected strategy.

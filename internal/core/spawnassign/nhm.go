@@ -123,6 +123,28 @@ type SpawnAssignmentDependencies struct {
 	// Enrich prepares a fresh work prompt's context (--with-cass,
 	// --with-memory); nil prepares none.
 	Enrich EnrichmentPort
+	// Preamble is nhm's text ahead of one occupant's work prompt, before
+	// the initial prompt: the human spawn --assign's identity preamble
+	// (nhm-cvw). It is part of the recorded intent. nil adds none.
+	Preamble func(Occupant) string
+	// SelectWork picks the work in place of the robot strategies: the
+	// human spawn --assign's selection, ntm's own (package assign,
+	// nhm-cvw). It returns the agents in the order they are served and one
+	// item for each of the first len(items) of them; the rest get none.
+	// nil keeps the robot strategy.
+	SelectWork func(triage *bv.TriageResponse, agents []SpawnedAgent) ([]SpawnedAgent, []WorkItem)
+}
+
+// WorkItem is a bead that SelectWork picked for one agent.
+type WorkItem struct {
+	ID, Title, Type string
+	Priority        int
+	Score           float64
+	// MatchReason says how the selection paired the bead with its agent
+	// (the assignment's assign_reason).
+	MatchReason string
+	// Prompt is the work prompt for the bead; "" takes the robot's.
+	Prompt string
 }
 
 // spawnAssignmentDeps fills the Beads and ledger ports with production and
@@ -162,8 +184,45 @@ func spawnAssignmentDeps(custom *SpawnAssignmentDependencies) SpawnAssignmentDep
 		deps.NewIdempotencyKey = custom.NewIdempotencyKey
 	}
 	deps.ListOccupants, deps.ObserveOccupant, deps.Dispatch = custom.ListOccupants, custom.ObserveOccupant, custom.Dispatch
-	deps.Enrich = custom.Enrich
+	deps.Enrich, deps.Preamble, deps.SelectWork = custom.Enrich, custom.Preamble, custom.SelectWork
 	return deps
+}
+
+// occupantInitialPrompt is what goes ahead of one occupant's work prompt:
+// deps.Preamble's text for it, then the caller's initial prompt
+// (nhm-cvw).
+func occupantInitialPrompt(deps SpawnAssignmentDependencies, o Occupant, initial string) string {
+	if deps.Preamble == nil {
+		return initial
+	}
+	p := deps.Preamble(o)
+	switch {
+	case strings.TrimSpace(p) == "":
+		return initial
+	case strings.TrimSpace(initial) == "":
+		return p
+	}
+	return p + "\n\n" + initial
+}
+
+// selectedWork runs deps.SelectWork, and gives its items the loop's form.
+func selectedWork(deps SpawnAssignmentDependencies, triage *bv.TriageResponse, agents []SpawnedAgent) ([]SpawnedAgent, []workItem) {
+	ordered, picked := deps.SelectWork(triage, agents)
+	items := make([]workItem, 0, len(picked))
+	for _, w := range picked {
+		items = append(items, workItem{ID: w.ID, Title: w.Title, Priority: w.Priority, Score: w.Score, Type: w.Type,
+			MatchReason: w.MatchReason, prompt: w.Prompt})
+	}
+	return ordered, items
+}
+
+// workPromptFor is an item's work prompt: SelectWork's own, else the
+// robot's (generateWorkPrompt).
+func workPromptFor(item workItem) string {
+	if item.prompt != "" {
+		return item.prompt
+	}
+	return generateWorkPrompt(item)
 }
 
 // spawnStaggerPacer is ntm's delivery pacer (spawn_pacing.go). nhm paces

@@ -40,7 +40,10 @@ const spawnLockWait = 10 * time.Second
 
 const spawnUsage = `Usage: nhm spawn <session> [--cc=N[:MODEL]] [--cod=N[:MODEL]] [--agy=N] [--pi=N] [--omp=N] [--oc=N] [--grok=N]
                  [--agent KIND=N[:MODEL]]… [--label L] [--group G] [--per-tab N]
-                 [--prompt T | --prompt-file F | --no-kickoff] [--assign [--yes]] [--no-user]
+                 [--prompt T | --prompt-file F | --no-kickoff] [--no-user]
+                 [--assign [--strategy S] [--limit N] [--init-prompt T] [--assign-agent TYPE]
+                  [--assign-cc-only|--assign-cod-only|--assign-gmi-only|--assign-agy-only]
+                  [--assign-verbose|--assign-quiet] [--assign-timeout D] [--yes]]
                  [--stagger-mode fixed|smart] [--stagger-delay D] [--ready-timeout D]
                  [--trust-folder] [--force] [--allow-unguarded] [--require-observations]
                  [--project DIR] [--op-id ID] [--dry-run] [--socket PATH] [--json]
@@ -50,7 +53,22 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc=N[:MODEL]] [--cod=N[:MODEL]
 Start agents in a herdr workspace (the session, by label). For each agent:
 an Agent Mail identity first, a pane, the binding, agent.start, the labels,
 then the kickoff: --prompt, or ACFS's default_new_agent palette prompt.
---assign appends next_bead after your explicit yes; nhm never picks a bead.
+
+--assign claims a bead for each agent and sends it, after your yes, as
+ntm's spawn --assign does, with ntm's choice of beads. The work is
+verified before anything starts, in a dry run too. --strategy is ntm's:
+balanced (the default), speed, quality, dependency or round-robin; any
+other word takes ntm's load-balanced default. --limit caps the beads
+assigned; --assign-agent (or an --assign-*-only flag) assigns to one type
+of agent only. Each agent gets one bead: a bead the strategy plans for an
+agent that already has one fails, as in ntm. An agent with a bead gets its
+identity line, the kickoff, --init-prompt and the bead's work prompt in one
+delivery, since a working agent takes no second prompt; every other agent
+gets its identity line, the kickoff and --init-prompt after the
+assignment. If an agent does not start, the others get the kickoff alone
+and nothing is assigned. A planned bead that is not claimed and sent makes
+the exit 1; a delivery whose outcome is unknown is never sent again. A
+rerun of the same --op-id assigns nothing.
 
 Agents of one project share a tab, a pane each, up to --per-tab (6): a new
 agent splits the biggest pane of a tab of its project that has room, or
@@ -84,6 +102,16 @@ type spawnFlags struct {
 	perTab                   int
 	prompt, promptFile       string
 	noKickoff, assign, yes   bool
+	strategy, initPrompt     string
+	limit                    int
+	assignAgent              string
+	assignVerbose            bool
+	assignQuiet              bool
+	assignCCOnly             bool
+	assignCodOnly            bool
+	assignGmiOnly            bool
+	assignAgyOnly            bool
+	assignTimeout            time.Duration
 	staggerMode              string
 	staggerDelay, readyWait  time.Duration
 	trustFolder, force       bool
@@ -107,11 +135,23 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.StringVar(&f.prompt, "prompt", "", "the kickoff prompt")
 	fs.StringVar(&f.promptFile, "prompt-file", "", "read the kickoff prompt from a file (- is stdin)")
 	fs.BoolVar(&f.noKickoff, "no-kickoff", false, "send no kickoff")
-	fs.BoolVar(&f.assign, "assign", false, "append the next_bead prompt (asks for your yes)")
+	fs.BoolVar(&f.assign, "assign", false, "claim a bead for each agent and send it (asks for your yes)")
 	fs.BoolVar(&f.yes, "yes", false, "with --assign: the yes, for a non-interactive call")
 	// ntm's --no-user keeps no pane for the user. nhm keeps none
 	// anyway, so the flag changes nothing (ru's spawn, nhm-hir).
 	fs.Bool("no-user", false, "ntm's flag; nhm keeps no pane for the user")
+	// ntm's assignment flags of spawn --assign (ntm 9d5ed977 spawn.go).
+	fs.StringVar(&f.strategy, "strategy", "balanced", "with --assign: balanced, speed, quality, dependency or round-robin")
+	fs.IntVar(&f.limit, "limit", 0, "with --assign: the most beads to assign (0: no limit)")
+	fs.StringVar(&f.initPrompt, "init-prompt", "", "with --assign: a prompt for the ready agents, ahead of each one's work")
+	fs.BoolVar(&f.assignVerbose, "assign-verbose", false, "with --assign: the scoring and the beads left out")
+	fs.BoolVar(&f.assignQuiet, "assign-quiet", false, "with --assign: no phase lines")
+	fs.DurationVar(&f.assignTimeout, "assign-timeout", 30*time.Second, "with --assign: the limit of each external call (bv, br)")
+	fs.StringVar(&f.assignAgent, "assign-agent", "", "with --assign: only agents of this type (claude, codex, gemini, antigravity)")
+	fs.BoolVar(&f.assignCCOnly, "assign-cc-only", false, "with --assign: only Claude agents")
+	fs.BoolVar(&f.assignCodOnly, "assign-cod-only", false, "with --assign: only Codex agents")
+	fs.BoolVar(&f.assignGmiOnly, "assign-gmi-only", false, "with --assign: only Gemini agents")
+	fs.BoolVar(&f.assignAgyOnly, "assign-agy-only", false, "with --assign: only Antigravity agents")
 	fs.StringVar(&f.staggerMode, "stagger-mode", "", "fixed or smart")
 	fs.DurationVar(&f.staggerDelay, "stagger-delay", 0, "the delay between starts")
 	fs.DurationVar(&f.readyWait, "ready-timeout", 60*time.Second, "the wait for each agent to be ready")
@@ -143,7 +183,7 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 
 func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 	req := spawn.Request{Session: session, Add: add, Label: f.label, Group: f.group, PerTab: f.perTab, Effort: f.effort, Role: f.role,
-		NoKickoff: f.noKickoff, Assign: f.assign, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
+		NoKickoff: f.noKickoff, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
 		ReadyTimeout: f.readyWait, TrustFolder: f.trustFolder, Force: f.force, AllowUnguarded: f.allowUnguarded,
 		RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID}
 	switch {
@@ -256,12 +296,18 @@ func spawnVerb(verb string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return refuse(err)
 	}
-	if req.Assign && !req.DryRun && !f.yes {
-		if !confirm(stderr, "--assign sends next_bead: each agent then picks and claims a bead itself. Continue?") {
-			return refuse(errors.New("--assign needs your yes (or --yes)"))
+	// ntm takes the assignment flags without --assign and does nothing
+	// with them; so does nhm.
+	var assign *humanAssign
+	if f.assign {
+		assign = newHumanAssign(f, &req)
+		if !req.DryRun && !f.yes {
+			assign.ask = func() bool {
+				return confirm(stderr, "--assign claims a bead for each agent and sends it, after the kickoff. Continue?")
+			}
 		}
 	}
-	return runSpawnRequest(context.Background(), req, f.project, f.socket, f.asJSON, env, stdout, stderr)
+	return runSpawnRequest(context.Background(), req, f.project, f.socket, f.asJSON, env, stdout, stderr, assign)
 }
 
 // runSpawnWizard is the gum wizard (plan-v8 2.4): the questions, then the
@@ -532,19 +578,114 @@ func (ie *instanceEnv) spawnEnv(projectRoot string) (spawn.Env, error) {
 // runSpawnRequest resolves the project, opens the instance and runs the
 // spawn under the owner lock (a dry run reads only and runs under any
 // owner).
-func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket string, asJSON bool, env envelope, stdout, stderr io.Writer) int {
+func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket string, asJSON bool, env envelope, stdout, stderr io.Writer,
+	assign *humanAssign) int {
 	ie, err := openInstance(socket)
 	if err != nil {
 		return output(stdout, stderr, asJSON, env, err, exitError, nil)
 	}
 	defer ie.db.Close()
+	// --assign: the preflight runs before anything is created, in a dry
+	// run too, and the yes comes after it.
+	var plan spawnassign.Plan
+	var scope core.Scope
+	var kickoff string
+	if assign != nil {
+		if plan, scope, kickoff, err = assign.preflight(ctx, ie, project); err != nil {
+			return output(stdout, stderr, asJSON, env, err, exitRefused, nil)
+		}
+		if assign.ask != nil && !assign.ask() {
+			return output(stdout, stderr, asJSON, env, errors.New("--assign needs your yes (or --yes)"), exitRefused, nil)
+		}
+	}
 	res, code, err := spawnUnderOwner(ctx, ie, &req, project)
 	env.Scope, env.OperationID, env.Result = req.Scope, res.OperationID, res
 	env.Warnings = append(res.Admission.Warnings, res.Warnings...)
+	show := func(w io.Writer) { printSpawn(w, res) }
 	if err != nil {
-		return output(stdout, stderr, asJSON, env, err, code, func(w io.Writer) { printSpawn(w, res) })
+		return output(stdout, stderr, asJSON, env, err, code, show)
 	}
-	return output(stdout, stderr, asJSON, env, nil, spawnExit(res), func(w io.Writer) { printSpawn(w, res) })
+	switch {
+	case assign == nil:
+		return output(stdout, stderr, asJSON, env, nil, spawnExit(res), show)
+	case req.DryRun:
+		env.Result = spawnAssignResult{Result: res, AssignStrategy: plan.Strategy, Assignments: []robot.SpawnAssignment{},
+			Skipped: []spawnassign.HumanSkip{}}
+		return output(stdout, stderr, asJSON, env, nil, spawnExit(res), func(w io.Writer) {
+			printSpawn(w, res)
+			fmt.Fprintf(w, "assignment (%s): the work is verified; a dry run claims nothing\n", plan.Strategy)
+		})
+	}
+	ready := 0
+	for _, t := range res.Targets {
+		if t.Ready {
+			ready++
+		}
+	}
+	// fail prints the text before the error, as ntm does.
+	fail := func(err error) int {
+		if !asJSON {
+			show(stdout)
+		}
+		return output(stdout, stderr, asJSON, env, err, exitError, nil)
+	}
+	switch {
+	case res.Replayed:
+		// Nothing started, so nothing is assigned: the first run did that.
+		env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: []robot.SpawnAssignment{},
+			Skipped: []spawnassign.HumanSkip{}}
+		return output(stdout, stderr, asJSON, env, nil, spawnExit(res), func(w io.Writer) {
+			printSpawn(w, res)
+			fmt.Fprintln(w, "assignment: the operation ran before; nothing is assigned again")
+		})
+	case !res.Ready():
+		// ntm stops when an agent is not ready, before the init prompt:
+		// the agents that are up get the kickoff the spawn would have
+		// sent, and nothing is assigned.
+		_, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff)
+		env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: []robot.SpawnAssignment{},
+			Skipped: []spawnassign.HumanSkip{}}
+		show = func(w io.Writer) { printSpawn(w, res) }
+		err := fmt.Errorf("assignment failed: ready wait failed: %d of %d agents ready", ready, len(res.Targets))
+		if kerr != nil {
+			err = fmt.Errorf("%w; kickoff: %v", err, kerr)
+		}
+		return fail(err)
+	}
+	// Every agent is up: ntm's selection picks the beads, and each agent
+	// that gets one gets its identity, the kickoff, --init-prompt and its
+	// bead in one delivery; every other agent then gets the kickoff and
+	// --init-prompt. As in ntm, a planned bead that is not claimed and sent
+	// fails the command; an agent that got none is no failure.
+	prefix := assign.prefix(kickoff)
+	var sel spawnassign.HumanSelection
+	hooks := assignHooks{selectWork: assign.selectWork(ctx, ie, res.Session, scope.ProjectRoot, &sel)}
+	if prefix != "" {
+		hooks.preamble = identityPreamble(ctx, ie)
+	}
+	out := spawn.SpawnOutput(res, nil, "json", time.Now())
+	assignPhase(ctx, ie, res, scope, plan, prefix, hooks, &out)
+	outcome := newHumanOutcome(&out, sel)
+	kicked, kerr := assign.kickoffs(ctx, ie, req, &res, out.Assignments, prefix)
+	if kerr != nil {
+		env.Warnings = append(env.Warnings, "kickoff of the agents without a bead: "+kerr.Error())
+	}
+	planned := []robot.SpawnAssignment{}
+	for _, a := range out.Assignments {
+		if a.BeadID != "" {
+			planned = append(planned, a)
+		}
+	}
+	env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: planned,
+		Skipped: append([]spawnassign.HumanSkip{}, sel.Skipped...)}
+	show = func(w io.Writer) {
+		printSpawn(w, res)
+		assign.print(w, stderr, ready, outcome.assigned+kicked, outcome, sel)
+	}
+	if err := outcome.err(); err != nil {
+		return fail(err)
+	}
+	return output(stdout, stderr, asJSON, env, nil, spawnExit(res), show)
 }
 
 // spawnUnderOwner fills the project scope and runs the spawn.
@@ -777,7 +918,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		out.Error = strings.TrimPrefix(err.Error(), spawn.ErrSessionExists.Error()+": ")
 	}
 	if *assign && !*dryRun && out.Success {
-		robotAssignPhase(ctx, ie, res, scope, plan, *prompt, &out)
+		assignPhase(ctx, ie, res, scope, plan, *prompt, assignHooks{}, &out)
 	}
 	if !out.Success {
 		return robotWrite(stdout, out, robotError)

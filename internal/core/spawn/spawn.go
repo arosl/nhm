@@ -374,30 +374,47 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 	label(ctx, env, req, res, t)
 
 	// 6. The kickoff, through send.
-	if !kick.empty() && env.Send != nil {
-		task := kick.text(req, t)
-		text := IdentityPreamble(name, req.ProjectRoot, alias, res.WorkspaceID) + "\n\n" + task
-		// CM and CASS are asked about the task, not the identity preamble:
-		// with the preamble's start as the query, cm drops every rule as
-		// irrelevant (acfs-9hkh.87).
-		enr := req.Enrich
-		if enr.Query == "" {
-			enr.Query = task
-		}
-		sr, err := env.Send(ctx, send.Request{Session: req.Session, WorkspaceID: res.WorkspaceID, ProjectRoot: req.ProjectRoot,
-			Selector: send.Selector{Names: []string{name}}, Message: text, WhenAny: true, Source: history.SourceCLI,
-			Scope: req.Scope, Enrich: enr})
-		switch {
-		case err != nil:
-			res.Warnings = append(res.Warnings, fmt.Sprintf("%s: kickoff not sent: %v", name, err))
-		case len(sr.Targets) > 0:
-			t.KickoffOp, t.KickoffStatus = sr.OperationID, sr.Targets[0].Status
-			if sr.Targets[0].Status == send.StatusSubmitted || sr.Targets[0].Status == send.StatusPossiblySubmitted {
-				t.Status = StatusKickoffSubmitted
-			}
-		}
+	if !kick.empty() {
+		sendKickoff(ctx, env, req, res, t, kick.text(req, t))
 	}
 	return true
+}
+
+// Kickoff sends a ready target of a finished spawn its kickoff, the
+// identity preamble then task, and records it in the operation's receipt.
+// spawn --assign calls it after the assignment for an agent that got no
+// bead (nhm-cvw). A failure is a warning in res.
+func Kickoff(ctx context.Context, env Env, req Request, res *Result, t *Target, task string) {
+	sendKickoff(ctx, env, req, res, t, task)
+	_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
+}
+
+// sendKickoff sends t its kickoff through send: the identity preamble,
+// then task.
+func sendKickoff(ctx context.Context, env Env, req Request, res *Result, t *Target, task string) {
+	if env.Send == nil {
+		return
+	}
+	text := IdentityPreamble(t.MailName, req.ProjectRoot, t.HerdrName, res.WorkspaceID) + "\n\n" + task
+	// CM and CASS are asked about the task, not the identity preamble:
+	// with the preamble's start as the query, cm drops every rule as
+	// irrelevant (acfs-9hkh.87).
+	enr := req.Enrich
+	if enr.Query == "" {
+		enr.Query = task
+	}
+	sr, err := env.Send(ctx, send.Request{Session: req.Session, WorkspaceID: res.WorkspaceID, ProjectRoot: req.ProjectRoot,
+		Selector: send.Selector{Names: []string{t.MailName}}, Message: text, WhenAny: true, Source: history.SourceCLI,
+		Scope: req.Scope, Enrich: enr})
+	switch {
+	case err != nil:
+		res.Warnings = append(res.Warnings, fmt.Sprintf("%s: kickoff not sent: %v", t.MailName, err))
+	case len(sr.Targets) > 0:
+		t.KickoffOp, t.KickoffStatus = sr.OperationID, sr.Targets[0].Status
+		if sr.Targets[0].Status == send.StatusSubmitted || sr.Targets[0].Status == send.StatusPossiblySubmitted {
+			t.Status = StatusKickoffSubmitted
+		}
+	}
 }
 
 // codeAgentPaneBusy is herdr's refusal of agent.start when the pane's
@@ -783,12 +800,19 @@ func plan(ctx context.Context, env Env, workspaceID string, req Request) ([]Targ
 func fingerprint(req Request) map[string]any {
 	fp := map[string]any{"session": req.Session, "add": req.Add, "project": req.ProjectRoot, "agents": req.Agents, "effort": req.Effort,
 		"label": req.Label, "group": req.Group, "per_tab": req.PerTab, "prompt": req.Prompt, "no_kickoff": req.NoKickoff,
-		"assign": req.Assign, "stagger": req.StaggerMode, "delay_ms": req.StaggerDelay.Milliseconds(),
+		// The next_bead kickoff of the old --assign is gone (nhm-cvw). The
+		// key is false without --assign, as before; with it, the choices
+		// below stand beside it, so an operation of the old --assign never
+		// matches a new one.
+		"assign": req.AssignOptions != "", "stagger": req.StaggerMode, "delay_ms": req.StaggerDelay.Milliseconds(),
 		"force": req.Force, "allow_unguarded": req.AllowUnguarded, "require_observations": req.RequireObservations,
 		paneEnvKey: true}
 	// Only when set, so every fingerprint stored before stays the same.
 	if req.Safety {
 		fp["safety"] = true
+	}
+	if req.AssignOptions != "" {
+		fp["assign_options"] = req.AssignOptions
 	}
 	return fp
 }
@@ -876,14 +900,11 @@ func nullGen(bindingID string) any {
 func ptr[T any](v T) *T { return &v }
 
 // The kickoff (plan-v8 2.2 step 6).
-const (
-	defaultKickoff = "default_new_agent"
-	assignKey      = "next_bead"
-)
+const defaultKickoff = "default_new_agent"
 
 // kickoff is the kickoff's text: the operator's --prompt goes out as
-// typed, as a plain send does; the palette prompts (default_new_agent,
-// next_bead) are templates whose per-agent placeholders are filled.
+// typed, as a plain send does; the palette prompt (default_new_agent) is a
+// template whose per-agent placeholders are filled.
 type kickoff struct {
 	raw     string
 	palette string
@@ -892,40 +913,50 @@ type kickoff struct {
 func (k kickoff) empty() bool { return k.raw == "" && k.palette == "" }
 
 // kickoffBody reads the kickoff: --prompt, or ACFS's default_new_agent
-// palette prompt, with next_bead appended after the operator's yes
-// (--assign). It refuses before anything is created when a palette
+// palette prompt. It refuses before anything is created when the palette
 // prompt cannot be found or has a placeholder nothing fills.
 func kickoffBody(req Request) (kickoff, error) {
 	var k kickoff
 	if req.NoKickoff {
-		if req.Assign {
-			return k, errors.New("--assign needs a kickoff")
-		}
 		return k, nil
 	}
-	loader := templates.NewLoader(req.ProjectRoot)
-	var palette []string
 	k.raw = req.Prompt
 	if k.raw == "" {
-		t, err := loader.Load(defaultKickoff)
+		t, err := templates.NewLoader(req.ProjectRoot).Load(defaultKickoff)
 		if err != nil {
 			return k, fmt.Errorf("the kickoff: %w (give --prompt)", err)
 		}
-		palette = append(palette, t.Body)
+		k.palette = t.Body
 	}
-	if req.Assign {
-		t, err := loader.Load(assignKey)
-		if err != nil {
-			return k, fmt.Errorf("--assign: %w", err)
-		}
-		palette = append(palette, t.Body)
-	}
-	k.palette = strings.Join(palette, "\n\n")
 	check := &templates.Template{Name: "kickoff", Body: k.palette}
 	if _, err := check.ExecuteShared(templates.ExecutionContext{Session: req.Session, Project: req.ProjectRoot}); err != nil {
 		return k, fmt.Errorf("the kickoff: %w", err)
 	}
 	return k, nil
+}
+
+// AssignPrefix is the kickoff that spawn --assign sends ahead of each
+// agent's work prompt, in the same delivery (nhm-cvw): the spawn itself
+// sends no kickoff then, since a working agent refuses a second prompt.
+// It is --prompt as typed, else ACFS's default_new_agent palette prompt
+// with the session and project filled in; "" with NoKickoff. A palette
+// placeholder that names one agent refuses: one text goes to every agent.
+func AssignPrefix(req Request) (string, error) {
+	if req.NoKickoff {
+		return "", nil
+	}
+	if req.Prompt != "" {
+		return req.Prompt, nil
+	}
+	t, err := templates.NewLoader(req.ProjectRoot).Load(defaultKickoff)
+	if err != nil {
+		return "", fmt.Errorf("the kickoff: %w (give --prompt or --no-kickoff)", err)
+	}
+	out, err := t.Execute(templates.ExecutionContext{Session: req.Session, Project: req.ProjectRoot})
+	if err != nil {
+		return "", fmt.Errorf("--assign sends one kickoff to every agent: %w (give --prompt)", err)
+	}
+	return out, nil
 }
 
 // text is the kickoff for one agent; kickoffBody checked the shared

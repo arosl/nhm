@@ -3,21 +3,30 @@ package cli
 // --robot-spawn --spawn-assign-work: ntm's consented one-shot assignment
 // (nhm-i85, ACFS acfs-f2mc.2). The flags, the preflight that runs before
 // anything is created, and the assignment phase after the agents are up;
-// the logic is internal/core/spawnassign.
+// the logic is internal/core/spawnassign. spawn --assign, the human form,
+// runs the same preflight and phase after the user's yes (nhm-cvw).
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/arosl/nhm/internal/core"
+	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/spawnassign"
+	"github.com/arosl/nhm/internal/core/spawnassign/assign"
+	"github.com/arosl/nhm/internal/integrations/bv"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
+	"github.com/arosl/nhm/internal/ui/tui/agent"
 )
 
 // robotAssignFlags are ntm's --spawn-assign-work flags of --robot-spawn.
@@ -58,16 +67,33 @@ func (f robotAssignFlags) strategyValue() string {
 // reservation runtime), the strict policy, the verified actionable plan. A
 // refusal is the envelope to write, with ntm's code.
 func robotAssignPreflight(ctx context.Context, ie *instanceEnv, f robotAssignFlags, project string) (spawnassign.Plan, core.Scope, *robot.RobotResponse) {
+	if *f.requireReservation || strings.TrimSpace(*f.reservationPaths) != "" {
+		return spawnassign.Plan{}, core.Scope{}, &robot.RobotResponse{Success: false, ErrorCode: robot.ErrCodeInvalidFlag,
+			Error: "nhm does not reserve files for spawn assignments (--spawn-require-reservation, --spawn-reservation-paths)",
+			Hint:  "drop the reservation flags; agents reserve their own files"}
+	}
+	plan, s, refusal := assignPreflight(ctx, ie, f.strategyValue(), project, "give --spawn-dir a project directory", nil)
+	if refusal != nil {
+		return plan, s, refusal
+	}
+	plan.Context = spawnassign.PromptContextOptions{WithCASS: *f.withCASS, WithMemory: *f.withMemory}
+	return plan, s, nil
+}
+
+// assignPreflight is the preflight that the robot and the human form
+// share: the project's scope, the strict policy (nhm's config and the
+// project's .ntm/config.toml), and the verified actionable plan for
+// strategy. scopeHint is the refusal's hint for a project that has no
+// scope; fetch reads the actionable work (nil: all of it). The caller sets
+// the plan's prompt context.
+func assignPreflight(ctx context.Context, ie *instanceEnv, strategy, project, scopeHint string,
+	fetch func(context.Context, string, int) ([]bv.TriageRecommendation, error)) (spawnassign.Plan, core.Scope, *robot.RobotResponse) {
 	refuse := func(code, msg, hint string) (spawnassign.Plan, core.Scope, *robot.RobotResponse) {
 		return spawnassign.Plan{}, core.Scope{}, &robot.RobotResponse{Success: false, ErrorCode: code, Error: msg, Hint: hint}
 	}
-	if *f.requireReservation || strings.TrimSpace(*f.reservationPaths) != "" {
-		return refuse(robot.ErrCodeInvalidFlag, "nhm does not reserve files for spawn assignments (--spawn-require-reservation, --spawn-reservation-paths)",
-			"drop the reservation flags; agents reserve their own files")
-	}
 	s, err := projectScope(ctx, ie.inst.ID, project)
 	if err != nil {
-		return refuse(robot.ErrCodeInvalidFlag, err.Error(), "give --spawn-dir a project directory")
+		return refuse(robot.ErrCodeInvalidFlag, err.Error(), scopeHint)
 	}
 	globalPath, err := kinds.ConfigPath()
 	if err != nil {
@@ -79,7 +105,7 @@ func robotAssignPreflight(ctx context.Context, ie *instanceEnv, f robotAssignFla
 		return refuse(robot.ErrCodeInvalidFlag, "load spawn assignment safety policy: "+err.Error(),
 			"Fix [assign] in nhm's config and the project's .ntm/config.toml")
 	}
-	plan, err := spawnassign.Preflight(ctx, s.ProjectRoot, f.strategyValue(), policy, nil)
+	plan, err := spawnassign.Preflight(ctx, s.ProjectRoot, strategy, policy, fetch)
 	if err != nil {
 		var perr *spawnassign.PreflightError
 		if errors.As(err, &perr) {
@@ -87,14 +113,24 @@ func robotAssignPreflight(ctx context.Context, ie *instanceEnv, f robotAssignFla
 		}
 		return refuse(robot.ErrCodeInternalError, err.Error(), "")
 	}
-	plan.Context = spawnassign.PromptContextOptions{WithCASS: *f.withCASS, WithMemory: *f.withMemory}
 	return plan, s, nil
 }
 
-// robotAssignPhase runs the assignment after a spawn whose agents are all
-// up, under the owner lock as every send runs, and applies ntm's output
-// rules to out. scope is the preflight's project scope.
-func robotAssignPhase(ctx context.Context, ie *instanceEnv, res spawn.Result, scope core.Scope, plan spawnassign.Plan, prompt string, out *robot.SpawnOutput) {
+// assignHooks are the human form's spawnassign hooks; the robot form sets
+// none.
+type assignHooks struct {
+	// preamble goes ahead of the prompt in each work prompt.
+	preamble func(spawnassign.Occupant) string
+	// selectWork picks the work in place of the robot strategy.
+	selectWork func(*bv.TriageResponse, []robot.SpawnedAgent) ([]robot.SpawnedAgent, []spawnassign.WorkItem)
+}
+
+// assignPhase runs the assignment after a spawn whose agents are all up,
+// under the owner lock as every send runs, and applies ntm's output rules
+// to out. scope is the preflight's project scope; prompt goes ahead of
+// each work prompt.
+func assignPhase(ctx context.Context, ie *instanceEnv, res spawn.Result, scope core.Scope, plan spawnassign.Plan, prompt string,
+	hooks assignHooks, out *robot.SpawnOutput) {
 	senv := ie.sendEnv()
 	topo := spawnassign.Topology{Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, WorkspaceID: res.WorkspaceID,
 		ProjectKey: scope.MailProjectKey}
@@ -102,6 +138,7 @@ func robotAssignPhase(ctx context.Context, ie *instanceEnv, res spawn.Result, sc
 		ProjectRoot: res.ProjectRoot, ProjectKey: topo.ProjectKey, PreparedDir: spawnassign.PreparedDir(ie.inst.ID)}
 	deps := &spawnassign.SpawnAssignmentDependencies{
 		ListOccupants: topo.ListOccupants, ObserveOccupant: topo.ObserveOccupant, Dispatch: port, Enrich: port,
+		Preamble: hooks.preamble, SelectWork: hooks.selectWork,
 	}
 	lctx, cancel := context.WithTimeout(ctx, lockWait)
 	defer cancel()
@@ -118,6 +155,346 @@ func robotAssignPhase(ctx context.Context, ie *instanceEnv, res spawn.Result, sc
 		if errors.Is(err, core.ErrNotOwner) {
 			out.ErrorCode = robot.ErrCodeNotOwner
 		}
+	}
+}
+
+// humanAssign is spawn --assign, the human form (nhm-cvw): ntm's spawn
+// --assign for the user (its flags, phase order, text, and bead-to-agent
+// choices, spawnassign.SelectHuman), on the robot form's preflight, claim,
+// ledger and send core. The spawn sends no kickoff then: each agent that
+// gets a bead gets its identity, the kickoff and --init-prompt ahead of
+// its work prompt, in one delivery, since a working agent takes no second
+// prompt; every other agent gets them after the assignment, as its
+// kickoff.
+type humanAssign struct {
+	strategy   string
+	limit      int
+	initPrompt string
+	// agentType is --assign-agent or an --assign-*-only alias, as ntm's
+	// long name; "" assigns to every agent.
+	agentType      string
+	verbose, quiet bool
+	timeout        time.Duration
+	context        spawnassign.PromptContextOptions
+	// kickoff is the request as the user gave it, for AssignPrefix.
+	kickoff spawn.Request
+	// ask asks for the user's yes after the preflight; nil with --yes or
+	// in a dry run.
+	ask func() bool
+}
+
+// humanActionableLimit is ntm's count of actionable beads that spawn
+// --assign verifies before the spawn (spawn.go, fetchActionable).
+const humanActionableLimit = 100
+
+// spawnAssignResult is spawn --assign's result: the spawn's, with the
+// strategy, each planned bead's outcome, and the beads left out.
+type spawnAssignResult struct {
+	spawn.Result
+	AssignStrategy string                  `json:"assign_strategy"`
+	Assignments    []robot.SpawnAssignment `json:"assignments"`
+	Skipped        []spawnassign.HumanSkip `json:"skipped"`
+}
+
+// newHumanAssign takes the kickoff out of req into the assignment: the
+// spawn then sends none.
+func newHumanAssign(f *spawnFlags, req *spawn.Request) *humanAssign {
+	a := &humanAssign{strategy: f.strategy, limit: f.limit, initPrompt: f.initPrompt, verbose: f.assignVerbose, quiet: f.assignQuiet,
+		timeout:   f.assignTimeout,
+		agentType: spawnassign.ResolveSpawnAssignAgentType(f.assignAgent, f.assignCCOnly, f.assignCodOnly, f.assignGmiOnly, f.assignAgyOnly),
+		context:   spawnassign.PromptContextOptions{WithCASS: f.withCASS, WithMemory: f.withMemory}, kickoff: *req}
+	req.NoKickoff, req.Prompt, req.AssignOptions = true, "", a.options()
+	return a
+}
+
+// preflight runs the shared preflight and composes the kickoff (the
+// palette prompt or --prompt), before anything is created. The robot
+// strategy it names is never used: SelectWork picks.
+func (a *humanAssign) preflight(ctx context.Context, ie *instanceEnv, project string) (spawnassign.Plan, core.Scope, string, error) {
+	pctx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	// ntm's spawn --assign verifies its first 100 actionable beads.
+	fetch := func(ctx context.Context, dir string, _ int) ([]bv.TriageRecommendation, error) {
+		return bv.GetActionableRecommendationsContext(ctx, dir, humanActionableLimit)
+	}
+	plan, s, refusal := assignPreflight(pctx, ie, "top-n", project, "give --project a project directory", fetch)
+	if refusal != nil {
+		msg := "--assign: " + refusal.Error
+		if refusal.Hint != "" {
+			msg += " (" + refusal.Hint + ")"
+		}
+		return plan, s, "", errors.New(msg)
+	}
+	plan.Context, plan.Strategy = a.context, a.strategy
+	k := a.kickoff
+	k.ProjectRoot = s.ProjectRoot
+	kickoff, err := spawn.AssignPrefix(k)
+	return plan, s, kickoff, err
+}
+
+// prefix is what an agent gets ahead of its work, or as its kickoff: the
+// kickoff, then --init-prompt.
+func (a *humanAssign) prefix(kickoff string) string {
+	if strings.TrimSpace(a.initPrompt) == "" {
+		return kickoff
+	}
+	return strings.TrimSpace(strings.Join([]string{kickoff, a.initPrompt}, "\n\n"))
+}
+
+// options are the choices for the spawn's fingerprint: a rerun of the
+// operation with other choices is refused.
+func (a *humanAssign) options() string {
+	b, _ := json.Marshal(map[string]any{"strategy": a.strategy, "limit": a.limit, "init_prompt": a.initPrompt,
+		"agent_type": a.agentType, "prompt": a.kickoff.Prompt, "no_kickoff": a.kickoff.NoKickoff,
+		"with_cass": a.context.WithCASS, "with_memory": a.context.WithMemory})
+	return string(b)
+}
+
+// selectWork is the human form's SelectWork: ntm's selection over the
+// agents of --assign-agent's type, with the ledger's active beads and
+// bv's dependency cycles; the other agents get no bead. It keeps the
+// selection in sel for the text.
+func (a *humanAssign) selectWork(ctx context.Context, ie *instanceEnv, session, project string, sel *spawnassign.HumanSelection) func(*bv.TriageResponse, []robot.SpawnedAgent) ([]robot.SpawnedAgent, []spawnassign.WorkItem) {
+	return func(triage *bv.TriageResponse, agents []robot.SpawnedAgent) ([]robot.SpawnedAgent, []spawnassign.WorkItem) {
+		var matching, others []robot.SpawnedAgent
+		for _, ag := range agents {
+			if a.agentType == "" || assign.LegacyAgentType(agent.AgentType(ag.Type)) == a.agentType {
+				matching = append(matching, ag)
+			} else {
+				others = append(others, ag)
+			}
+		}
+		opts := spawnassign.HumanOptions{Session: session, Strategy: a.strategy, Limit: a.limit, Active: map[string]struct{}{},
+			OperatorGated: func(label string) bool { return bv.IsOperatorGatedLabelForProject(project, label) }, Now: time.Now}
+		if store, err := assignment.LoadStoreStrictReadOnly(ie.inst.ID); err == nil && store != nil {
+			for _, item := range store.ListActive() {
+				opts.Active[item.BeadID] = struct{}{}
+				opts.ActiveTotal++
+			}
+		}
+		// ntm's bv client falls back to insights built from the triage,
+		// which carry no cycles, and fails only when the triage fails too;
+		// nhm holds the verified triage, so a failed read filters none.
+		ictx, cancel := context.WithTimeout(ctx, a.timeout)
+		if insights, err := bv.GetInsightsContext(ictx, project); err == nil && insights != nil {
+			opts.Cycles = insights.Cycles
+		}
+		cancel()
+		*sel = spawnassign.SelectHuman(triage, matching, opts)
+		return append(sel.Agents, others...), sel.Items
+	}
+}
+
+// humanResult is one planned bead's outcome, ntm's per-item line, and its
+// work prompt's enrichment.
+type humanResult struct {
+	BeadID, Pane, AgentType, Error string
+	Assigned                       bool
+	CASS                           *robot.CASSInjectionInfo
+	CM                             *robot.CMInjectionInfo
+}
+
+// humanOutcome is ntm's account of the planned beads, in plan order:
+// assigned (claimed and sent), or failed with why. An agent that got no
+// bead is neither. phaseErr is the phase's own failure (the owner lock,
+// the ledger), apart from the beads.
+type humanOutcome struct {
+	results          []humanResult
+	assigned, failed int
+	phaseErr         string
+}
+
+func newHumanOutcome(out *robot.SpawnOutput, sel spawnassign.HumanSelection) humanOutcome {
+	rows := map[string]robot.SpawnAssignment{}
+	for _, a := range out.Assignments {
+		if a.BeadID != "" {
+			rows[a.BeadID] = a
+		}
+	}
+	refused := map[string]spawnassign.HumanFailure{}
+	for _, f := range sel.Failures {
+		refused[f.BeadID] = f
+	}
+	agentOf := map[string]robot.SpawnedAgent{}
+	for i, item := range sel.Items {
+		if i < len(sel.Agents) {
+			agentOf[item.ID] = sel.Agents[i]
+		}
+	}
+	var o humanOutcome
+	for _, id := range sel.Planned {
+		r := humanResult{BeadID: id, Pane: agentOf[id].Pane, AgentType: agentOf[id].Type}
+		if f, ok := refused[id]; ok {
+			r.Pane, r.Error = f.Pane, f.Error
+		} else if row, ok := rows[id]; ok {
+			r.Pane, r.AgentType = firstOf(row.Pane, r.Pane), firstOf(row.AgentType, r.AgentType)
+			r.CASS, r.CM = row.CASSInjection, row.MemoryInjection
+			r.Assigned = row.Claimed && row.PromptSent
+			if !r.Assigned {
+				r.Error = firstOf(row.PromptError, row.ClaimError, "not sent")
+			}
+		} else {
+			// The loop stopped before the bead (a timeout, a cancel).
+			r.Error = firstOf(out.Error, "not attempted")
+		}
+		if r.Assigned {
+			o.assigned++
+		} else {
+			o.failed++
+		}
+		o.results = append(o.results, r)
+	}
+	if !out.Success && out.ErrorCode != spawnassign.ErrorCodeAssignmentFailed {
+		o.phaseErr = firstOf(out.Error, out.ErrorCode)
+	}
+	return o
+}
+
+// err is ntm's: any failed planned bead fails the command, and so does the
+// phase's own failure.
+func (o humanOutcome) err() error {
+	switch {
+	case o.failed > 0:
+		return fmt.Errorf("assignment failed: failed to execute assignments: %d of %d assignments failed", o.failed, o.assigned+o.failed)
+	case o.phaseErr != "":
+		return fmt.Errorf("assignment failed: %s", o.phaseErr)
+	}
+	return nil
+}
+
+// print writes ntm's spawn --assign text to w, and its [DEP] lines to errw.
+// The ready and init prompt lines always print; the execution lines and
+// totals not with --assign-quiet; the [DEP] lines (the beads ntm's
+// partition leaves out, and those in a cycle) unless --assign-quiet
+// without --assign-verbose, as ntm's text mode is verbose by default. The
+// strategy line prints only when no bead failed, as ntm returns before it.
+func (a *humanAssign) print(w, errw io.Writer, ready, inited int, o humanOutcome, sel spawnassign.HumanSelection) {
+	fmt.Fprintf(w, "ℹ %d agents ready\n", ready)
+	if strings.TrimSpace(a.initPrompt) != "" {
+		fmt.Fprintf(w, "ℹ Init prompt sent to %d agents\n", inited)
+	}
+	if a.verbose || !a.quiet {
+		filtered := 0
+		for _, k := range sel.Skipped {
+			switch k.Reason {
+			case spawnassign.HumanSkipCycle, spawnassign.HumanSkipLimit, spawnassign.HumanSkipPressure:
+				continue
+			}
+			filtered++
+			if len(k.BlockedBy) > 0 {
+				fmt.Fprintf(errw, "[DEP] Skipping %s - %s: %v\n", k.BeadID, k.Reason, k.BlockedBy)
+			} else {
+				fmt.Fprintf(errw, "[DEP] Skipping %s - %s\n", k.BeadID, k.Reason)
+			}
+		}
+		if filtered > 0 {
+			fmt.Fprintf(errw, "[DEP] Filtered %d non-actionable beads, %d actionable\n", filtered, sel.Actionable)
+		}
+		for _, k := range sel.Skipped {
+			if k.Reason == spawnassign.HumanSkipCycle {
+				fmt.Fprintf(errw, "[DEP] Excluding %s from assignment (in dependency cycle)\n", k.BeadID)
+			}
+		}
+	}
+	if !a.quiet {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Executing assignments...")
+		for _, r := range o.results {
+			for _, line := range spawnassign.HumanPromptContextLines(r.BeadID, r.CASS, r.CM) {
+				fmt.Fprintln(w, line)
+			}
+			if r.Assigned {
+				fmt.Fprintf(w, "  Assigned %s to pane %s (%s)\n", r.BeadID, r.Pane, r.AgentType)
+			} else {
+				fmt.Fprintf(w, "  Failed to assign %s to pane %s: %s\n", r.BeadID, r.Pane, r.Error)
+			}
+		}
+		fmt.Fprintln(w)
+		if o.failed == 0 {
+			fmt.Fprintf(w, "✓ Successfully assigned %d beads\n", o.assigned)
+		} else {
+			fmt.Fprintf(w, "Assigned %d beads (%d failed)\n", o.assigned, o.failed)
+		}
+	}
+	if o.err() == nil {
+		fmt.Fprintf(w, "ℹ Assigned %d tasks (strategy: %s)\n", len(sel.Planned), a.strategy)
+	}
+}
+
+// kickoffSkips are the slots whose agent gets no kickoff: its work prompt
+// went, or may have gone. A claimed bead's slot is skipped unless the
+// ledger (get, nil when it cannot be read) says its dispatch surely failed:
+// pending again after a dispatch that did not actuate.
+func kickoffSkips(rows []robot.SpawnAssignment, get func(beadID string) *assignment.Assignment) map[string]bool {
+	skip := map[string]bool{}
+	for _, r := range rows {
+		if !r.Claimed {
+			continue
+		}
+		if !r.PromptSent && get != nil {
+			if a := get(r.BeadID); a != nil && a.DispatchState == assignment.DispatchPending {
+				continue
+			}
+		}
+		skip[r.Pane] = true
+	}
+	return skip
+}
+
+// kickoffs sends the kickoff, prefix, to each ready agent of res that is
+// not in kickoffSkips of rows (nil: every ready agent), under the owner
+// lock as every send runs. It returns how many were submitted.
+func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.Request, res *spawn.Result, rows []robot.SpawnAssignment,
+	prefix string) (int, error) {
+	if strings.TrimSpace(prefix) == "" {
+		return 0, nil
+	}
+	var get func(string) *assignment.Assignment
+	if store, err := assignment.LoadStoreStrictReadOnly(ie.inst.ID); err == nil && store != nil {
+		get = store.Get
+	}
+	claimed := kickoffSkips(rows, get)
+	senv := ie.sendEnv()
+	env := spawn.Env{DB: ie.db, Send: func(ctx context.Context, r send.Request) (send.Result, error) { return send.Send(ctx, senv, r) }}
+	sent := 0
+	lctx, cancel := context.WithTimeout(ctx, lockWait)
+	defer cancel()
+	err := core.WithOwnerShared(lctx, ie.inst.Dir, func(o core.Owner) error {
+		if err := core.RequireOwner(o, core.OwnerNhm); err != nil {
+			return err
+		}
+		for i := range res.Targets {
+			t := &res.Targets[i]
+			if !t.Ready || claimed[t.Slot] {
+				continue
+			}
+			spawn.Kickoff(ctx, env, req, res, t, prefix)
+			if t.KickoffStatus == send.StatusSubmitted || t.KickoffStatus == send.StatusPossiblySubmitted {
+				sent++
+			}
+		}
+		return nil
+	})
+	return sent, err
+}
+
+// identityPreamble is the human form's Preamble: each agent's work
+// prompt starts as its kickoff would, with nhm's identity preamble
+// (spawn.IdentityPreamble, nhm-lm4), so the kickoff's "register with
+// Agent Mail" uses the identity spawn made. A binding that cannot be
+// read gets none.
+func identityPreamble(ctx context.Context, ie *instanceEnv) func(spawnassign.Occupant) string {
+	store := bindings.NewStore(ie.db)
+	return func(o spawnassign.Occupant) string {
+		b, err := store.Get(ctx, o.BindingID)
+		if err != nil {
+			return ""
+		}
+		alias := b.HerdrAlias
+		if alias == "" {
+			alias = strings.ToLower(b.MailName)
+		}
+		return spawn.IdentityPreamble(b.MailName, b.MailProjectKey, alias, b.WorkspaceID)
 	}
 }
 

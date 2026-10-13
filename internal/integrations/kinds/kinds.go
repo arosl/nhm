@@ -523,7 +523,9 @@ func init() {
 		type until var version wait when with-cass with-memory yes
 		no-cass-context effort memory-query role
 		dir no-user safety assign-work robot-format robot-spawn robot-send if-generation
-		strategy assign-strategy require-reservation reservation-paths`) {
+		strategy assign-strategy require-reservation reservation-paths
+		init-prompt assign-agent assign-verbose assign-quiet assign-timeout
+		assign-cc-only assign-cod-only assign-gmi-only assign-agy-only`) {
 		reserved[f] = true
 	}
 }

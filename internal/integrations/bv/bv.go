@@ -3,7 +3,8 @@
 // internal/bv/client.go; see LICENSE in this directory and PROVENANCE.md.
 // Local changes: this header; imports. Kept whole and unchanged: the bv
 // runners (IsNotInitialized to runWithContextTimeout), GetPlan and
-// GetPlanContext, the br runner (RunBd to isBeadsDBCorruptionError), the
+// GetPlanContext, GetInsightsContext (nhm-cvw: the human spawn --assign's
+// cycle check), the br runner (RunBd to isBeadsDBCorruptionError), the
 // claim errors, operator gates and AssignmentEligibilityError,
 // BeadClaimResult, ClaimBeadForAssignment, requireBeadsMutationContext, the
 // br claim and list helpers (beadClaimArgs to stripFlagWithValue), and the
@@ -20,8 +21,8 @@
 // hash repair, recoverCorruptBeadsDatabase and withBeadsCorruptionRecovery
 // (an automatic `br sync --import-only --rebuild` of a shared tracker), the
 // generic ClaimBead and ReleaseBeadClaim, HasLocalBeadsDB, and the bv robot
-// readers nhm does not call (insights, priority, recipes, drift, graph,
-// health, summaries, lists).
+// readers nhm does not call (priority, recipes, drift, graph, health,
+// summaries, lists).
 
 // Package bv provides integration with the beads_viewer (bv) tool.
 // It executes bv robot mode commands and parses their JSON output.
@@ -247,6 +248,21 @@ func runWithContextTimeout(parent context.Context, dir string, timeout time.Dura
 // GetPlan returns a parallel execution plan
 func GetPlan(dir string) (*PlanResponse, error) {
 	return GetPlanContext(context.Background(), dir)
+}
+
+// GetInsightsContext returns graph insights with caller cancellation.
+func GetInsightsContext(ctx context.Context, dir string) (*InsightsResponse, error) {
+	output, err := runWithContextTimeout(ctx, dir, CommandTimeout(), "--robot-insights")
+	if err != nil {
+		return nil, err
+	}
+
+	var resp InsightsResponse
+	if err := json.Unmarshal([]byte(output), &resp); err != nil {
+		return nil, fmt.Errorf("parsing insights: %w", err)
+	}
+
+	return &resp, nil
 }
 
 // GetPlanContext returns the parallel execution plan with caller cancellation.

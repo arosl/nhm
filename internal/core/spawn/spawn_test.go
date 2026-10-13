@@ -652,34 +652,73 @@ func TestTrustFolder(t *testing.T) {
 	}
 }
 
-func TestAliasSuffixAndAssign(t *testing.T) {
+func TestAliasSuffixAndOwnPrompt(t *testing.T) {
 	w := newWorld(t)
 	seq := uint64(1)
 	// IcyKnoll's herdr name is live in another project.
 	w.h.agents["w9:p9"] = herdr.AgentInfo{PaneID: "w9:p9", Name: "icyknoll", StateChangeSeq: &seq}
 	r := req(Want{Kind: "claude", Count: 1})
-	r.Assign = true
 	res, err := Spawn(context.Background(), w.env, r)
 	if err != nil || res.Targets[0].HerdrName != "icyknoll-2" {
 		t.Fatalf("alias = %+v %v", res.Targets[0], err)
 	}
-	if !strings.HasSuffix(w.sent[0].Message, "Read AGENTS.md.\n\nPick your next bead with bv.") {
-		t.Fatalf("assign kickoff = %q", w.sent[0].Message)
+	if !strings.HasSuffix(w.sent[0].Message, "Read AGENTS.md.") {
+		t.Fatalf("kickoff = %q", w.sent[0].Message)
 	}
-	r.NoKickoff = true
-	if _, err := Spawn(context.Background(), w.env, r); err == nil {
-		t.Fatal("--assign without a kickoff was accepted")
-	}
-	// The operator's own prompt goes out as typed, braces included; the
-	// palette's next_bead follows it.
+	// The operator's own prompt goes out as typed, braces included.
 	w = newWorld(t)
 	r = req(Want{Kind: "claude", Count: 1})
-	r.Prompt, r.Assign = "Check {{this}} literally.", true
+	r.Prompt = "Check {{this}} literally."
 	if _, err := Spawn(context.Background(), w.env, r); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(w.sent[0].Message, "\n\nCheck {{this}} literally.\n\nPick your next bead with bv.") {
+	if !strings.HasSuffix(w.sent[0].Message, "\n\nCheck {{this}} literally.") {
 		t.Fatalf("own prompt = %q", w.sent[0].Message)
+	}
+}
+
+// Without --assign the fingerprint keeps "assign": false and no more, as
+// before nhm-cvw; with it, the choices stand beside "assign": true.
+func TestFingerprintAssignOptions(t *testing.T) {
+	r := req(Want{Kind: "claude", Count: 1})
+	fp := fingerprint(r)
+	if _, ok := fp["assign_options"]; fp["assign"] != false || ok {
+		t.Fatalf("without --assign = %v", fp)
+	}
+	r.AssignOptions = `{"strategy":"balanced"}`
+	fp = fingerprint(r)
+	if fp["assign"] != true || fp["assign_options"] != `{"strategy":"balanced"}` {
+		t.Fatalf("with --assign = %v", fp)
+	}
+}
+
+// spawn --assign's kickoff goes ahead of every agent's work prompt
+// (nhm-cvw): the operator's prompt as typed, else default_new_agent with
+// the session and project filled in, else nothing. A palette prompt that
+// names one agent refuses, since one text goes to all.
+func TestAssignPrefix(t *testing.T) {
+	newWorld(t)
+	r := req(Want{Kind: "claude", Count: 1})
+	if got, err := AssignPrefix(r); err != nil || got != "Read AGENTS.md." {
+		t.Fatalf("palette prefix = %q, %v", got, err)
+	}
+	r.Prompt = "Check {{this}} literally."
+	if got, err := AssignPrefix(r); err != nil || got != r.Prompt {
+		t.Fatalf("own prompt = %q, %v", got, err)
+	}
+	r.Prompt, r.NoKickoff = "", true
+	if got, err := AssignPrefix(r); err != nil || got != "" {
+		t.Fatalf("no kickoff = %q, %v", got, err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := writeFileAll(home+"/.acfs/onboard/docs/ntm/command_palette.md",
+		"## A\n### default_new_agent | Default\nYou are {{agent}} in {{session}}.\n"); err != nil {
+		t.Fatal(err)
+	}
+	r.NoKickoff = false
+	if got, err := AssignPrefix(r); err == nil || !strings.Contains(err.Error(), "every agent") {
+		t.Fatalf("per-agent placeholder = %q, %v", got, err)
 	}
 }
 
