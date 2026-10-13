@@ -591,13 +591,41 @@ func followMove(ctx context.Context, env Env, b *bindings.Binding, r *Reconcile)
 	if !ok {
 		return nil
 	}
+	return relocate(ctx, env, b, a, "herdr moved", r)
+}
+
+// FollowMove moves a binding to newPane after the caller moved its
+// agent there with herdr's pane.move (nhm move). It refuses when newPane
+// does not hold the binding's agent (bindings.SameOccupant). Then it
+// does what the reconcile does for a moved pane: relocate with the same
+// generation, Agent Mail's identity file for the new id, the herdr name,
+// and the tab's label if herdr's default is still on it. The caller
+// holds the owner lock and checked that nhm owns the instance.
+func FollowMove(ctx context.Context, env Env, b bindings.Binding, newPane string) (Reconcile, error) {
+	r := Reconcile{PaneID: newPane, Ran: true, Owner: core.OwnerNhm, Binding: b.ID, Actions: []string{}, Warnings: []string{}}
+	a, err := env.Herdr.AgentGet(ctx, newPane)
+	if err != nil {
+		return r, fmt.Errorf("hooks: %s: %w", newPane, err)
+	}
+	if a.PaneID == "" {
+		a.PaneID = newPane
+	}
+	if a.Agent != b.Kind || !bindings.SameOccupant(ctx, env.Herdr, b, a) {
+		return r, fmt.Errorf("hooks: %s does not hold %s's %s agent", newPane, b.MailName, b.Kind)
+	}
+	return r, relocate(ctx, env, &b, a, "nhm move", &r)
+}
+
+// relocate records that the binding's agent is a, in another pane, and
+// applies the binding's marks there; how says who moved the pane.
+func relocate(ctx context.Context, env Env, b *bindings.Binding, a herdr.AgentInfo, how string, r *Reconcile) error {
 	proof := fmt.Sprintf("pid %d", b.ForegroundPID)
 	if b.ForegroundPID == 0 {
 		proof = "session " + b.NativeSession.Value
 	}
 	from := b.PaneID
 	nb, err := env.Bindings.Relocate(ctx, b.ID, b.Generation, bindings.Location{WorkspaceID: a.WorkspaceID, TabID: a.TabID,
-		PaneID: a.PaneID}, bindings.Evidence{Kind: "move", Detail: fmt.Sprintf("herdr moved %s to %s, same %s", from, a.PaneID, proof)})
+		PaneID: a.PaneID}, bindings.Evidence{Kind: "move", Detail: fmt.Sprintf("%s %s to %s, same %s", how, from, a.PaneID, proof)})
 	if err != nil {
 		return err
 	}

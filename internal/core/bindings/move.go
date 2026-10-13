@@ -97,7 +97,7 @@ func Moved(ctx context.Context, h Herdr, s *Store, b Binding) (agent herdr.Agent
 			}
 			continue
 		}
-		if sameOccupant(ctx, h, b, a) {
+		if SameOccupant(ctx, h, b, a) {
 			found = append(found, a)
 		}
 	}
@@ -114,8 +114,11 @@ func Moved(ctx context.Context, h Herdr, s *Store, b Binding) (agent herdr.Agent
 	return herdr.AgentInfo{}, false, fmt.Errorf("%w: %s could be in %s", ErrAmbiguousMove, b.MailName, strings.Join(panes, ", "))
 }
 
-// sameOccupant reports whether the agent a is the binding's occupant.
-func sameOccupant(ctx context.Context, h Herdr, b Binding, a herdr.AgentInfo) bool {
+// SameOccupant reports whether the agent a, in any pane, is the
+// binding's occupant: the binding's process (pid and start time) is in
+// a's pane, or, when the binding has no process, a has its native
+// session. It does not compare kinds.
+func SameOccupant(ctx context.Context, h Herdr, b Binding, a herdr.AgentInfo) bool {
 	if b.ForegroundPID != 0 {
 		at := b
 		at.PaneID = a.PaneID

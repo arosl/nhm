@@ -531,6 +531,32 @@ func TestBindingFollowsAPaneMovedToAnotherWorkspace(t *testing.T) {
 	}
 }
 
+// nhm move moves the pane itself and hands FollowMove the new id; a
+// pane with another process is refused and nothing changes.
+func TestFollowMoveTakesTheNewPane(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	b := h.binding("IcyKnoll")
+	h.world.move("w1:p1", "w2:p1", "w2:t1")
+	h.world.addTab("w2:t1", "1", 1)
+	h.world.set("w3:p1", pane{kind: "claude", session: "sess-a", pid: 900, ws: "w3", tab: "w3:t1"})
+	if _, err := FollowMove(ctx, h.env, b, "w3:p1"); err == nil || h.binding("IcyKnoll").PaneID != "w1:p1" {
+		t.Fatalf("another process: %v", err)
+	}
+	r, err := FollowMove(ctx, h.env, b, "w2:p1")
+	nb := h.binding("IcyKnoll")
+	if err != nil || nb.PaneID != "w2:p1" || nb.Generation != b.Generation || r.Binding != b.ID ||
+		!slices.Contains(r.Actions, "IcyKnoll moved from w1:p1 to w2:p1, slot 0.1") || !h.world.called("tab.rename w2:t1 IcyKnoll") ||
+		h.world.get("w2:p1").name != "icyknoll" {
+		t.Fatalf("FollowMove = %+v %v, binding %+v", r, err, nb)
+	}
+	if rec, ok, err := agentmail.ReadIdentity(h.env.ConfigHome, nb.MailProjectKey, "w2:p1"); err != nil || !ok || rec.Name != "IcyKnoll" {
+		t.Fatalf("identity file = %+v %v %v", rec, ok, err)
+	}
+}
+
 // An agent that left its pane, which herdr still has, did not move: the
 // binding stays where it is.
 func TestAgentThatLeftDoesNotMove(t *testing.T) {
