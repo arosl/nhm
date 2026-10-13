@@ -68,6 +68,7 @@ func (ie *instanceEnv) lifecycleEnv() (lifecycle.Env, error) {
 	return lifecycle.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, Mail: mail, Facts: facts,
 		InstanceDir: ie.inst.Dir, Home: home, MailConfigHome: configHome, Caller: ie.callerPane(context.Background()),
 		Send:           func(ctx context.Context, r send.Request) (send.Result, error) { return send.Send(ctx, senv, r) },
+		Bead:           send.BrShow,
 		Handoff:        lifecycle.DefaultHandoff("", ""),
 		LaunchSettings: spawn.HookSettings(exec.LookPath),
 		Index: func(ctx context.Context, path, project, key string) (string, error) {
@@ -198,7 +199,7 @@ func printRetire(w io.Writer, res lifecycle.RetireResult) {
 	}
 }
 
-const recycleUsage = `Usage: nhm recycle <Name> [-t KEY | --prompt T] [--no-handoff]
+const recycleUsage = `Usage: nhm recycle <Name> [-t KEY [--bead ID] | --prompt T] [--no-handoff]
                    [--project DIR] [--op-id ID] [--socket PATH] [--json]
 
 Give the same agent a fresh session in the same pane, with the same name,
@@ -208,6 +209,10 @@ old agent with its kind's exit command, start the successor in the same
 pane, bump the binding's generation, and send the kickoff with the
 handoff. Sends and wakes skip the agent while it recycles. On a failure
 it reports the stage and starts nothing twice.
+
+A kickoff template's bead_* placeholders come from --bead, as with nhm
+send, else from the agent's bead in progress (the one the handoff
+reads); with neither, recycle refuses before it stops anything.
 
 Exit codes: 0 recycled; 1 stopped at a stage; 2 refused.
 `
@@ -220,6 +225,7 @@ func runRecycle(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&tmpl, "template", "", "the kickoff's template key")
 	fs.StringVar(&tmpl, "t", "", "the kickoff's template key")
 	prompt := fs.String("prompt", "", "the kickoff prompt")
+	bead := fs.String("bead", "", "the bead of the template's bead_* placeholders")
 	noHandoff := fs.Bool("no-handoff", false, "send no handoff")
 	project := fs.String("project", "", "the name's project")
 	opID := fs.String("op-id", "", "operation id, for an idempotent retry")
@@ -243,7 +249,8 @@ func runRecycle(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
-	req := lifecycle.RecycleRequest{Target: pos[0], Template: tmpl, Prompt: *prompt, NoHandoff: *noHandoff, OperationID: *opID}
+	req := lifecycle.RecycleRequest{Target: pos[0], Template: tmpl, Prompt: *prompt, BeadID: strings.TrimSpace(*bead),
+		NoHandoff: *noHandoff, OperationID: *opID}
 	if *project != "" {
 		s, err := projectScope(ctx, ie.inst.ID, *project)
 		if err != nil {

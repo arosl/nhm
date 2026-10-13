@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,8 +42,12 @@ type RecycleRequest struct {
 	// Template is a template or palette key; Prompt is the kickoff text;
 	// with neither, ACFS's default_new_agent prompt.
 	Template, Prompt string
-	NoHandoff        bool
-	OperationID      string
+	// BeadID fills the kickoff template's bead_* placeholders, as send's
+	// --bead does. Without it, a template that has them takes the agent's
+	// bead in progress: the one the handoff reads.
+	BeadID      string
+	NoHandoff   bool
+	OperationID string
 	// ExpectedGeneration is the generation the caller reviewed; 0 is
 	// unset. When set, recycle stops at its check, under the binding's
 	// lock and before any effect, when the binding is at another one.
@@ -105,7 +110,7 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	case env.Caller != "" && b.PaneID == env.Caller:
 		return fail(StageCheck, fmt.Errorf("%s runs in this pane", b.MailName))
 	}
-	kick, err := recycleKickoff(req, b)
+	kick, err := recycleKickoff(ctx, env, req, b)
 	if err != nil {
 		return fail(StageCheck, err)
 	}
@@ -142,10 +147,12 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	if agent.Agent != "" && agent.Agent != b.Kind {
 		return fail(StageCheck, fmt.Errorf("pane %s holds a %s agent; the binding is %s", b.PaneID, agent.Agent, b.Kind))
 	}
+	claimed := map[string]any{"binding_id": b.ID, "generation": b.Generation, "template": req.Template, "prompt": req.Prompt, "no_handoff": req.NoHandoff}
+	if req.BeadID != "" {
+		claimed["bead_id"] = req.BeadID
+	}
 	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: "recycle",
-		Scope:   map[string]string{"binding_id": b.ID},
-		Request: map[string]any{"binding_id": b.ID, "generation": b.Generation, "template": req.Template, "prompt": req.Prompt, "no_handoff": req.NoHandoff}},
-		env.now())
+		Scope: map[string]string{"binding_id": b.ID}, Request: claimed}, env.now())
 	if err != nil {
 		return fail(StageCheck, err)
 	}
@@ -287,12 +294,17 @@ func waitExit(ctx context.Context, env Env, b bindings.Binding) bool {
 }
 
 // recycleKickoff is the successor's prompt: --prompt as typed, a
-// template, or ACFS's default_new_agent.
-func recycleKickoff(req RecycleRequest, b bindings.Binding) (string, error) {
+// template, or ACFS's default_new_agent. A template's bead_* placeholders
+// come from --bead, else from the agent's bead in progress (nhm-e8c); a
+// bead is read only when --bead names one or the template needs one.
+func recycleKickoff(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) (string, error) {
 	if req.Prompt != "" && req.Template != "" {
 		return "", fmt.Errorf("give --prompt or -t, not both")
 	}
 	if req.Prompt != "" {
+		if req.BeadID != "" {
+			return "", fmt.Errorf("--bead fills a template's bead_* placeholders; give -t, not --prompt")
+		}
 		return req.Prompt, nil
 	}
 	key := req.Template
@@ -303,6 +315,46 @@ func recycleKickoff(req RecycleRequest, b bindings.Binding) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the kickoff: %w", err)
 	}
-	return t.Execute(templates.ExecutionContext{Session: b.WorkspaceID, Project: b.MailProjectKey, AgentName: b.MailName,
-		HerdrName: b.HerdrAlias, Model: b.Model, AgentType: b.Kind, AgentPane: b.PaneID})
+	ec := templates.ExecutionContext{Session: b.WorkspaceID, Project: b.MailProjectKey, AgentName: b.MailName,
+		HerdrName: b.HerdrAlias, Model: b.Model, AgentType: b.Kind, AgentPane: b.PaneID}
+	if req.BeadID == "" {
+		text, err := t.Execute(ec)
+		var unresolved *templates.UnresolvedVariablesError
+		if !errors.As(err, &unresolved) || !slices.ContainsFunc(unresolved.Names, func(n string) bool { return strings.HasPrefix(n, "bead_") }) {
+			return text, err
+		}
+	}
+	bead, err := kickoffBead(ctx, env, req, b)
+	if err != nil {
+		return "", err
+	}
+	return t.Execute(ec.WithBead(bead.ID, bead.Title, fmt.Sprintf("P%d", bead.Priority), bead.Description, bead.Status, bead.IssueType))
+}
+
+// kickoffBead reads the bead for the kickoff's bead_* placeholders:
+// --bead, else the agent's first bead in progress, the one the handoff
+// reads.
+func kickoffBead(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) (send.Bead, error) {
+	id := req.BeadID
+	if id == "" {
+		if env.Facts == nil {
+			return send.Bead{}, fmt.Errorf("the kickoff fills bead_* placeholders and nhm cannot read %s's beads: give --bead ID", b.MailName)
+		}
+		beads, err := env.Facts.Assigned(ctx, b.MailProjectKey, b.MailName)
+		if err != nil {
+			return send.Bead{}, fmt.Errorf("the kickoff fills bead_* placeholders and %s's beads cannot be read: %w; give --bead ID", b.MailName, err)
+		}
+		if len(beads) == 0 {
+			return send.Bead{}, fmt.Errorf("the kickoff fills bead_* placeholders and %s has no bead in progress: give --bead ID", b.MailName)
+		}
+		id = beads[0].ID
+	}
+	if env.Bead == nil {
+		return send.Bead{}, fmt.Errorf("bead %s: nhm has no bead reader here", id)
+	}
+	bead, err := env.Bead(ctx, b.MailProjectKey, id)
+	if err != nil {
+		return send.Bead{}, fmt.Errorf("bead %s: %w", id, err)
+	}
+	return bead, nil
 }

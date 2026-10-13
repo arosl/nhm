@@ -54,6 +54,10 @@ type Env struct {
 	Caller string
 	// Send delivers recycle's kickoff (send.Send with the instance's env).
 	Send func(ctx context.Context, req send.Request) (send.Result, error)
+	// Bead reads a bead in a project (send.BrShow) for the bead_*
+	// placeholders of recycle's kickoff; nil: a kickoff that needs a bead
+	// is refused.
+	Bead func(ctx context.Context, projectRoot, id string) (send.Bead, error)
 	// Handoff composes recycle's handoff; nil sends none.
 	Handoff HandoffFunc
 	// LaunchSettings is the hook settings JSON a kind with a settings
