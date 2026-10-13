@@ -13,6 +13,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/lifecycle"
+	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -25,7 +26,9 @@ const adminLifecycleUsage = `Usage: nhm admin restore [--socket PATH] [--json]
 restore is the plugin's startup hook: it verifies each binding against the
 restored pane and native session, applies the herdr names, the sidebar
 tokens and Agent Mail's identity files again, marks the rest displaced,
-and starts nothing. Under ACFS's Bash it does nothing.
+and starts nothing. Under ACFS's Bash it does nothing, and with no herdr
+server running (an install before herdr starts) there is nothing to
+restore: it exits 0 and says so.
 
 recover inspect lists live, displaced and orphan bindings, the operations
 with no final outcome, and the native sessions two bindings claim.
@@ -108,6 +111,15 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 		items, rerr = lifecycle.Restore(ctx, lenv)
 		return rerr
 	})
+	if err != nil && herdr.ServerDown(err) {
+		// No herdr server runs (ACFS's install or update before herdr
+		// starts), so no pane is back to verify and nothing was changed;
+		// the plugin runs restore when herdr starts (nhm-brp).
+		env.Result = map[string]any{"bindings": []lifecycle.RestoreItem{}}
+		return output(stdout, stderr, asJSON, env, nil, exitOK, func(w io.Writer) {
+			fmt.Fprintln(w, "herdr is not running; nothing to restore")
+		})
+	}
 	env.Result = map[string]any{"bindings": items}
 	return output(stdout, stderr, asJSON, env, err, code, func(w io.Writer) {
 		for _, it := range items {
