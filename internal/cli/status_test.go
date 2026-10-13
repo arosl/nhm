@@ -475,8 +475,10 @@ func TestRobotFormat(t *testing.T) {
 		t.Fatalf("two flags = %d %+v", code, env)
 	}
 	t.Setenv("HERDR_SOCKET_PATH", "")
+	// Exit 1, as ntm's ExitCodeForResponse: 2 is NOT_IMPLEMENTED's only
+	// (nhm-i3k).
 	env, code = robotRun(t, "--robot-status")
-	if code != 2 || env.ErrorCode != "DEPENDENCY_MISSING" {
+	if code != 1 || env.ErrorCode != "DEPENDENCY_MISSING" {
 		t.Fatalf("no herdr = %d %+v", code, env)
 	}
 }

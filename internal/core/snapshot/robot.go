@@ -86,7 +86,7 @@ func summary(m *Model) robot.StatusSummary {
 			s.GrokCount++
 		case "cursor":
 			s.CursorCount++
-		case "opencode":
+		case "oc":
 			s.OpencodeCount++
 		case "omp":
 			s.OmpCount++

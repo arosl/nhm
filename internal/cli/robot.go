@@ -23,11 +23,13 @@ import (
 // that is not working, as nhm limits does.
 const healthLines = 15
 
-// Robot exit codes, ntm's: 0 success, 1 error, 2 unavailable.
+// Robot exit codes, ntm's (ExitCodeForResponse): 0 success, 2 only for
+// NOT_IMPLEMENTED, 1 for every other error, DEPENDENCY_MISSING too
+// (nhm-i3k).
 const (
-	robotOK          = 0
-	robotError       = 1
-	robotUnavailable = 2
+	robotOK             = 0
+	robotError          = 1
+	robotNotImplemented = 2
 )
 
 // runRobot answers ntm's --robot-* read flags with ntm's types (plan-v8
@@ -51,7 +53,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		// ntm's bare form is project health: bv's drift, bottlenecks and
 		// recommendations. nhm answers the session form only.
 		return robotFail(stdout, robot.ErrCodeNotImplemented, "--robot-health without a session is not in this nhm",
-			"use --robot-health=SESSION for each agent's health; nhm health covers the runtime", "json", robotUnavailable, now)
+			"use --robot-health=SESSION for each agent's health; nhm health covers the runtime", "json", robotNotImplemented, now)
 	}
 	if slices.Contains(args, "--robot-health=") {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "--robot-health requires a session name or no value for project health",
@@ -72,7 +74,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		if name := unknownRobotFlag(args); name != "" {
 			return robotFail(stdout, "NOT_IMPLEMENTED", fmt.Sprintf("%s is not in this nhm", name),
-				notImplementedHint(name), "json", robotUnavailable, now)
+				notImplementedHint(name), "json", robotNotImplemented, now)
 		}
 		msg := "unexpected arguments"
 		if err != nil {
@@ -104,14 +106,14 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	}
 	r, err := openReader(*socket, (*status || *snap) && !*noMail)
 	if err != nil {
-		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotUnavailable, now)
+		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotError, now)
 	}
 	defer r.close()
 	ctx := context.Background()
 	m := r.model(ctx, "")
 	if !m.HerdrOK() {
 		return robotFail(stdout, robot.ErrCodeDependencyMissing, "herdr did not answer: "+m.Sources[snapshot.SourceHerdr].Error,
-			"start the herdr server; nhm doctor checks it", *format, robotUnavailable, now)
+			"start the herdr server; nhm doctor checks it", *format, robotError, now)
 	}
 	switch {
 	case *status:

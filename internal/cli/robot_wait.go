@@ -86,7 +86,7 @@ func runRobotWait(args []string, stdout io.Writer) int {
 	if !ok {
 		if slices.Contains(ntmOnlyWaitConditions, condition) || strings.Contains(condition, ",") {
 			return robotFail(stdout, robot.ErrCodeNotImplemented, fmt.Sprintf("condition '%s' is not in this nhm", condition),
-				"nhm answers idle, generating and healthy, one at a time, from herdr's agent states", *format, robotUnavailable, now)
+				"nhm answers idle, generating and healthy, one at a time, from herdr's agent states", *format, robotNotImplemented, now)
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("invalid condition '%s'", condition),
 			"Valid conditions: idle, generating, healthy", *format, robotError, now)
@@ -102,7 +102,7 @@ func runRobotWait(args []string, stdout io.Writer) int {
 
 	ie, err := openInstance(*socket)
 	if err != nil {
-		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotUnavailable, now)
+		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotError, now)
 	}
 	defer ie.db.Close()
 	ctx := context.Background()

@@ -659,7 +659,7 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 	}
 	ie, err := openInstance(*socket)
 	if err != nil {
-		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotUnavailable, now)
+		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotError, now)
 	}
 	defer ie.db.Close()
 	ctx := context.Background()

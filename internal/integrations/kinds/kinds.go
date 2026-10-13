@@ -476,7 +476,8 @@ func builtins() []Adapter {
 			Cannot: []string{"its guard settings file", "its usage", "its session resume"},
 		},
 		{
-			Name: "opencode", NTMType: "opencode", Flags: []string{"oc"}, QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
+			// ntm's robot outputs type opencode as oc (nhm-i3k).
+			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume"},
 		},
 		{
