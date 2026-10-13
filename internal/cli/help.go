@@ -75,10 +75,9 @@ func adminUsage(args []string) string {
 }
 
 // leafHelp is the usage text for args (a verb and its arguments) when
-// they ask for help: -h or --help, as Go's flag package spells them,
-// before any "--". Run prints it and exits 0 before the verb runs, so a
-// help request never acts (nhm-4cb: quota record-claude --help read
-// stdin and saved it).
+// they ask for help (asksHelp). Run prints it and exits 0 before the verb
+// runs, so a help request never acts (nhm-4cb: quota record-claude
+// --help read stdin and saved it).
 func leafHelp(args []string) (string, bool) {
 	if len(args) < 2 || !asksHelp(args[1:]) {
 		return "", false
@@ -90,14 +89,43 @@ func leafHelp(args []string) (string, bool) {
 	return u, ok
 }
 
+// boolFlags are common flags that take no value, so a help flag after
+// one is a flag of its own. TestHelpBoolFlagsTakeNoValue keeps the list
+// true for every verb.
+var boolFlags = map[string]bool{"json": true, "jsonl": true, "dry-run": true, "yes": true, "force": true,
+	"all": true, "once": true, "loop": true, "watch": true, "verbose": true}
+
+// asksHelp reports whether args ask for help: -h or --help, as Go's flag
+// package spells them, before any "--", and in flag position, not as the
+// value of the flag before it (nhm-ceu: `nhm send s --msg --help` sends
+// "--help"). A help flag is in flag position first, after an argument,
+// after a --flag=value, or after a flag in boolFlags. After another bare
+// flag Run cannot tell, and the verb's own parser decides: that flag's
+// value, or its help on stderr with exit 2.
 func asksHelp(args []string) bool {
-	for _, a := range args {
-		switch a {
-		case "--":
+	for i, a := range args {
+		if a == "--" {
 			return false
-		case "-h", "--h", "-help", "--help":
+		}
+		if !isHelpFlag(a) {
+			continue
+		}
+		if i == 0 {
 			return true
 		}
+		prev := args[i-1]
+		if !strings.HasPrefix(prev, "-") || prev == "-" || strings.Contains(prev, "=") || isHelpFlag(prev) ||
+			boolFlags[strings.TrimLeft(prev, "-")] {
+			return true
+		}
+	}
+	return false
+}
+
+func isHelpFlag(a string) bool {
+	switch a {
+	case "-h", "--h", "-help", "--help":
+		return true
 	}
 	return false
 }

@@ -33,6 +33,13 @@ func runQuota(args []string, stdout, stderr io.Writer) int {
 		case "check":
 			return runQuotaCheck(args[1:], stdout, stderr)
 		case "record-claude":
+			// Claude's statusLine passes no arguments; any argument
+			// (a help request Run left to the verb, too) is refused
+			// before stdin is read.
+			if len(args) > 1 {
+				fmt.Fprint(stderr, quotaUsage)
+				return exitRefused
+			}
 			return runQuotaRecordClaude(stdout)
 		}
 	}

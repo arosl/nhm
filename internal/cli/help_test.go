@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,14 +68,6 @@ func TestEveryLeafHelpPrintsUsageAndRunsNothing(t *testing.T) {
 			}
 		}
 	}
-	// A help flag after "--" is an argument, and help with other flags is
-	// still help.
-	if _, ok := leafHelp([]string{"send", "swarm", "--", "--help"}); ok {
-		t.Error("--help after -- asked for help")
-	}
-	if u, ok := leafHelp([]string{"spawn", "s", "--cc=2", "--help", "--json"}); !ok || u != spawnUsage {
-		t.Error("spawn --cc=2 --help --json did not ask for help")
-	}
 	var made []string
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && p != root {
@@ -81,6 +77,85 @@ func TestEveryLeafHelpPrintsUsageAndRunsNothing(t *testing.T) {
 	})
 	if len(made) > 0 {
 		t.Errorf("a help request wrote %v", made)
+	}
+}
+
+// A help flag counts only in flag position (nhm-ceu): never after "--",
+// never as the value of the flag before it.
+func TestHelpFlagPosition(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		help bool
+	}{
+		{[]string{"quota", "record-claude", "--help"}, true},
+		{[]string{"send", "swarm", "hello", "-h"}, true},
+		{[]string{"spawn", "s", "--cc=2", "--help", "--json"}, true},
+		{[]string{"send", "swarm", "--json", "--help"}, true},
+		{[]string{"send", "swarm", "--dry-run", "-h"}, true},
+		{[]string{"send", "swarm", "--", "--help"}, false},
+		{[]string{"send", "swarm", "--msg", "--help"}, false},
+		{[]string{"send", "swarm", "--prompt", "-h", "x"}, false},
+		{[]string{"modes", "list", "-f", "--help"}, false},
+	} {
+		if _, got := leafHelp(c.args); got != c.help {
+			t.Errorf("leafHelp(%q) = %v, want %v", c.args, got, c.help)
+		}
+	}
+	// record-claude takes no argument: the verb refuses what Run left to
+	// it, and never reads stdin.
+	if code, out, _ := run("quota", "record-claude", "--x", "--help"); code != exitRefused || out != "" {
+		t.Errorf("record-claude --x --help = %d %q", code, out)
+	}
+}
+
+// Every name in boolFlags is a boolean flag wherever a verb defines it:
+// a flag that takes a value would make its value "--help" a help request.
+func TestHelpBoolFlagsTakeNoValue(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valued, boolean := map[string]bool{}, map[string]bool{}
+	fset := token.NewFileSet()
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, f, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			for _, a := range call.Args {
+				lit, ok := a.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				name, _ := strconv.Unquote(lit.Value)
+				switch sel.Sel.Name {
+				case "Bool", "BoolVar":
+					boolean[name] = true
+				case "String", "StringVar", "Int", "IntVar", "Int64", "Int64Var", "Uint", "UintVar", "Float64",
+					"Float64Var", "Duration", "DurationVar", "Var", "Func", "TextVar":
+					valued[name] = true
+				}
+				break
+			}
+			return true
+		})
+	}
+	for name := range boolFlags {
+		if valued[name] || !boolean[name] {
+			t.Errorf("boolFlags has %q: a value flag %v, a bool flag %v", name, valued[name], boolean[name])
+		}
 	}
 }
 
