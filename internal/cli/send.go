@@ -18,7 +18,6 @@ import (
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/core/wake"
-	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
@@ -36,7 +35,7 @@ const exitAdmission = 3
 const maxPayload = 1 << 20
 
 const sendUsage = `Usage: nhm send <session> [prompt] [--all | --KIND | --type K | --pane N.M | --panes N.M,…]
-                [--name N]… [--state idle|done|working|blocked]… [--limit N] [--include-self]
+                [--name N]… [--state idle|done|working|blocked|between]… [--limit N] [--include-self]
                 [--msg M | --msg-file F|-] [-t KEY | --template KEY] [--bead ID] [--var k=v]… [--file F|-]
                 [--when ready|any] [--force] [--wait [--until done|idle|complete] [--timeout D]]
                 [--with-memory[=false]] [--with-cass | --no-cass] [--memory-query Q]
@@ -46,7 +45,8 @@ const sendUsage = `Usage: nhm send <session> [prompt] [--all | --KIND | --type K
 Send one prompt to the selected agents of a session (a workspace id or
 label). Without a selector, every bound agent of the session except the
 caller. Names and panes are a union; kinds, states and the session are
-an intersection. --state done leaves Codex out unless it is named.
+an intersection. --state between is idle or done: between turns. --state
+done (and between) leaves Codex out unless it is named.
 --KIND is a kind's name or flag from the kind registry: --claude or
 --cc, --codex or --cod, --agy, --pi, --omp, --opencode or --oc, --grok,
 and each kind of nhm's config.
@@ -161,7 +161,7 @@ func addSendFlags(fs *flag.FlagSet) *sendFlags {
 	fs.Var(&f.sel.slots, "pane", "ntm's pane number N.M, or a pane id (repeatable)")
 	fs.Var(&f.panes, "panes", "pane numbers, comma-separated")
 	fs.Var(&f.sel.kinds, "type", "an agent kind (repeatable)")
-	fs.Var(&f.states, "state", "idle, done, working or blocked (repeatable)")
+	fs.Var(&f.states, "state", stateValues+" (repeatable)")
 	fs.Var(&f.vars, "var", "a template variable k=v (repeatable)")
 	fs.BoolVar(&f.all, "all", false, "every agent of the session except the caller")
 	fs.IntVar(&f.limit, "limit", 0, "the first N targets in slot order")
@@ -358,13 +358,11 @@ func (f sendFlags) request(prompt string) (send.Request, error) {
 			sel.Kinds = append(sel.Kinds, k.kind)
 		}
 	}
-	for _, s := range f.states {
-		st := herdr.AgentStatus(s)
-		if st != herdr.StatusIdle && st != herdr.StatusDone && st != herdr.StatusWorking && st != herdr.StatusBlocked {
-			return req, fmt.Errorf("--state is idle, done, working or blocked, not %q", s)
-		}
-		sel.States = append(sel.States, st)
+	states, err := parseStates(f.states)
+	if err != nil {
+		return req, err
 	}
+	sel.States = states
 	if f.limit < 0 {
 		return req, errors.New("--limit is positive")
 	}
