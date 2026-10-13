@@ -144,6 +144,8 @@ func TestZoomAndFocus(t *testing.T) {
 				return "", errors.New("the agent you picked is gone")
 			case 7:
 				return "w1:p1", &zoom.Unshown{PaneID: "w1:p1", Reason: "no such tab"}
+			case 5:
+				return "w1:p1", &zoom.Alone{PaneID: "w1:p1"}
 			}
 			return "w1:p1", nil
 		},
@@ -167,6 +169,14 @@ func TestZoomAndFocus(t *testing.T) {
 	if res, err := zoom.Do(context.Background(), core, Request{Context: ctxKill, Targets: []ui.Target{unshown}}); err != nil ||
 		res.Status != "zoomed" || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "did not bring its tab in front") {
 		t.Fatalf("zoom with its tab not in front = %+v %v", res, err)
+	}
+	// A pane alone in its tab: nothing to zoom, its tab in front; not
+	// "zoomed", and no failure (nhm-tt9).
+	alone := b1
+	alone.Generation = 5
+	if res, err := zoom.Do(context.Background(), core, Request{Context: ctxKill, Targets: []ui.Target{alone}}); err != nil ||
+		res.Status != "shown" || len(res.Warnings) != 0 || len(res.Lines) != 1 || !strings.Contains(res.Lines[0], "is alone in its tab") {
+		t.Fatalf("zoom of a pane alone in its tab = %+v %v", res, err)
 	}
 	focus := mustAction(t, "workspace.attach")
 	if _, err := focus.Do(context.Background(), core, Request{Context: ctxKill}); err == nil {

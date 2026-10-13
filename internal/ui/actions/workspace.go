@@ -229,11 +229,16 @@ func runZoom(ctx context.Context, core Core, req Request) (Result, error) {
 	t := req.Targets[0]
 	pane, err := core.Zoom(ctx, t)
 	var unshown *zoom.Unshown
+	var alone *zoom.Alone
 	switch {
 	case errors.As(err, &unshown):
 		// The pane is zoomed; only its tab did not come in front.
 		return Result{Status: "zoomed", Targets: []TargetResult{{Target: t, Name: unshown.PaneID, Status: "zoomed"}},
 			Lines: []string{"zoomed " + unshown.PaneID}, Warnings: []string{unshown.Error()}}, nil
+	case errors.As(err, &alone):
+		// Nothing to zoom; the pane's tab is in front.
+		return Result{Status: "shown", Targets: []TargetResult{{Target: t, Name: alone.PaneID, Status: "shown"}},
+			Lines: []string{alone.Error() + "; close the menu to see it"}}, nil
 	case err != nil:
 		return Result{Status: "refused", Targets: []TargetResult{{Target: t, Status: "refused", Reason: err.Error()}}}, err
 	}

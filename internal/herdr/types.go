@@ -216,7 +216,14 @@ type ZoomResult struct {
 	FocusChanged  bool       `json:"focus_changed"`
 	FocusedPaneID string     `json:"focused_pane_id"`
 	Layout        ZoomLayout `json:"layout"`
+	// Reason says why nothing changed: ZoomSinglePane, already_zoomed or
+	// already_unzoomed; "" when the zoom changed.
+	Reason string `json:"reason,omitempty"`
 }
+
+// ZoomSinglePane is pane.zoom's reason when the pane is alone in its tab:
+// herdr zooms nothing.
+const ZoomSinglePane = "single_pane"
 
 // ZoomLayout is the part of pane.zoom's layout that nhm reads: the
 // zoomed pane's workspace and tab, and whether the tab is zoomed.

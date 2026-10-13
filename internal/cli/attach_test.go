@@ -208,6 +208,32 @@ func TestZoomTakesTheTabFromTheZoom(t *testing.T) {
 	}
 }
 
+// A pane alone in its tab is not zoomed (herdr: single_pane): nhm zoom
+// brings its tab in front and says so, without "zoomed" or a warning
+// (nhm-tt9).
+func TestZoomSaysWhenThePaneIsAlone(t *testing.T) {
+	s, calls := zoomServer(t)
+	s.Handle("pane.zoom", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p2", "zoomed": false, "changed": false,
+			"zoom_changed": false, "focus_changed": false, "reason": "single_pane",
+			"layout": map[string]any{"workspace_id": "w1", "tab_id": "w1:t2", "zoomed": false}}}, nil
+	})
+	code, out, errOut := runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath)
+	if code != exitOK || !strings.Contains(out, "BlueLake (") || !strings.Contains(out, "is alone in its tab in swarm: nothing to zoom") ||
+		strings.Contains(out, "zoomed") || errOut != "" {
+		t.Fatalf("zoom = %d %q %q", code, out, errOut)
+	}
+	if got := strings.Join(calls(), ";"); !strings.HasSuffix(got, "tab.focus w1:t2") {
+		t.Fatalf("calls = %s", got)
+	}
+	code, out, _ = runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath, "--json")
+	env := decodeEnvelope(t, out)
+	res, _ := env["result"].(map[string]any)
+	if warnings, _ := env["warnings"].([]any); code != exitOK || res["zoomed"] == true || len(warnings) != 0 || env["error"] != nil {
+		t.Fatalf("zoom --json = %d %s", code, out)
+	}
+}
+
 func TestRunDispatchesAttachAndZoom(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

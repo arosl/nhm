@@ -12,9 +12,10 @@ import (
 // fakeHerdr records the calls in order; an error set for a method makes
 // that method fail.
 type fakeHerdr struct {
-	calls []string
-	errs  map[string]error
-	tab   string
+	calls  []string
+	errs   map[string]error
+	tab    string
+	reason string
 }
 
 func (f *fakeHerdr) WorkspaceFocus(_ context.Context, ws string) error {
@@ -27,7 +28,9 @@ func (f *fakeHerdr) PaneZoom(_ context.Context, pane, mode string) (herdr.ZoomRe
 	if err := f.errs["pane.zoom"]; err != nil {
 		return herdr.ZoomResult{}, err
 	}
-	return herdr.ZoomResult{PaneID: pane, Zoomed: true, Layout: herdr.ZoomLayout{WorkspaceID: "w1", TabID: f.tab, Zoomed: true}}, nil
+	zoomed := f.reason != herdr.ZoomSinglePane
+	return herdr.ZoomResult{PaneID: pane, Zoomed: zoomed, Reason: f.reason,
+		Layout: herdr.ZoomLayout{WorkspaceID: "w1", TabID: f.tab, Zoomed: zoomed}}, nil
 }
 
 func (f *fakeHerdr) TabFocus(_ context.Context, tab string) (herdr.TabInfo, error) {
@@ -79,5 +82,29 @@ func TestTabBehindIsUnshown(t *testing.T) {
 	if _, err := Pane(context.Background(), h, "w1", "w1:p2"); !errors.As(err, &unshown) ||
 		strings.Contains(strings.Join(h.calls, ";"), "tab.focus") {
 		t.Fatalf("no tab in the layout = %v %v", err, h.calls)
+	}
+}
+
+// A pane alone in its tab is not zoomed (herdr: single_pane), but its tab
+// comes in front: an *Alone, not a failure. A tab that stays behind is
+// still an *Unshown.
+func TestPaneAloneInItsTab(t *testing.T) {
+	h := &fakeHerdr{tab: "w1:t2", reason: herdr.ZoomSinglePane}
+	z, err := Pane(context.Background(), h, "w1", "w1:p2")
+	var alone *Alone
+	if !errors.As(err, &alone) || alone.PaneID != "w1:p2" || z.Zoomed || err.Error() != "w1:p2 is alone in its tab: nothing to zoom" {
+		t.Fatalf("zoom = %+v %v", z, err)
+	}
+	if got := strings.Join(h.calls, ";"); got != "workspace.focus w1;pane.zoom w1:p2 on;tab.focus w1:t2" {
+		t.Fatalf("calls = %s", got)
+	}
+	h = &fakeHerdr{tab: "w1:t2", reason: herdr.ZoomSinglePane, errs: map[string]error{"tab.focus": errors.New("no such tab")}}
+	var unshown *Unshown
+	if _, err := Pane(context.Background(), h, "w1", "w1:p2"); !errors.As(err, &unshown) || errors.As(err, &alone) {
+		t.Fatalf("alone, with its tab behind = %v", err)
+	}
+	h = &fakeHerdr{tab: "w1:t2", reason: "already_zoomed"}
+	if _, err := Pane(context.Background(), h, "w1", "w1:p2"); err != nil {
+		t.Fatalf("already zoomed = %v", err)
 	}
 }

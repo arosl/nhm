@@ -273,6 +273,17 @@ func TestUICoreRunsMutationsAsJobs(t *testing.T) {
 			}
 		}
 	}
+	// A pane alone in its tab (herdr: single_pane): the menu says so, not
+	// "zoomed", and its tab comes in front (nhm-tt9).
+	serveZoom("")
+	s.Handle("pane.zoom", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p1", "zoomed": false, "reason": "single_pane",
+			"layout": map[string]any{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false}}}, nil
+	})
+	if res, err := zoomAction.Do(ctx, core, actions.Request{Context: jobs.Context, Targets: []ui.Target{picked}}); err != nil ||
+		res.Status != "shown" || len(res.Lines) != 1 || !strings.Contains(res.Lines[0], "alone in its tab") {
+		t.Errorf("the menu's zoom of a pane alone in its tab = %+v %v", res, err)
+	}
 	// The send base is nhm send's for the workspace, with no selector.
 	if _, err := uiSendBase(ctx, ie, ui.Context{}); err == nil {
 		t.Fatal("a send base without a workspace")

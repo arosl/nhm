@@ -118,10 +118,13 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 	}
 	z, err := zoom.Pane(ctx, ie.herdr, ws, res.PaneID)
 	var unshown *zoom.Unshown
+	var alone *zoom.Alone
 	switch {
 	case errors.As(err, &unshown):
 		// The pane is zoomed; only its tab did not come in front.
 		env.Warnings = append(env.Warnings, unshown.Error())
+	case errors.As(err, &alone):
+		// Nothing to zoom; the pane's tab is in front.
 	case err != nil:
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
@@ -131,6 +134,10 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 		who := res.PaneID
 		if res.MailName != "" {
 			who = fmt.Sprintf("%s (%s, %s)", res.MailName, dash(res.Slot), res.PaneID)
+		}
+		if alone != nil {
+			fmt.Fprintf(w, "%s is alone in its tab in %s: nothing to zoom; open herdr to see it\n", who, pos[0])
+			return
 		}
 		fmt.Fprintf(w, "zoomed %s in %s; open herdr to see it\n", who, pos[0])
 	})

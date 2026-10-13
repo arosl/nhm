@@ -28,11 +28,23 @@ func (e *Unshown) Error() string {
 	return "zoomed " + e.PaneID + ", but herdr did not bring its tab in front: " + e.Reason
 }
 
+// Alone is Pane's answer when the pane is alone in its tab: herdr zooms
+// nothing, and the tab is in front. It is no failure: a caller says so in
+// place of "zoomed".
+type Alone struct {
+	PaneID string
+}
+
+func (e *Alone) Error() string {
+	return e.PaneID + " is alone in its tab: nothing to zoom"
+}
+
 // Pane focuses workspace ws, zooms pane on, and brings the tab of
 // pane.zoom's layout in front. herdr 0.9.3's client follows tab.focus and
 // workspace.focus, but not the focus that pane.zoom moves to another tab
 // (seen in the sandbox, nhm-qbi.5). A failed workspace focus or zoom is
-// the error; only a tab that stays behind is an *Unshown.
+// the error; a tab that stays behind is an *Unshown, and a pane alone in
+// its tab, with the tab in front, an *Alone.
 func Pane(ctx context.Context, h Herdr, ws, pane string) (herdr.ZoomResult, error) {
 	if err := h.WorkspaceFocus(ctx, ws); err != nil {
 		return herdr.ZoomResult{}, err
@@ -46,6 +58,9 @@ func Pane(ctx context.Context, h Herdr, ws, pane string) (herdr.ZoomResult, erro
 	}
 	if _, err := h.TabFocus(ctx, z.Layout.TabID); err != nil {
 		return z, &Unshown{PaneID: pane, Reason: err.Error()}
+	}
+	if z.Reason == herdr.ZoomSinglePane {
+		return z, &Alone{PaneID: pane}
 	}
 	return z, nil
 }

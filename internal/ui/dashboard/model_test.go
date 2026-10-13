@@ -314,6 +314,15 @@ func TestZoom(t *testing.T) {
 		strings.Contains(v, "zoom IcyKnoll:") {
 		t.Fatalf("a zoom without its tab:\n%s", v)
 	}
+	// A pane alone in its tab: nothing to zoom, and no failure (nhm-tt9).
+	alone := newModel(t, Config{Zoom: func(_ context.Context, _, pane string) error {
+		return &zoom.Alone{PaneID: pane}
+	}})
+	alone.Update(press(alone, "enter")())
+	if v := plain(alone); !strings.Contains(v, "IcyKnoll is alone in its tab: nothing to zoom") || strings.Contains(v, "zoom IcyKnoll:") ||
+		strings.Contains(v, "zoomed") {
+		t.Fatalf("a pane alone in its tab:\n%s", v)
+	}
 	// A failed zoom says so, and never says zoomed.
 	failed := newModel(t, Config{Zoom: func(context.Context, string, string) error {
 		return errors.New("pane w1:p1 not found")

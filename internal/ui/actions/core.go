@@ -63,7 +63,8 @@ type Core struct {
 	// A bound target is found by its binding, and refused when the
 	// binding is at another generation: the agent picked is gone. It
 	// changes no agent. It returns the pane it zoomed. A *zoom.Unshown
-	// error means the pane is zoomed, but its tab did not come in front.
+	// error means the pane is zoomed, but its tab did not come in front;
+	// a *zoom.Alone means the pane is alone in its tab, which is in front.
 	Zoom func(ctx context.Context, t ui.Target) (string, error)
 	// Focus focuses a workspace (nhm attach); it changes no agent.
 	Focus func(ctx context.Context, workspaceID string) error

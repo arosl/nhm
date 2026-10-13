@@ -215,6 +215,17 @@ func TestGoBoardZoomBringsItsTabInFront(t *testing.T) {
 	if err := cfg.Zoom(ctx, "w1", "w1:p9"); err == nil || errors.As(err, &unshown) || !strings.Contains(err.Error(), "no such pane") {
 		t.Fatalf("a failed zoom = %v", err)
 	}
+	// A pane alone in its tab: its tab comes in front, and the board gets
+	// a *zoom.Alone (nhm-tt9).
+	boardHerdr(t, s)
+	s.Handle("pane.zoom", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p9", "zoomed": false, "reason": "single_pane",
+			"layout": map[string]any{"workspace_id": "w1", "tab_id": "w1:t9", "zoomed": false}}}, nil
+	})
+	var alone *zoom.Alone
+	if err := cfg.Zoom(ctx, "w1", "w1:p9"); !errors.As(err, &alone) || alone.PaneID != "w1:p9" {
+		t.Fatalf("a pane alone in its tab = %v", err)
+	}
 }
 
 // prefix+d follows [ui] board: "go" opens the Go board in a tab; the

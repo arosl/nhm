@@ -162,7 +162,9 @@ func uiZoom(ctx context.Context, ie *instanceEnv, t ui.Target) (string, error) {
 		return "", fmt.Errorf("pane %q is gone", pane)
 	}
 	// A *zoom.Unshown is a zoom that worked: the action warns that the
-	// pane's tab did not come in front. Any other error is a failed zoom.
+	// pane's tab did not come in front. A *zoom.Alone is no failure
+	// either: the pane is alone in its tab. Any other error is a failed
+	// zoom.
 	_, err := zoom.Pane(ctx, ie.herdr, ws, pane)
 	return pane, err
 }
