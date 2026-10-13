@@ -30,10 +30,15 @@ func ValidWorkspaceID(id string) bool { return workspaceIDPattern.MatchString(id
 const workspaceLockPoll = 20 * time.Millisecond
 
 // LockWorkspace takes a workspace's lock: an exclusive flock on
-// <instance>/locks/workspace-<id>.lock. It orders nhm's own writers of
-// the workspace's UI state (the board's launch record); it is not the
-// owner lock and does not exclude herdr or a human. ctx bounds the wait;
+// <instance>/locks/workspace-<id>.lock. ctx bounds the wait;
 // ErrWorkspaceBusy when it ends.
+//
+// Who takes it: internal/core/uilaunch, around every read and write of
+// the workspace's board launch record (open, register, unregister). A
+// verb that must see nhm's own panes in a workspace as they are (kill's
+// review, adopt) takes it too, so no board registers in between. Hold
+// it briefly: it is not the owner lock, and it does not exclude herdr or
+// a human. Take it inside the owner lock, never around it.
 func LockWorkspace(ctx context.Context, instanceDir, workspaceID string) (func(), error) {
 	if !ValidWorkspaceID(workspaceID) {
 		return nil, fmt.Errorf("store: workspace id %q cannot name a lock file", workspaceID)

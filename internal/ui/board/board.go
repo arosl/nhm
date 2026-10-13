@@ -113,7 +113,7 @@ func New(c Config) (*Board, error) {
 					if a.Binding == nil || a.Mail == nil {
 						continue
 					}
-					k := AgentKey(a)
+					k := AgentKey(a).Key()
 					if a.Mail.Status == snapshot.Fresh {
 						out[k] = *a.Mail
 					} else if last, ok := prev[k]; ok {
@@ -143,7 +143,7 @@ func New(c Config) (*Board, error) {
 				out := BeadsByKey{}
 				for _, a := range m.Agents {
 					if a.Binding != nil {
-						out[AgentKey(a)] = append([]string{}, a.Beads...)
+						out[AgentKey(a).Key()] = append([]string{}, a.Beads...)
 					}
 				}
 				return out, nil
@@ -309,7 +309,7 @@ func (b *Board) Preview() (p Preview, ok bool) {
 	}
 	s := b.preview.feed.State()
 	r, has := b.Sel.Cursor()
-	if !s.Has || !has || s.Value.Key != r.Key {
+	if !s.Has || !has || !same(s.Value.Key, r.Key) {
 		return Preview{}, false
 	}
 	return s.Value, true

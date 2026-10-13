@@ -5,38 +5,31 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/snapshot"
+	"github.com/arosl/nhm/internal/ui"
 )
 
-// Key is a row's identity, and so a target's (plan-v4 section 4): a
-// bound agent is its binding id and generation. An unbound agent (an
-// adoption candidate) has no binding: its pane, kind and herdr session
-// stand for it. A recycled agent keeps its binding id and gets a new
-// generation: it is another key.
-type Key struct {
-	BindingID  string `json:"binding_id,omitempty"`
-	Generation int64  `json:"generation,omitempty"`
-	PaneID     string `json:"pane_id,omitempty"`
-	Kind       string `json:"kind,omitempty"`
-	Session    string `json:"session,omitempty"`
-}
-
-// Bound reports whether the key is a binding's.
-func (k Key) Bound() bool { return k.BindingID != "" }
-
-// IsZero reports whether the key names nothing.
-func (k Key) IsZero() bool { return k == Key{} }
+// Key is a row's identity, and so a target's (plan-v4 section 4): the
+// context's ui.Target. A bound agent is its binding id and generation; an
+// unbound agent (an adoption candidate) is its pane and herdr session. A
+// recycled agent keeps its binding id and gets a new generation: it is
+// another target. Two keys are the same target when their Key() strings
+// are equal; the other fields only describe it.
+type Key = ui.Target
 
 // AgentKey is a snapshot agent's key.
 func AgentKey(a snapshot.Agent) Key {
-	if a.Binding != nil {
-		return Key{BindingID: a.Binding.ID, Generation: a.Binding.Generation}
-	}
 	k := Key{PaneID: a.PaneID, Kind: a.Kind}
+	if a.Binding != nil {
+		k.BindingID, k.Generation = a.Binding.ID, a.Binding.Generation
+	}
 	if a.Session != nil {
 		k.Session = a.Session.Kind + ":" + a.Session.Value
 	}
 	return k
 }
+
+// same reports whether two keys name the same target.
+func same(a, b Key) bool { return a.Key() == b.Key() }
 
 // Cell is a value from a slower source, matched to its row by key. Known
 // is false when the source has not answered for this row: the board
@@ -93,12 +86,13 @@ func (r Row) PaneID() string {
 	return ""
 }
 
-// MailByKey is the mail source's value: each bound agent's inbox.
-type MailByKey map[Key]snapshot.MailState
+// MailByKey is the mail source's value: each bound agent's inbox, by
+// its key's Key().
+type MailByKey map[string]snapshot.MailState
 
 // BeadsByKey is the beads source's value: each bound agent's beads in
-// progress (none: an empty list).
-type BeadsByKey map[Key][]string
+// progress (none: an empty list), by its key's Key().
+type BeadsByKey map[string][]string
 
 // BuildRows joins the sources into rows: the agents in the snapshot's
 // order (workspace, slot, pane), then the absent bindings. A nil model
@@ -114,10 +108,10 @@ func BuildRows(m *snapshot.Model, mail State[MailByKey], beads State[BeadsByKey]
 		r := Row{Key: AgentKey(*a), Name: a.HerdrName, Agent: a}
 		if a.Binding != nil {
 			r.Name = a.Binding.MailName
-			if v, ok := mail.Value[r.Key]; ok && mail.Has {
+			if v, ok := mail.Value[r.Key.Key()]; ok && mail.Has {
 				r.Mail = Cell[snapshot.MailState]{Value: v, Known: true, At: mail.At}
 			}
-			if v, ok := beads.Value[r.Key]; ok && beads.Has {
+			if v, ok := beads.Value[r.Key.Key()]; ok && beads.Has {
 				r.Beads = Cell[[]string]{Value: v, Known: true, At: beads.At}
 			}
 		}
@@ -125,7 +119,8 @@ func BuildRows(m *snapshot.Model, mail State[MailByKey], beads State[BeadsByKey]
 	}
 	for i := range m.Absent {
 		b := &m.Absent[i]
-		rows = append(rows, Row{Key: Key{BindingID: b.ID, Generation: b.Generation}, Name: b.MailName, Absent: b})
+		rows = append(rows, Row{Key: Key{BindingID: b.ID, Generation: b.Generation, PaneID: b.PaneID, Kind: b.Kind},
+			Name: b.MailName, Absent: b})
 	}
 	return rows
 }

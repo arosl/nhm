@@ -64,7 +64,7 @@ func (s *Selection) refilter() {
 		return
 	}
 	for vi, ri := range s.visible {
-		if s.rows[ri].Key == s.cursor && !s.cursor.IsZero() {
+		if s.cursor != (Key{}) && same(s.rows[ri].Key, s.cursor) {
 			s.pos = vi
 			return
 		}
@@ -96,7 +96,7 @@ func (s *Selection) matches(r Row) bool {
 // resolve says what a mark's key names now.
 func (s *Selection) resolve(k Key) (string, string) {
 	for _, r := range s.rows {
-		if r.Key == k {
+		if same(r.Key, k) {
 			if r.Absent != nil {
 				return MarkAbsent, "its pane holds no agent"
 			}
@@ -154,8 +154,8 @@ func (s *Selection) Bottom() { s.Move(len(s.visible)) }
 // SetCursor puts the cursor on a key; false when no visible row has it.
 func (s *Selection) SetCursor(k Key) bool {
 	for vi, ri := range s.visible {
-		if s.rows[ri].Key == k {
-			s.pos, s.cursor = vi, k
+		if same(s.rows[ri].Key, k) {
+			s.pos, s.cursor = vi, s.rows[ri].Key
 			return true
 		}
 	}
@@ -189,7 +189,7 @@ func (s *Selection) Toggle() {
 // Marked reports whether a key is marked.
 func (s *Selection) Marked(k Key) bool {
 	for _, m := range s.marks {
-		if m.Key == k {
+		if same(m.Key, k) {
 			return true
 		}
 	}
@@ -199,7 +199,7 @@ func (s *Selection) Marked(k Key) bool {
 // Unmark removes a mark, valid or not.
 func (s *Selection) Unmark(k Key) {
 	for i, m := range s.marks {
-		if m.Key == k {
+		if same(m.Key, k) {
 			s.marks = append(s.marks[:i], s.marks[i+1:]...)
 			return
 		}
@@ -241,9 +241,9 @@ type Targets struct {
 func (s *Selection) Targets() Targets {
 	if len(s.marks) > 0 {
 		t := Targets{From: FromMarks}
-		shown := map[Key]bool{}
+		shown := map[string]bool{}
 		for _, ri := range s.visible {
-			shown[s.rows[ri].Key] = true
+			shown[s.rows[ri].Key.Key()] = true
 		}
 		for _, m := range s.marks {
 			if m.State != MarkValid && m.State != MarkAbsent {
@@ -251,11 +251,11 @@ func (s *Selection) Targets() Targets {
 				continue
 			}
 			for _, r := range s.rows {
-				if r.Key == m.Key {
+				if same(r.Key, m.Key) {
 					t.Rows = append(t.Rows, r)
 				}
 			}
-			if !shown[m.Key] {
+			if !shown[m.Key.Key()] {
 				t.Hidden++
 			}
 		}

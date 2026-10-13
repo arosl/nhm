@@ -72,6 +72,9 @@ func (f *fakeMail) FetchInbox(_ context.Context, _, agent string, _ int) ([]agen
 
 func u64(v uint64) *uint64 { return &v }
 
+// The real client reads the preview.
+var _ PaneReader = (*herdr.Client)(nil)
+
 type fixture struct {
 	db    *store.DB
 	h     *fakeHerdr
@@ -331,6 +334,28 @@ func TestMarksByIdentity(t *testing.T) {
 	}
 }
 
+// A target handed in from elsewhere (the context, the picker) is the
+// same target when its binding and generation are, whatever else it
+// names.
+func TestKeysCompareByIdentity(t *testing.T) {
+	fx := newFixture(t)
+	b := fx.board(t)
+	settle(t, b)
+	if !b.Sel.SetCursor(Key{BindingID: fx.blue.ID, Generation: fx.blue.Generation}) {
+		t.Fatal("a bare binding target did not find its row")
+	}
+	if r, _ := b.Sel.Cursor(); r.Name != "BlueLake" || r.Key.PaneID != "w1:p2" {
+		t.Fatalf("cursor = %+v", r.Key)
+	}
+	b.Sel.Toggle()
+	if !b.Sel.Marked(Key{BindingID: fx.blue.ID, Generation: fx.blue.Generation, PaneID: "elsewhere"}) {
+		t.Fatal("the mark is not found by identity")
+	}
+	if b.Sel.SetCursor(Key{BindingID: fx.blue.ID, Generation: fx.blue.Generation + 1}) {
+		t.Fatal("another generation found the row")
+	}
+}
+
 // No marks: the cursor's row. No rows: nothing, and the caller opens
 // the picker; it is never "all".
 func TestTargetsNoImplicitAll(t *testing.T) {
@@ -380,7 +405,7 @@ func TestFilterKeepsMarks(t *testing.T) {
 func TestMailCellsMatchGeneration(t *testing.T) {
 	m := &snapshot.Model{Agents: []snapshot.Agent{{PaneID: "w1:p1", Kind: "claude",
 		Binding: &snapshot.BindingRef{ID: "bnd-1", Generation: 2, MailName: "IcyKnoll"}}}}
-	mail := State[MailByKey]{Has: true, Value: MailByKey{{BindingID: "bnd-1", Generation: 1}: {Unread: 5}}}
+	mail := State[MailByKey]{Has: true, Value: MailByKey{Key{BindingID: "bnd-1", Generation: 1}.Key(): {Unread: 5}}}
 	rows := BuildRows(m, mail, State[BeadsByKey]{})
 	if rows[0].Mail.Known || rows[0].Beads.Known {
 		t.Fatalf("row = %+v", rows[0])

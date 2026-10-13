@@ -74,10 +74,10 @@ func (p *previewSource) target(r Row, ok bool) {
 		key, pane = r.Key, r.Agent.PaneID
 	}
 	p.mu.Lock()
-	same := key == p.key && pane == p.pane
+	unchanged := same(key, p.key) && pane == p.pane
 	p.key, p.pane = key, pane
 	p.mu.Unlock()
-	if !same {
+	if !unchanged {
 		p.feed.Refresh()
 	}
 }
