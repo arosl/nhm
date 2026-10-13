@@ -243,7 +243,14 @@ type Model struct {
 	herdrOK bool
 	// boards are nhm's live boards by pane id: no agent rows.
 	boards map[string]bool
+	// peers are the active bindings of every project, by workspace, for
+	// the mixed-workspace check: a build for one project still sees the
+	// other projects beside its agents (nhm-8ze).
+	peers map[string][]peer
 }
+
+// peer is one active binding in a workspace: its id and project.
+type peer struct{ id, project string }
 
 // HerdrOK reports whether herdr answered.
 func (m *Model) HerdrOK() bool { return m.herdrOK }
@@ -311,6 +318,9 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 			Statuses: []bindings.Status{bindings.Active, bindings.Displaced}}); err != nil {
 			return err
 		}
+		if err := m.readPeers(c, deps.DB, all, opts.ProjectKey); err != nil {
+			return err
+		}
 		return m.readLocal(c, deps.DB.SQL())
 	})
 	m.stage(SourceQuota, now, orDefault(opts.LocalTimeout, defaultLocalTimeout), ctx, func(c context.Context) error {
@@ -320,6 +330,25 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 	m.join(snap, all, opts)
 	m.skipOrEnrich(ctx, deps, now, opts)
 	return m
+}
+
+// readPeers keeps every workspace's active bindings, of all projects, for
+// the mixed-workspace check: from the build's own list, or with a second
+// read when the build is for one project (nhm-8ze).
+func (m *Model) readPeers(ctx context.Context, db *store.DB, all []bindings.Binding, projectKey string) error {
+	if projectKey != "" {
+		var err error
+		if all, err = bindings.NewStore(db).List(ctx, bindings.Filter{Statuses: []bindings.Status{bindings.Active}}); err != nil {
+			return err
+		}
+	}
+	m.peers = map[string][]peer{}
+	for _, b := range all {
+		if b.Status == bindings.Active && b.WorkspaceID != "" {
+			m.peers[b.WorkspaceID] = append(m.peers[b.WorkspaceID], peer{b.ID, b.MailProjectKey})
+		}
+	}
+	return nil
 }
 
 // skipOrEnrich runs stage 3: the local files (guards, limits), the beads

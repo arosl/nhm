@@ -207,6 +207,13 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 			ErrSessionExists, req.Session, req.Session)
 	}
 	res.WorkspaceID, res.WorkspaceNew = ws, ws == ""
+	// Before anything is created: an existing workspace may hold other
+	// projects' agents only (nhm-8ze).
+	if others, err := env.Bindings.OtherProjectsIn(ctx, ws, req.ProjectRoot); err != nil {
+		res.Warnings = append(res.Warnings, "the workspace's projects: "+err.Error())
+	} else if others != nil {
+		res.Warnings = append(res.Warnings, bindings.MixedWorkspaceWarning(ws, req.ProjectRoot, others))
+	}
 	kickoff, err := kickoffBody(req)
 	if err != nil {
 		return res, err

@@ -466,8 +466,9 @@ const attentionUsage = `Usage: nhm attention [session] [--watch] [--json|--jsonl
 What needs a decision, most severe first: blocked agents, finished turns
 nobody looked at, unread or overdue mail, sends that may have arrived,
 unresolved operations, bindings without an agent or displaced, names that
-do not match, unbound agents, quota at a limit or stale, pending wakes,
-and sources that did not answer.
+do not match, unbound agents, an agent whose workspace holds other
+projects' agents only, quota at a limit or stale, pending wakes, and
+sources that did not answer.
 `
 
 func runAttention(args []string, stdout, stderr io.Writer) int {

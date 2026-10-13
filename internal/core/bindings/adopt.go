@@ -195,6 +195,13 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, alias
 	if req.Kind != "" && req.Kind != agent.Agent {
 		return res, fmt.Errorf("bindings: herdr sees a %s agent in %s, not %s", agent.Agent, req.PaneID, req.Kind)
 	}
+	// Before the binding: the pane's workspace may hold other projects'
+	// agents only (nhm-8ze).
+	if others, err := env.Bindings.OtherProjectsIn(ctx, pane.WorkspaceID, req.ProjectKey); err != nil {
+		res.Warnings = append(res.Warnings, "the workspace's projects: "+err.Error())
+	} else if others != nil {
+		res.Warnings = append(res.Warnings, MixedWorkspaceWarning(pane.WorkspaceID, req.ProjectKey, others))
+	}
 	occ := occupantOf(ctx, env.Herdr, pane, agent, alias, req.Model)
 	occ.Kind = kind
 	occ.Evidence = append([]Evidence{{Kind: "adopt", Detail: "bound by hand, operation " + opID}}, occ.Evidence...)

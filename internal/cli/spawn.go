@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -293,6 +294,9 @@ func runSpawnWizard(ctx context.Context, p ui.Prompter, session string, add bool
 	defer ie.db.Close()
 	plan, code, err := spawnUnderOwner(ctx, ie, &req, project)
 	printSpawn(stdout, plan)
+	// The plan's warnings come before the yes: one may say that the
+	// session holds other projects' agents only (nhm-8ze).
+	printSpawnWarnings(stderr, verb, plan)
 	if err != nil {
 		return fail(err, code)
 	}
@@ -305,10 +309,19 @@ func runSpawnWizard(ctx context.Context, p ui.Prompter, session string, add bool
 	req.DryRun = false
 	res, code, err := spawnUnderOwner(ctx, ie, &req, project)
 	printSpawn(stdout, res)
+	printSpawnWarnings(stderr, verb, res)
 	if err != nil {
 		return fail(err, code)
 	}
 	return spawnExit(res)
+}
+
+// printSpawnWarnings prints a spawn's warnings as output does for the
+// other verbs.
+func printSpawnWarnings(w io.Writer, verb string, res spawn.Result) {
+	for _, s := range append(slices.Clone(res.Admission.Warnings), res.Warnings...) {
+		fmt.Fprintf(w, "nhm %s: warning: %s\n", verb, s)
+	}
 }
 
 // runSpawnPopup is the spawn popup: the wizard adds agents to the

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/guards"
 )
@@ -35,6 +36,7 @@ const (
 	AttnSourceDegraded    = "source_degraded"
 	AttnUnguarded         = "agent_unguarded"
 	AttnAtLimit           = "agent_at_limit"
+	AttnMixedWorkspace    = "binding_mixed_workspace"
 )
 
 // openOperationGrace is how long an operation may run before attention
@@ -142,6 +144,9 @@ func Attention(m *Model) []Item {
 		add(Item{Kind: AttnDisplaced, Severity: SevWarning, WorkspaceID: b.WorkspaceID, PaneID: b.PaneID, Slot: b.Slot,
 			MailName: b.MailName, BindingID: b.ID, Detail: fmt.Sprintf("%s is displaced (%s); nhm adopt can bind it again", b.MailName, b.StatusReason)})
 	}
+	for _, it := range mixedWorkspaces(m) {
+		add(it)
+	}
 	for _, q := range m.Quota {
 		switch {
 		case q.Limited:
@@ -156,6 +161,51 @@ func Attention(m *Model) []Item {
 	}
 	rank := map[string]int{SevCritical: 0, SevWarning: 1, SevInfo: 2}
 	sort.SliceStable(items, func(i, j int) bool { return rank[items[i].Severity] < rank[items[j].Severity] })
+	return items
+}
+
+// mixedWorkspaces names each active binding of the build (a bound agent,
+// or an absent binding) whose workspace holds other active bindings, none
+// of its project (nhm-8ze). The other bindings are of every project
+// (m.peers), even in a build for one project. nhm keeps no record of
+// which project a session is for, so the item says only that projects
+// share it.
+func mixedWorkspaces(m *Model) []Item {
+	type bound struct{ ws, pane, slot, name, id, project string }
+	var all []bound
+	for _, a := range m.Agents {
+		if b := a.Binding; b != nil && b.Status == bindings.Active {
+			all = append(all, bound{a.WorkspaceID, a.PaneID, a.Slot, b.MailName, b.ID, b.ProjectKey})
+		}
+	}
+	for _, b := range m.Absent {
+		all = append(all, bound{b.WorkspaceID, b.PaneID, b.Slot, b.MailName, b.ID, b.MailProjectKey})
+	}
+	peers := m.peers
+	if peers == nil {
+		peers = map[string][]peer{}
+		for _, b := range all {
+			peers[b.ws] = append(peers[b.ws], peer{b.id, b.project})
+		}
+	}
+	var items []Item
+	for _, b := range all {
+		if b.ws == "" {
+			continue
+		}
+		var others []string
+		for _, p := range peers[b.ws] {
+			if p.id != b.id {
+				others = append(others, p.project)
+			}
+		}
+		if list := bindings.OnlyOtherProjects(others, b.project); list != nil {
+			items = append(items, Item{Kind: AttnMixedWorkspace, Severity: SevWarning, WorkspaceID: b.ws, PaneID: b.pane,
+				Slot: b.slot, MailName: b.name, BindingID: b.id, Detail: fmt.Sprintf(
+					"%s of %s shares workspace %s with agents of other projects only (%s): one project's agents are in another's session, where nhm send by session and name can miss them",
+					b.name, b.project, b.ws, strings.Join(list, ", "))})
+		}
+	}
 	return items
 }
 
