@@ -37,8 +37,10 @@ herdr_private_stop() {
   if [[ -n "$HERDR_SERVER" ]]; then
     timeout 10 "$HERDR_WORK/bin/herdr" server stop >/dev/null 2>&1 || true
     # A server that does not stop gets SIGKILL after 10 s. The watchdog is
-    # killed once wait returns, so it never signals a pid used again.
-    (sleep 10 && kill -9 "$HERDR_SERVER" 2>/dev/null) &
+    # killed once wait returns, so it never signals a pid used again. Its
+    # sleep outlives it: with no stdout or stderr of ours, it holds no
+    # pipe of a caller open.
+    (sleep 10 && kill -9 "$HERDR_SERVER" 2>/dev/null) >/dev/null 2>&1 &
     local dog=$!
     wait "$HERDR_SERVER" 2>/dev/null || true
     kill "$dog" 2>/dev/null || true
