@@ -51,3 +51,16 @@ jobs:
         run: |
           sudo apt-get install -y zstd
           bash tests/install_test.sh
+
+  herdr-fit:
+    # nhm doctor --herdr-fit --placements against a private, headless herdr
+    # server of the pinned release (its SHA256 is checked): the X0 fit test
+    # that nhm's interactive surfaces rely on (nhm-qbi.11).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: nhm doctor --herdr-fit
+        run: bash tests/herdr_fit_test.sh
