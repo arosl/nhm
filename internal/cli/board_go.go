@@ -167,6 +167,9 @@ func runGoBoard(stderr io.Writer) int {
 		Core:           core,
 		NewOperationID: func() (string, error) { return store.NewOperationID(time.Now()) },
 		History:        func() ([]history.HistoryEntry, error) { return history.ReadRecent(200) },
+		// space a: the palette popup on the board's frozen selection; the
+		// palette sends to exactly those targets (nhm-qbi.6, 0531e21).
+		OpenPalette: func(ctx context.Context, pc ui.Context) error { return ui.Open(ctx, h, "palette", pc) },
 		// The read view reads as nhm read --source recent does.
 		Read: func(ctx context.Context, pane string, lines int) (string, error) {
 			strip := true
