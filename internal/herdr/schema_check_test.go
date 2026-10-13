@@ -50,6 +50,8 @@ var paramTypes = map[string]any{
 	"pane.wait_for_output":      WaitForOutputParams{},
 	"plugin.action.invoke":      actionInvokeParams{},
 	"plugin.pane.open":          PluginPaneOpenParams{},
+	"plugin.pane.focus":         paneParams{},
+	"plugin.pane.close":         paneParams{},
 }
 
 // alwaysSent lists optional parameters that the client sends even when
@@ -82,6 +84,8 @@ var resultTypes = map[string]any{
 	"output_matched":        OutputMatched{},
 	"plugin_action_invoked": PluginActionInvoked{},
 	"plugin_pane_opened":    pluginPaneResult{},
+	"plugin_pane_focused":   nil,
+	"plugin_pane_closed":    nil,
 	"workspace_info":        nil, // workspace.focus: nhm reads nothing from it
 	"ok":                    nil,
 }

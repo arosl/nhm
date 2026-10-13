@@ -15,6 +15,9 @@ import (
 
 var t0 = time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC)
 
+// The real client is an Opener.
+var _ Opener = (*herdr.Client)(nil)
+
 // fakeHerdr is a herdr server with panes, each with a shell pid.
 type fakeHerdr struct {
 	mu         sync.Mutex

@@ -79,7 +79,9 @@ var methodResults = map[string][]string{
 	"plugin.action.invoke": {"plugin_action_invoked"},
 	// A popup or overlay answers "ok"; a split, tab or zoomed pane
 	// answers with the pane.
-	"plugin.pane.open": {"ok", "plugin_pane_opened"},
+	"plugin.pane.open":  {"ok", "plugin_pane_opened"},
+	"plugin.pane.focus": {"plugin_pane_focused", "ok"},
+	"plugin.pane.close": {"plugin_pane_closed", "ok"},
 }
 
 // Client calls one herdr server. The zero value is not usable; use New

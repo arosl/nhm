@@ -161,6 +161,24 @@ func TestPluginPaneOpen(t *testing.T) {
 	}
 }
 
+func TestPluginPaneFocusAndClose(t *testing.T) {
+	s, c := newStub(t)
+	params := answer(s, "plugin.pane.focus", map[string]any{"type": "plugin_pane_focused"})
+	if err := c.PluginPaneFocus(context.Background(), "w1:p9"); err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, *params, `{"pane_id":"w1:p9"}`)
+	params = answer(s, "plugin.pane.close", map[string]any{"type": "plugin_pane_closed"})
+	if err := c.PluginPaneClose(context.Background(), "w1:p9"); err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, *params, `{"pane_id":"w1:p9"}`)
+	answer(s, "plugin.pane.focus", map[string]any{"type": "pane_info"})
+	if err := c.PluginPaneFocus(context.Background(), "w1:p9"); err == nil {
+		t.Fatal("an unexpected result type was accepted")
+	}
+}
+
 func TestEventsWaitDecodesTheEvent(t *testing.T) {
 	s, c := newStub(t)
 	params := answer(s, "events.wait", map[string]any{"type": "wait_matched", "event": map[string]any{

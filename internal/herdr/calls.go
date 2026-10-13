@@ -268,3 +268,14 @@ func (c *Client) PluginPaneOpen(ctx context.Context, p PluginPaneOpenParams) (*P
 	}
 	return r.PluginPane, nil
 }
+
+// PluginPaneFocus focuses a plugin pane, and with it its tab and
+// workspace.
+func (c *Client) PluginPaneFocus(ctx context.Context, paneID string) error {
+	return c.call(ctx, "plugin.pane.focus", paneParams{PaneID: paneID}, nil, 0)
+}
+
+// PluginPaneClose closes a plugin pane.
+func (c *Client) PluginPaneClose(ctx context.Context, paneID string) error {
+	return c.call(ctx, "plugin.pane.close", paneParams{PaneID: paneID}, nil, 0)
+}
