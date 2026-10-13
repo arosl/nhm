@@ -63,14 +63,15 @@ func runGoMenu(stderr io.Writer) int {
 	}
 	jobs := uiJobs(ie, c)
 	env := menu.Env{
-		Context:    c,
-		Core:       uiCore(ie, c, jobs),
-		NewID:      func() (string, error) { return store.NewOperationID(time.Now()) },
-		Agents:     src,
-		Views:      viewsEnv(c),
-		Operations: uiOperations{ie: ie, jobs: jobs},
-		Kinds:      kinds.All(),
-		Surface:    surface,
+		Context:        c,
+		Core:           uiCore(ie, c, jobs),
+		NewID:          func() (string, error) { return store.NewOperationID(time.Now()) },
+		OperationEnded: jobs.Ended,
+		Agents:         src,
+		Views:          viewsEnv(c),
+		Operations:     uiOperations{ie: ie, jobs: jobs},
+		Kinds:          kinds.All(),
+		Surface:        surface,
 	}
 	theme.ApplyLipGlossDefaults(theme.Current())
 	if _, err := tea.NewProgram(menu.New(env), tea.WithAltScreen()).Run(); err != nil {

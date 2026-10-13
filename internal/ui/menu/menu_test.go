@@ -331,6 +331,21 @@ func TestReopenedFormFindsItsRequestHeld(t *testing.T) {
 	if confirms != 1 {
 		t.Fatalf("%d confirms: %+v", confirms, reaps)
 	}
+	// Once its job has ended, the hold goes (OperationEnded): the same
+	// set may be confirmed again (PearlKnoll's re-check, low 3).
+	m = newMenu(ctxW, &fakeCore{})
+	m.env.Core.Reap = func(_ context.Context, r lifecycle.ReapRequest, _ string) ([]lifecycle.ReapItem, error) {
+		reaps = append(reaps, r)
+		if !r.DryRun {
+			return nil, fmt.Errorf("%w: the job's answer did not come in", actions.ErrNoAnswer)
+		}
+		return []lifecycle.ReapItem{{MailName: "IcyKnoll", BindingID: "b0", Generation: 1, Action: "would_retire"}}, nil
+	}
+	m.guard = actions.NewGuard(m.env.NewID).ReleaseEnded(func(string) bool { return true })
+	press(m, "w", "r", "enter", "esc", "esc", "w", "r")
+	if s, ok := m.open.(*reapScreen); !ok || s.f.Phase() != forms.Reviewed {
+		t.Fatalf("the reopened reap after its job ended: %T %v", m.open, s.f.Err())
+	}
 }
 
 // The kill's prompt and field stay under a long review, and its key line

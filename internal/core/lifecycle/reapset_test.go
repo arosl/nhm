@@ -214,12 +214,17 @@ type wakeHerdr struct {
 	*fakeHerdr
 	pane  string
 	reads int
+	// fail makes that second read fail instead (herdr went away).
+	fail error
 }
 
 func (h *wakeHerdr) AgentGet(ctx context.Context, pane string) (herdr.AgentInfo, error) {
 	a, err := h.fakeHerdr.AgentGet(ctx, pane)
 	if pane == h.pane {
 		if h.reads++; h.reads == 2 {
+			if h.fail != nil {
+				return a, h.fail
+			}
 			a.AgentStatus = herdr.StatusWorking
 		}
 	}
@@ -230,6 +235,18 @@ func (h *wakeHerdr) AgentGet(ctx context.Context, pane string) (herdr.AgentInfo,
 // with nothing closed, and the sweep goes on to the others (the re-check's
 // A: it stopped the sweep as "failed").
 func TestReapGoesOnPastAnAgentThatWoke(t *testing.T) {
+	t.Run("woke", func(t *testing.T) { reapPastBlueLake(t, nil, "changed since the checks") })
+	// A herdr read that fails before the close refuses too: nothing ran
+	// (PearlKnoll's re-check, low 1).
+	t.Run("read failed", func(t *testing.T) {
+		reapPastBlueLake(t, errors.New("herdr: socket closed"), "cannot be read again before the close")
+	})
+}
+
+// reapPastBlueLake confirms a reviewed reap of three agents in which
+// BlueLake's last read before its close says it works (fail nil) or
+// fails: BlueLake is refused with reason, and the others are retired.
+func reapPastBlueLake(t *testing.T, fail error, reason string) {
 	w := newWorld(t)
 	ctx := context.Background()
 	for i, name := range []string{"IcyKnoll", "BlueLake", "RedStone"} {
@@ -252,17 +269,17 @@ func TestReapGoesOnPastAnAgentThatWoke(t *testing.T) {
 			blue = it.BindingID
 		}
 	}
-	w.env.Herdr = &wakeHerdr{fakeHerdr: w.h, pane: "w1:p2"}
+	w.env.Herdr = &wakeHerdr{fakeHerdr: w.h, pane: "w1:p2", fail: fail}
 	req.DryRun, req.Only, req.OperationID = false, only, "op-reap-w"
 	items, err := Reap(ctx, w.env, nil, req)
 	if err != nil {
-		t.Fatalf("a sweep past an agent that woke = %v", err)
+		t.Fatalf("a sweep past BlueLake = %v", err)
 	}
 	got := map[string]ReapItem{}
 	for _, it := range items {
 		got[it.MailName] = it
 	}
-	if b := got["BlueLake"]; b.Action != "refused" || !strings.Contains(b.Reason, "changed since the checks") ||
+	if b := got["BlueLake"]; b.Action != "refused" || !strings.Contains(b.Reason, reason) ||
 		got["IcyKnoll"].Action != "retired" || got["RedStone"].Action != "retired" {
 		t.Fatalf("items = %+v", items)
 	}

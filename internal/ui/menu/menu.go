@@ -25,9 +25,13 @@ import (
 type Env struct {
 	Context ui.Context
 	Core    actions.Core
-	// NewID makes operation ids (store.NewOperationID): each form gets a
-	// guard over it.
+	// NewID makes operation ids (store.NewOperationID) for the menu's
+	// guard.
 	NewID func() (string, error)
+	// OperationEnded reports that an operation's job has ended
+	// (runner.Client.Ended): the guard then releases a request it held for
+	// a lost answer. nil: only an answer releases it.
+	OperationEnded func(opID string) bool
 	// Agents is the agent picker's snapshot source.
 	Agents picker.Source
 	// Views is what the read-only views read.
@@ -105,7 +109,7 @@ type surfaceEnded struct {
 // New returns the menu for env.
 func New(env Env) *Model {
 	return &Model{env: env, theme: theme.Current(), width: 80, height: 24, surfaces: map[string]bool{},
-		guard: actions.NewGuard(env.NewID)}
+		guard: actions.NewGuard(env.NewID).ReleaseEnded(env.OperationEnded)}
 }
 
 // Init implements tea.Model.

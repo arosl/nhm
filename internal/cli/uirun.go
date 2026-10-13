@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -72,7 +71,10 @@ func runJob(path string, stdout, stderr io.Writer) int {
 	// outcome: some of its effects may have happened. Once the verb has
 	// ended, its result is known, and the signal writes that one.
 	// The handler ends with runJob (in tests it runs in process).
-	var known atomic.Pointer[runner.Result]
+	// mu holds known and the result's write together: the handler never
+	// writes "unknown" after the verb's known result.
+	var mu sync.Mutex
+	var known *runner.Result
 	sigs, ended := make(chan os.Signal, 1), make(chan struct{})
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer func() {
@@ -86,8 +88,11 @@ func runJob(path string, stdout, stderr io.Writer) int {
 		case <-ended:
 			return
 		}
-		if k := known.Load(); k != nil {
-			r = *k
+		// The handler keeps mu until os.Exit: the main path writes nothing
+		// after it.
+		mu.Lock()
+		if known != nil {
+			r = *known
 		} else {
 			r.Code, r.Unknown, r.EndedAt = exitError, true, time.Now().UTC()
 			r.Error = fmt.Sprintf("%s stopped on %v after its claim; its outcome is unknown: recent operations shows its record", j.Verb, s)
@@ -110,9 +115,12 @@ func runJob(path string, stdout, stderr io.Writer) int {
 		res.Result = data
 	}
 	res.EndedAt = time.Now().UTC()
-	known.Store(&res)
-	if err := finish(res); err != nil {
-		fmt.Fprintf(stderr, "nhm ui run: %s: %v\n", j.ID, err)
+	mu.Lock()
+	known = &res
+	ferr := finish(res)
+	mu.Unlock()
+	if ferr != nil {
+		fmt.Fprintf(stderr, "nhm ui run: %s: %v\n", j.ID, ferr)
 		return exitError
 	}
 	fmt.Fprintf(stdout, "nhm ui run: %s %s ended with code %d\n", j.Verb, j.ID, code)

@@ -550,7 +550,11 @@ func execute(ctx context.Context, env Env, req RetireRequest, plan retirePlan, r
 	if plan.agent != nil {
 		a, err := env.Herdr.AgentGet(ctx, b.PaneID)
 		if err != nil {
-			return fmt.Errorf("revalidate %s: %w", b.PaneID, err)
+			// Nothing happened yet: a read that fails refuses, as in the
+			// checks.
+			why := fmt.Sprintf("%s cannot be read again before the close (%v); nothing closed", b.MailName, err)
+			res.Refusals = append(res.Refusals, why)
+			return fmt.Errorf("%w: %s: %w", ErrRefused, why, err)
 		}
 		if unsettled[a.AgentStatus] || (a.Agent != "" && a.Agent != b.Kind) {
 			// Nothing happened yet: a refusal, as the checks' own.
