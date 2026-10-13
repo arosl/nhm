@@ -79,9 +79,23 @@ func Select(ctx context.Context, l Lister, agents []herdr.AgentInfo, workspaceID
 	named := map[string]bool{}
 	var candidates []Candidate
 	for _, n := range sel.Names {
-		i := slices.IndexFunc(list, func(b bindings.Binding) bool { return nameMatches(b, n) })
-		if i >= 0 {
-			named[list[i].ID] = true
+		// A workspace can hold agents of several projects: a name that
+		// matches two of them names neither (nhm-ktm).
+		var hits []string
+		for _, b := range list {
+			if nameMatches(b, n) {
+				hits = append(hits, b.ID+" ("+b.MailProjectKey+")")
+				named[b.ID] = true
+			}
+		}
+		if len(hits) > 1 {
+			hint := ""
+			if projectKey == "" {
+				hint = "; give --project"
+			}
+			return nil, nil, fmt.Errorf("%w: %s in workspace %s: %s%s", bindings.ErrAmbiguous, n, workspaceID, strings.Join(hits, ", "), hint)
+		}
+		if len(hits) == 1 {
 			continue
 		}
 		c, ok := candidate(byPane, n)

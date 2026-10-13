@@ -356,9 +356,21 @@ func (s *Store) ActiveByPane(ctx context.Context, paneID string) (Binding, error
 	return s.one(ctx, paneID, `WHERE b.status = 'active' AND b.pane_id = ?`, paneID)
 }
 
-// ActiveByAlias finds the active binding with a herdr alias.
-func (s *Store) ActiveByAlias(ctx context.Context, alias string) (Binding, error) {
-	return s.one(ctx, alias, `WHERE b.status = 'active' AND b.herdr_alias = ?`, alias)
+// ActiveByAlias finds the active binding with a herdr alias. A
+// projectKey limits it to that project, as in ActiveByName (nhm-ktm).
+func (s *Store) ActiveByAlias(ctx context.Context, projectKey, alias string) (Binding, error) {
+	where, args := `WHERE b.status = 'active' AND b.herdr_alias = ?`, []any{alias}
+	if projectKey != "" {
+		where += ` AND b.mail_project_key = ?`
+		args = append(args, projectKey)
+	}
+	return s.one(ctx, alias, where, args...)
+}
+
+// InProject reports whether b is in the project projectKey names; an
+// empty projectKey names every project.
+func InProject(b Binding, projectKey string) bool {
+	return projectKey == "" || b.MailProjectKey == projectKey
 }
 
 // Filter selects bindings for List; empty fields match everything.

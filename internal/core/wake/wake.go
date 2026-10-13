@@ -812,8 +812,10 @@ func LastPass(ctx context.Context, db *store.DB) (runner string, at time.Time, o
 // ErrNoBinding means a recipient has no active binding in nhm.
 var ErrNoBinding = errors.New("wake: no active binding")
 
-// Resolve finds the active binding of a name: an Agent Mail name (in
-// projectKey when it is given), a herdr name, or a pane id.
+// Resolve finds the active binding of a name: an Agent Mail name, a herdr
+// name, or a pane id. A projectKey limits all three to that project, so
+// mail in one project never wakes a same-name agent of another
+// (nhm-ktm).
 func Resolve(ctx context.Context, bs *bindings.Store, projectKey, name string) (bindings.Binding, error) {
 	list, err := bs.List(ctx, bindings.Filter{ProjectKey: projectKey, MailName: name, Statuses: []bindings.Status{bindings.Active}})
 	if err != nil {
@@ -826,11 +828,14 @@ func Resolve(ctx context.Context, bs *bindings.Store, projectKey, name string) (
 	default:
 		return bindings.Binding{}, fmt.Errorf("%w: %s is active in %d projects; give --project", bindings.ErrAmbiguous, name, len(list))
 	}
-	if b, err := bs.ActiveByAlias(ctx, strings.ToLower(name)); err == nil {
+	if b, err := bs.ActiveByAlias(ctx, projectKey, strings.ToLower(name)); err == nil {
 		return b, nil
 	}
-	if b, err := bs.ActiveByPane(ctx, name); err == nil {
+	if b, err := bs.ActiveByPane(ctx, name); err == nil && bindings.InProject(b, projectKey) {
 		return b, nil
+	}
+	if projectKey != "" {
+		return bindings.Binding{}, fmt.Errorf("%w for %s in %s", ErrNoBinding, name, projectKey)
 	}
 	return bindings.Binding{}, fmt.Errorf("%w for %s", ErrNoBinding, name)
 }

@@ -274,16 +274,31 @@ func find(ctx context.Context, s *Store, h Herdr, q Query, getenv func(string) s
 	if target == "" {
 		return Binding{}, errors.New("bindings: name a mail name, a herdr name or a pane id")
 	}
+	// A named project limits every lookup: the name, the alias and the
+	// pane id never find a binding of another project (nhm-ktm).
+	notFound := fmt.Errorf("%w: %s", ErrNotFound, target)
+	if q.ProjectKey != "" {
+		notFound = fmt.Errorf("%w: %s in %s", ErrNotFound, target, q.ProjectKey)
+	}
 	// Pane ids hold a colon; mail names and aliases never do. A moved
 	// pane's old id (the moved agent's own HERDR_PANE_ID) finds it too.
 	if strings.Contains(target, ":") {
-		return s.ActiveByPane(ctx, CallerPane(ctx, s, h, target))
+		b, err := s.ActiveByPane(ctx, CallerPane(ctx, s, h, target))
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return Binding{}, notFound
+		case err != nil:
+			return Binding{}, err
+		case !InProject(b, q.ProjectKey):
+			return Binding{}, notFound
+		}
+		return b, nil
 	}
 	b, err := s.ActiveByName(ctx, q.ProjectKey, target)
 	if !errors.Is(err, ErrNotFound) {
 		return b, err
 	}
-	if b, err = s.ActiveByAlias(ctx, strings.ToLower(target)); !errors.Is(err, ErrNotFound) {
+	if b, err = s.ActiveByAlias(ctx, q.ProjectKey, strings.ToLower(target)); !errors.Is(err, ErrNotFound) {
 		return b, err
 	}
 	list, err := s.List(ctx, Filter{ProjectKey: q.ProjectKey, MailName: target})
@@ -291,7 +306,7 @@ func find(ctx context.Context, s *Store, h Herdr, q Query, getenv func(string) s
 		return Binding{}, err
 	}
 	if len(list) == 0 {
-		return Binding{}, fmt.Errorf("%w: %s", ErrNotFound, target)
+		return Binding{}, notFound
 	}
 	return list[0], nil
 }

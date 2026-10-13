@@ -324,7 +324,13 @@ func replayed(op store.Operation) error {
 
 func find(ctx context.Context, env Env, target, projectKey string) (bindings.Binding, error) {
 	if strings.HasPrefix(target, "bnd-") {
-		return env.Bindings.Get(ctx, target)
+		// A binding id of another project is not found in the named one
+		// (nhm-ktm).
+		b, err := env.Bindings.Get(ctx, target)
+		if err == nil && !bindings.InProject(b, projectKey) {
+			return bindings.Binding{}, fmt.Errorf("%w: %s in %s", bindings.ErrNotFound, target, projectKey)
+		}
+		return b, err
 	}
 	r, err := bindings.Resolve(ctx, env.Bindings, nil, bindings.Query{Target: target, ProjectKey: projectKey}, os.Getenv)
 	if err != nil {
