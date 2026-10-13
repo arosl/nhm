@@ -20,8 +20,10 @@
 // the reading it gets at normal load; a new binding has no active
 // assignment; the planned items become one WorkItem per agent for
 // SelectWork, each with ntm's work prompt, and the items beyond an agent's
-// first fail as ntm's coordinator fails them, without a claim
-// (ErrTargetOccupied); the two resolvers are exported for the CLI;
+// first fail without a claim, with the words of ntm's observation gate,
+// which refuses them once the first is sent; with no agent, every ready
+// bead is left out as no_placeable_agents; the two resolvers are exported
+// for the CLI;
 // printAssignmentPromptContext returns its lines (HumanPromptContextLines).
 package spawnassign
 
@@ -47,7 +49,7 @@ const (
 	HumanSkipCycle        = "in_dependency_cycle"
 	HumanSkipLimit        = "limit_reached"
 	HumanSkipPressure     = string(assign.AllocationReasonCriticalPressure)
-	humanTargetOccupied   = "assignment target already has active work"
+	HumanSkipNoPlaceable  = "no_placeable_agents"
 	humanSkipNotOpen      = "not_open_status"
 	humanSkipBlocked      = "blocked_by_dependency"
 	humanSkipContainer    = "container_issue_type"
@@ -156,7 +158,15 @@ func SelectHuman(triage *bv.TriageResponse, agents []SpawnedAgent, opts HumanOpt
 		return cmp.Compare(slotPane(a.Pane), slotPane(b.Pane))
 	})
 	sel := HumanSelection{Skipped: skipped, Actionable: actionable}
-	if len(agents) == 0 || len(ready) == 0 {
+	if len(agents) == 0 {
+		// No agent can take a bead: every ready bead is left out with ntm's
+		// reason, as ntm writes it (the id only).
+		for _, bead := range ready {
+			sel.Skipped = append(sel.Skipped, HumanSkip{BeadID: bead.ID, Reason: HumanSkipNoPlaceable})
+		}
+		return sel
+	}
+	if len(ready) == 0 {
 		sel.Agents = agents
 		return sel
 	}
@@ -176,14 +186,18 @@ func SelectHuman(triage *bv.TriageResponse, agents []SpawnedAgent, opts HumanOpt
 		planned = planned[:opts.Limit]
 	}
 
-	// One bead per agent, in plan order; ntm's coordinator refuses a second
-	// item for a target that already has active work.
+	// One bead per agent, in plan order. ntm sends an agent's first item,
+	// and its observation gate then refuses the second, as the agent works
+	// (its coordinator's ErrTargetOccupied is only the backstop). nhm
+	// decides it before the run, with the gate's words; an agent whose
+	// first bead fails gets no second.
 	served := map[int]bool{}
 	for _, item := range planned {
 		sel.Planned = append(sel.Planned, item.bead.ID)
 		if served[item.agent] {
+			pane := agents[item.agent].Pane
 			sel.Failures = append(sel.Failures, HumanFailure{BeadID: item.bead.ID, BeadTitle: item.bead.Title,
-				Pane: agents[item.agent].Pane, Error: humanTargetOccupied})
+				Pane: pane, Error: humanNotIdle(pane)})
 			continue
 		}
 		served[item.agent] = true
@@ -196,6 +210,12 @@ func SelectHuman(triage *bv.TriageResponse, agents []SpawnedAgent, opts HumanOpt
 		}
 	}
 	return sel
+}
+
+// humanNotIdle is ntm's observation-gate refusal of a pane
+// (executeAssignmentsEnhanced).
+func humanNotIdle(pane string) string {
+	return fmt.Sprintf("pane %s is not freshly and confidently idle", pane)
 }
 
 // humanItem is one planned bead for one agent (by index).

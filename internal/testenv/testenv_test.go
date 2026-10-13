@@ -59,3 +59,21 @@ func TestPackagesThatSetUserDirsImportTestenv(t *testing.T) {
 		t.Fatal("no test files found: the walk did not start at the module root")
 	}
 }
+
+// A relative TMPDIR gives way to a fresh directory under /tmp, absolute and
+// outside nhm's work tree, so a test project made in it never resolves to
+// nhm's own root (nhm-cvw).
+func TestOutsideTempDir(t *testing.T) {
+	dir, err := outsideTempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(dir) })
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(dir) || !strings.HasPrefix(dir, "/tmp/nhm-test-") || strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		t.Fatalf("dir = %q (work tree %q)", dir, root)
+	}
+}

@@ -81,9 +81,31 @@ func TestNewHumanAssignTakesTheKickoff(t *testing.T) {
 	}
 }
 
-// --role reviewer agents work no beads: the selection leaves every one out,
-// so each gets the kickoff only, as ntm's role gating keeps reviewer panes
-// from implementation work. Other agents share the ready bead.
+// The kickoff after a failed spawn goes only to agents that started: with
+// none, kickoffs takes no lock and adds no second owner error. With one,
+// it checks the owner, as every send does (here the Bash owns it).
+func TestKickoffsNeedAStartedAgent(t *testing.T) {
+	_, inst := cliInstance(t)
+	db, err := store.Open(inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ie := &instanceEnv{inst: inst, db: db}
+	a := &humanAssign{}
+	res := &spawn.Result{Targets: []spawn.Target{{Slot: "2.1", Status: spawn.StatusFailed}}}
+	if n, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md."); n != 0 || err != nil {
+		t.Fatalf("no agent started: %d, %v", n, err)
+	}
+	res.Targets[0].Ready = true
+	if _, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md."); err == nil {
+		t.Fatal("a started agent under the Bash: no owner check")
+	}
+}
+
+// nhm's --role reviewer agents work no beads (ntm has no such role): the
+// selection leaves every one out, so each gets the kickoff only. Other
+// agents share the ready bead.
 func TestSelectWorkLeavesReviewersOut(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir()) // no bv: no cycles

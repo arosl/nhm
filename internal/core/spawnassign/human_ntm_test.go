@@ -2,6 +2,7 @@ package spawnassign
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -129,7 +130,7 @@ func TestSelectHumanOneBeadPerAgent(t *testing.T) {
 		t.Fatalf("round-robin = items %+v failures %+v", sel.Items, sel.Failures)
 	}
 	for _, f := range sel.Failures {
-		if f.Error != humanTargetOccupied || f.Pane == "" {
+		if f.Pane == "" || f.Error != "pane "+f.Pane+" is not freshly and confidently idle" {
 			t.Fatalf("failure = %+v", f)
 		}
 	}
@@ -144,6 +145,20 @@ func TestSelectHumanOneBeadPerAgent(t *testing.T) {
 	sel = SelectHuman(humanTriage(recs...), humanAgents(2), HumanOptions{Session: "s", Strategy: "rr", Now: now})
 	if len(sel.Items) != 2 || len(sel.Failures) != 2 || !strings.Contains(sel.Items[0].MatchReason, "balanced workload") {
 		t.Fatalf("rr = items %+v failures %+v", sel.Items, sel.Failures)
+	}
+}
+
+// With no agent to take a bead (an --assign-*-only type nobody has, or
+// reviewers only), every ready bead is left out as ntm's
+// no_placeable_agents, after the cut; the partition's skips stay.
+func TestSelectHumanNoPlaceableAgents(t *testing.T) {
+	blocked := humanRec("g-0", "open", 1)
+	blocked.BlockedBy = []string{"g-9"}
+	sel := SelectHuman(humanTriage(blocked, humanRec("g-1", "open", 1), humanRec("g-2", "open", 2)), nil,
+		HumanOptions{Session: "s", Strategy: "balanced"})
+	want := map[string]string{"g-0": "blocked_by_dependency", "g-1": HumanSkipNoPlaceable, "g-2": HumanSkipNoPlaceable}
+	if got := skipReasons(sel); !reflect.DeepEqual(got, want) || len(sel.Items) != 0 || len(sel.Planned) != 0 {
+		t.Fatalf("skipped %v, items %+v", got, sel.Items)
 	}
 }
 

@@ -174,9 +174,8 @@ type humanAssign struct {
 	// long name; "" assigns to every agent.
 	agentType      string
 	verbose, quiet bool
-	// reviewer: --role reviewer, whose agents work no beads; as ntm's role
-	// gating keeps reviewer panes from implementation work, they get the
-	// kickoff only.
+	// reviewer: --role reviewer, nhm's promise that the agents work no
+	// beads (ntm has no such role), so they get the kickoff only.
 	reviewer bool
 	timeout  time.Duration
 	context  spawnassign.PromptContextOptions
@@ -270,6 +269,11 @@ func (a *humanAssign) selectWork(ctx context.Context, ie *instanceEnv, session, 
 		}
 		opts := spawnassign.HumanOptions{Session: session, Strategy: a.strategy, Limit: a.limit, Active: map[string]struct{}{},
 			OperatorGated: func(label string) bool { return bv.IsOperatorGatedLabelForProject(project, label) }, Now: time.Now}
+		// The ledger is the instance's, so other sessions' active beads
+		// count too, where ntm reads only its session's store. Nothing the
+		// user sees moves: the new agents have no active assignment, the
+		// fairness map has one session, and a bead active elsewhere is in
+		// progress in br already.
 		if store, err := assignment.LoadStoreStrictReadOnly(ie.inst.ID); err == nil && store != nil {
 			for _, item := range store.ListActive() {
 				opts.Active[item.BeadID] = struct{}{}
@@ -381,7 +385,7 @@ func (a *humanAssign) print(w, errw io.Writer, ready, inited int, o humanOutcome
 		filtered := 0
 		for _, k := range sel.Skipped {
 			switch k.Reason {
-			case spawnassign.HumanSkipCycle, spawnassign.HumanSkipLimit, spawnassign.HumanSkipPressure:
+			case spawnassign.HumanSkipCycle, spawnassign.HumanSkipLimit, spawnassign.HumanSkipPressure, spawnassign.HumanSkipNoPlaceable:
 				continue
 			}
 			filtered++
@@ -458,6 +462,17 @@ func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.R
 		get = store.Get
 	}
 	claimed := kickoffSkips(rows, get)
+	var targets []int
+	for i, t := range res.Targets {
+		if t.Ready && !claimed[t.Slot] {
+			targets = append(targets, i)
+		}
+	}
+	// No agent to kick off (a spawn that failed before any start): no lock,
+	// no second owner check.
+	if len(targets) == 0 {
+		return 0, nil
+	}
 	senv := ie.sendEnv()
 	env := spawn.Env{DB: ie.db, Send: func(ctx context.Context, r send.Request) (send.Result, error) { return send.Send(ctx, senv, r) }}
 	sent := 0
@@ -467,11 +482,8 @@ func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.R
 		if err := core.RequireOwner(o, core.OwnerNhm); err != nil {
 			return err
 		}
-		for i := range res.Targets {
+		for _, i := range targets {
 			t := &res.Targets[i]
-			if !t.Ready || claimed[t.Slot] {
-				continue
-			}
 			spawn.Kickoff(ctx, env, req, res, t, prefix)
 			if t.KickoffStatus == send.StatusSubmitted || t.KickoffStatus == send.StatusPossiblySubmitted {
 				sent++
