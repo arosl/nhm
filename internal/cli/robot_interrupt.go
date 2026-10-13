@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -152,12 +153,15 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 		case res.Status != "done":
 			out.Success, out.ErrorCode = false, robot.ErrCodeInternalError
 			out.Error = fmt.Sprintf("operation %s was claimed before with status %s; nothing was sent again", res.OperationID, res.Status)
-		case msg != "" && serr != nil:
+		case msg != "" && errors.Is(serr, sql.ErrNoRows):
 			// The first run stopped before its message (no agent was
 			// ready, or the run died): the replay does not guess.
 			out.Success, out.ErrorCode = false, robot.ErrCodeInternalError
 			out.Error = fmt.Sprintf("operation %s interrupted the agents but recorded no message; the message was not sent", res.OperationID)
 			out.Hint = "Send it with --robot-send=SESSION --msg=..., or interrupt again with a new --op-id"
+		case msg != "" && serr != nil:
+			out.Success, out.ErrorCode = false, robot.ErrCodeInternalError
+			out.Error = fmt.Sprintf("operation %s: reading its message's record: %v", res.OperationID, serr)
 		}
 		return robotInterruptWrite(stdout, out)
 	}
