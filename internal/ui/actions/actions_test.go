@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/wait"
@@ -235,6 +236,8 @@ type fakeCore struct {
 	retired   []lifecycle.RetireRequest
 	retireRes lifecycle.RetireResult
 	recycled  []lifecycle.RecycleRequest
+	adopted   []bindings.AdoptRequest
+	adoptRes  bindings.AdoptResult
 	err       error
 }
 
@@ -256,6 +259,10 @@ func (f *fakeCore) core() Core {
 		Recycle: func(_ context.Context, r lifecycle.RecycleRequest) (lifecycle.RecycleResult, error) {
 			f.recycled = append(f.recycled, r)
 			return lifecycle.RecycleResult{OperationID: r.OperationID, MailName: "Blue", Stage: lifecycle.StageDone}, f.err
+		},
+		Adopt: func(_ context.Context, r bindings.AdoptRequest) (bindings.AdoptResult, error) {
+			f.adopted = append(f.adopted, r)
+			return f.adoptRes, f.err
 		},
 	}
 }
@@ -287,7 +294,7 @@ func TestDoChecks(t *testing.T) {
 	if f.expect != nil {
 		t.Fatalf("the core was called: %v", f.expect)
 	}
-	for _, id := range []string{"agent", "palette", "agent.adopt"} {
+	for _, id := range []string{"agent", "palette", "agent.read"} {
 		a := mustAction(t, id)
 		if _, err := a.Do(context.Background(), f.core(), Request{Context: ctxWS, Targets: []ui.Target{loose}, OperationID: "op-1"}); !errors.Is(err, ErrUnavailable) {
 			t.Errorf("%s ran: %v", id, err)
@@ -300,8 +307,13 @@ func TestDoChecks(t *testing.T) {
 	if why := kill.Unavailable(ctxWS, f.core()); why != "this surface cannot kill" {
 		t.Errorf("kill without its core seam: %q", why)
 	}
-	if why := mustAction(t, "agent.adopt").Unavailable(ctxWS, f.core()); why != "not built yet" || mustAction(t, "agent.adopt").Visible() {
-		t.Errorf("adopt: unbuilt, so unavailable and hidden (%q)", why)
+	if why := mustAction(t, "agent.read").Unavailable(ctxWS, f.core()); why != "not built yet" || mustAction(t, "agent.read").Visible() {
+		t.Errorf("read: no handler, so unavailable and hidden (%q)", why)
+	}
+	noAdopt := f.core()
+	noAdopt.Adopt = nil
+	if why := mustAction(t, "agent.adopt").Unavailable(ctxWS, noAdopt); why != "this surface cannot adopt" || !mustAction(t, "agent.adopt").Visible() {
+		t.Errorf("adopt without its core seam: %q", why)
 	}
 	if why := mustAction(t, "palette").Unavailable(ui.Context{}, f.core()); why != "" || !mustAction(t, "palette").Visible() {
 		t.Errorf("palette: %q", why)

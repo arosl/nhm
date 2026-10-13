@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/herdr"
 )
@@ -119,14 +120,11 @@ func (t Target) check() error {
 
 // AgentTarget is the target of an agent in a snapshot: its binding at the
 // snapshot's generation, or, unbound, its pane and agent session
-// ("kind:value", as the board keys it).
+// ("kind:value", bindings.SessionKey, which adopt checks).
 func AgentTarget(a snapshot.Agent) Target {
-	t := Target{PaneID: a.PaneID, Kind: a.Kind}
+	t := Target{PaneID: a.PaneID, Kind: a.Kind, Session: bindings.SessionKey(a.Session)}
 	if a.Binding != nil {
 		t.BindingID, t.Generation = a.Binding.ID, a.Binding.Generation
-	}
-	if a.Session != nil {
-		t.Session = a.Session.Kind + ":" + a.Session.Value
 	}
 	return t
 }

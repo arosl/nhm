@@ -61,10 +61,29 @@ type AdoptRequest struct {
 	// binding that is active or displaced.
 	HandoffFrom string `json:"handoff_from,omitempty"`
 	Kind        string `json:"kind,omitempty"`
-	Model       string `json:"model,omitempty"`
-	ProjectKey  string `json:"mail_project_key"`
-	ProjectID   string `json:"project_id"`
-	OperationID string `json:"-"`
+	// ExpectedSession is the agent session a caller reviewed in the pane,
+	// "kind:value" (herdr's agent_session, as ui.Target keys an unbound
+	// agent). When set, adopt refuses before it binds anything if the
+	// pane's agent has another session or none: another agent started
+	// there since the review (nhm-qbi.9).
+	ExpectedSession string `json:"expected_session,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ProjectKey      string `json:"mail_project_key"`
+	ProjectID       string `json:"project_id"`
+	OperationID     string `json:"-"`
+}
+
+// ErrAgentChanged means the pane's agent is not the one the caller
+// reviewed (AdoptRequest.ExpectedSession).
+var ErrAgentChanged = errors.New("bindings: the agent in the pane is not the one reviewed")
+
+// SessionKey is an agent session as AdoptRequest.ExpectedSession names
+// it: "kind:value", or "" for none.
+func SessionKey(s *herdr.AgentSession) string {
+	if s == nil {
+		return ""
+	}
+	return s.Kind + ":" + s.Value
 }
 
 // AdoptResult is what adopt did.
@@ -138,6 +157,12 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, alias
 	kind := agent.Agent
 	if req.Kind != "" && req.Kind != agent.Agent {
 		return res, fmt.Errorf("bindings: herdr sees a %s agent in %s, not %s", agent.Agent, req.PaneID, req.Kind)
+	}
+	if got := SessionKey(agent.AgentSession); req.ExpectedSession != "" && got != req.ExpectedSession {
+		if got == "" {
+			got = "none"
+		}
+		return res, fmt.Errorf("%w: the agent in %s has session %s, the review saw %s", ErrAgentChanged, req.PaneID, got, req.ExpectedSession)
 	}
 	occ := occupantOf(ctx, env.Herdr, pane, agent, alias, req.Model)
 	occ.Kind = kind

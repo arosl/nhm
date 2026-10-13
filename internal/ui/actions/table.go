@@ -47,7 +47,7 @@ var table = []Action{
 		Covers: []string{"recycle"}, run: runRecycle, needs: needsRecycle},
 	{ID: "agent.adopt", Label: "adopt", Help: "bind an unbound agent to a Mail name", Kind: KindForm, Scope: ScopeAgents,
 		Selection: SelectOne, Takes: TakesUnbound, Menu: MenuPlace{Parent: "agent", Key: "p"}, Board: BoardPlace{Space: "p"},
-		Covers: []string{"adopt"}},
+		Covers: []string{"adopt"}, run: runAdopt, needs: needsAdopt},
 
 	{ID: "workspace.attach", Label: "focus", Help: "focus a workspace", Kind: KindAction, Scope: ScopeNone,
 		Menu: MenuPlace{Parent: "workspace", Key: "f"}, Covers: []string{"attach"}},

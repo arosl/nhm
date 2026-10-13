@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
@@ -30,6 +31,10 @@ type Core struct {
 	Interrupt func(ctx context.Context, expect map[string]int64, opID string) (wait.InterruptResult, error)
 	// Retire runs lifecycle.Retire.
 	Retire func(ctx context.Context, req lifecycle.RetireRequest) (lifecycle.RetireResult, error)
+	// Adopt runs bindings.Adopt as nhm adopt does: the CLI adds the
+	// project of the surface's directory (ProjectKey, ProjectID) unless the
+	// request hands an identity over.
+	Adopt func(ctx context.Context, req bindings.AdoptRequest) (bindings.AdoptResult, error)
 	// Recycle runs lifecycle.Recycle.
 	Recycle func(ctx context.Context, req lifecycle.RecycleRequest) (lifecycle.RecycleResult, error)
 
