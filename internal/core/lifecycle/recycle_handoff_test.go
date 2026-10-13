@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +97,17 @@ func (f *handoffInWait) AgentWait(ctx context.Context, p herdr.AgentWaitParams) 
 	return f.fakeHerdr.AgentWait(ctx, p)
 }
 
+// countedFacts is fakeFacts that counts the reads of Assigned.
+type countedFacts struct {
+	*fakeFacts
+	reads int
+}
+
+func (f *countedFacts) Assigned(ctx context.Context, root, agent string) ([]Bead, error) {
+	f.reads++
+	return f.fakeFacts.Assigned(ctx, root, agent)
+}
+
 // The agent writes its handoff while recycle --self waits for its turn.
 // The kickoff and the handoff both take the bead as it is after the
 // wait, from one read under the lock; the read before the wait only
@@ -107,6 +119,8 @@ func TestRecycleKickoffAndHandoffTakeOneRead(t *testing.T) {
 	w.env.Bead = r.bead
 	bindIn(t, w, "IcyKnoll", "w1:p1")
 	w.facts.assigned["IcyKnoll"] = []Bead{{ID: "acfs-4"}, {ID: "acfs-11"}}
+	f := &countedFacts{fakeFacts: w.facts}
+	w.env.Facts = f
 	w.env.Herdr = &handoffInWait{fakeHerdr: w.h, facts: w.facts, after: []Bead{{ID: "acfs-4"},
 		{ID: "acfs-11", HasHandoff: true, Handoff: "Handoff: B", HandoffAt: time.Date(2026, 10, 13, 5, 0, 0, 0, time.UTC)}}}
 	var got []string
@@ -121,6 +135,61 @@ func TestRecycleKickoffAndHandoffTakeOneRead(t *testing.T) {
 	if len(got) != 1 || got[0] != "acfs-11" || res.HandoffBead != "acfs-11" ||
 		len(w.sent) != 1 || !strings.Contains(w.sent[0].Message, "Polish acfs-11:") {
 		t.Fatalf("handoff %v (%q), kickoff %+v: want both of acfs-11", got, res.HandoffBead, w.sent)
+	}
+	if f.reads != 2 {
+		t.Errorf("Assigned read %d times, want 2: the check, then one read after the wait", f.reads)
+	}
+}
+
+// The agent closes its last bead while recycle --self waits for its turn.
+// The render under the lock fails, and the kickoff checked before the
+// wait stands, with a warning: an unattended recycle does not stop
+// without a word.
+func TestRecycleKeepsTheCheckedKickoff(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	r := &beadReader{beads: map[string]send.Bead{"acfs-4": {ID: "acfs-4", Title: "Four"}}}
+	w.env.Bead = r.bead
+	bindIn(t, w, "IcyKnoll", "w1:p1")
+	w.facts.assigned["IcyKnoll"] = []Bead{{ID: "acfs-4"}}
+	w.env.Herdr = &handoffInWait{fakeHerdr: w.h, facts: w.facts, after: []Bead{}}
+	var got []*Bead
+	w.env.Handoff = func(_ context.Context, _ bindings.Binding, bead *Bead, _ string) Handoff {
+		got = append(got, bead)
+		return Handoff{Sources: []string{}, Degraded: []string{}}
+	}
+	res, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Template: "polish", WaitTurn: time.Minute})
+	if err != nil || res.Stage != StageDone || len(w.sent) != 1 || !strings.Contains(w.sent[0].Message, "Polish acfs-4:") {
+		t.Fatalf("recycle = %+v %v, kickoff %+v", res, err, w.sent)
+	}
+	if !slices.ContainsFunc(res.Warnings, func(s string) bool {
+		return strings.Contains(s, "the kickoff keeps the bead read before the wait") && strings.Contains(s, "no bead in progress")
+	}) {
+		t.Errorf("warnings = %q", res.Warnings)
+	}
+	if len(got) != 1 || got[0] != nil || res.HandoffBead != "" {
+		t.Errorf("the handoff read %v (%q), want no bead", got, res.HandoffBead)
+	}
+}
+
+// A handoff comment whose time does not read is still a handoff, and
+// recycle says the pick may be wrong.
+func TestRecycleWarnsOfAnUndatedHandoff(t *testing.T) {
+	w := newWorld(t)
+	bindIn(t, w, "IcyKnoll", "w1:p1")
+	w.facts.assigned["IcyKnoll"] = []Bead{{ID: "acfs-4", HasHandoff: true, Handoff: "Handoff: A", HandoffUndated: true},
+		{ID: "acfs-11", HasHandoff: true, Handoff: "Handoff: B", HandoffAt: time.Date(2026, 10, 13, 5, 0, 0, 0, time.UTC)}}
+	w.env.Handoff = func(_ context.Context, _ bindings.Binding, bead *Bead, _ string) Handoff {
+		return Handoff{Text: bead.Handoff, Sources: []string{"bead"}, Degraded: []string{}}
+	}
+	res, err := Recycle(context.Background(), w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "Go on."})
+	if err != nil || res.HandoffBead != "acfs-11" {
+		t.Fatalf("recycle = %+v %v", res, err)
+	}
+	if !slices.ContainsFunc(res.Warnings, func(s string) bool {
+		return strings.Contains(s, "a handoff comment on acfs-4 has a time that does not read")
+	}) {
+		t.Errorf("warnings = %q", res.Warnings)
 	}
 }
 
@@ -145,7 +214,9 @@ func fakeBr(t *testing.T, comments1, comments2 string) string {
 // Assigned keeps each bead's newest handoff comment, its time and its id:
 // by the time br gives, then, in the same second, by the comment id, not
 // by the comment's place in the list. Only a handoff comment's time is
-// read, and one br cannot date is an error.
+// read. One whose time does not read is still a handoff (retire, reap
+// and on-close need no more), counts as the oldest, and marks its bead
+// undated.
 func TestAssignedReadsTheNewestHandoff(t *testing.T) {
 	ctx := context.Background()
 	root := fakeBr(t,
@@ -164,12 +235,24 @@ func TestAssignedReadsTheNewestHandoff(t *testing.T) {
 	if b := beads[1]; !b.HasHandoff || !b.HandoffAt.Equal(time.Date(2026, 10, 13, 3, 30, 0, 0, time.UTC)) {
 		t.Errorf("acfs-2 = %+v, want its handoff at 03:30 UTC", b)
 	}
-	if b := handoffBead(beads); b.ID != "acfs-1" {
-		t.Errorf("handoffBead = %s, want acfs-1 (05:00 UTC is after 03:30 UTC)", b.ID)
+	if b := handoffBead(beads); b.ID != "acfs-1" || b.HandoffUndated || beads[1].HandoffUndated {
+		t.Errorf("handoffBead = %+v, want acfs-1 (05:00 UTC is after 03:30 UTC), both dated", b)
 	}
 
-	root = fakeBr(t, `[]`, `[{"id":4,"text":"Handoff (C)","created_at":"yesterday"}]`)
-	if beads, err := (CLI{}).Assigned(ctx, root, "IcyKnoll"); err == nil || !strings.Contains(err.Error(), "the time of a handoff comment") {
-		t.Fatalf("a handoff br cannot date: %+v %v", beads, err)
+	root = fakeBr(t, `[{"id":6,"text":"Handoff (E): dated","created_at":"2026-10-13T05:00:00Z"},`+
+		`{"id":7,"text":"Handoff (F): undated, a higher id","created_at":"yesterday"}]`,
+		`[{"id":4,"text":"Handoff (C): undated","created_at":"yesterday"}]`)
+	beads, err = CLI{}.Assigned(ctx, root, "IcyKnoll")
+	if err != nil || len(beads) != 2 {
+		t.Fatalf("Assigned with undatable times = %+v %v", beads, err)
+	}
+	if b := beads[0]; b.Handoff != "Handoff (E): dated" || !b.HandoffUndated {
+		t.Errorf("acfs-1 = %+v, want E, marked undated", b)
+	}
+	if b := beads[1]; !b.HasHandoff || b.Handoff != "Handoff (C): undated" || !b.HandoffAt.IsZero() || !b.HandoffUndated {
+		t.Errorf("acfs-2 = %+v, want C at no time, marked undated", b)
+	}
+	if b := handoffBead(beads); b.ID != "acfs-1" {
+		t.Errorf("handoffBead = %s, want acfs-1 (a time beats none)", b.ID)
 	}
 }

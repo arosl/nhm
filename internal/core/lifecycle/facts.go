@@ -36,14 +36,18 @@ type Bead struct {
 	HasHandoff bool   `json:"has_handoff"`
 	// Handoff is the newest handoff comment. HandoffAt is the time br
 	// gives it, in whole seconds (zero without one), and HandoffID its
-	// comment id, which br counts up.
-	Handoff   string    `json:"-"`
-	HandoffAt time.Time `json:"-"`
-	HandoffID int64     `json:"-"`
+	// comment id, which br counts up in each database. HandoffUndated:
+	// br gave a handoff comment of this bead a time that does not read;
+	// that comment counts as the oldest.
+	Handoff        string    `json:"-"`
+	HandoffAt      time.Time `json:"-"`
+	HandoffID      int64     `json:"-"`
+	HandoffUndated bool      `json:"-"`
 }
 
 // handoffAfter reports whether b's handoff comment is newer than o's: by
-// br's time, then, in the same second, by br's comment id.
+// br's time, then, in the same second, by br's comment id (ids of two
+// databases do not compare, so such a tie is arbitrary).
 func (b Bead) handoffAfter(o Bead) bool {
 	if !b.HandoffAt.Equal(o.HandoffAt) {
 		return b.HandoffAt.After(o.HandoffAt)
@@ -465,9 +469,11 @@ func assignedIn(ctx context.Context, root string, db []string, agent string) ([]
 			if !IsHandoff(c.Text) {
 				continue
 			}
+			// Retire, reap and on-close need only that a handoff exists:
+			// a time that does not read fails none of them.
 			at, err := time.Parse(time.RFC3339, c.CreatedAt)
 			if err != nil {
-				return nil, fmt.Errorf("br comments %s: the time of a handoff comment: %w", is.ID, err)
+				at, b.HandoffUndated = time.Time{}, true
 			}
 			if next := (Bead{HandoffAt: at.UTC(), HandoffID: c.ID}); !b.HasHandoff || !b.handoffAfter(next) {
 				b.HasHandoff, b.Handoff, b.HandoffAt, b.HandoffID = true, c.Text, next.HandoffAt, next.HandoffID

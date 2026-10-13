@@ -171,8 +171,12 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	// take the same bead.
 	beads := sync.OnceValues(assignedReader(ctx, env, b))
 	if req.BeadID == "" {
-		if kick, err = recycleKickoff(ctx, env, req, b, beads); err != nil {
-			return fail(StageCheck, err)
+		// When that render fails, the kickoff checked before the wait
+		// stands: a --self recycle that stopped here would tell nobody.
+		if again, err := recycleKickoff(ctx, env, req, b, beads); err == nil {
+			kick = again
+		} else {
+			res.Warnings = append(res.Warnings, "the kickoff keeps the bead read before the wait: "+err.Error())
 		}
 	}
 	claimed := map[string]any{"binding_id": b.ID, "generation": b.Generation, "template": req.Template, "prompt": req.Prompt, "no_handoff": req.NoHandoff}
@@ -212,6 +216,11 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 		var bead *Bead
 		if list, err := beads(); err == nil {
 			bead = handoffBead(list)
+			for _, x := range list {
+				if x.HandoffUndated {
+					res.Warnings = append(res.Warnings, "beads: a handoff comment on "+x.ID+" has a time that does not read; the newest handoff may be on another bead")
+				}
+			}
 		} else {
 			res.Warnings = append(res.Warnings, "beads: "+err.Error())
 		}
