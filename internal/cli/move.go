@@ -12,6 +12,7 @@ import (
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/hooks"
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr"
 )
 
@@ -30,7 +31,9 @@ It refuses, and moves nothing:
 - unless the binding is active and verified in its pane;
 - when nhm cannot tell the agent by its process or its native session,
   because then the binding could not follow the pane;
-- when the agent is in W already, or W names no workspace or more than one.
+- when the agent is in W already, or W names no workspace or more than one;
+- when another nhm command (send, recycle, retire) acts on the agent, or
+  the agent's binding changed while nhm move waited for it.
 --dry-run shows the move and changes nothing.
 `
 
@@ -51,6 +54,10 @@ type MoveResult struct {
 
 // errMoveRefused marks the refusals that leave everything as it was.
 var errMoveRefused = errors.New("refused")
+
+// moveTargetWait bounds the wait for the binding's mutation lock, as
+// recycle's wait does.
+var moveTargetWait = 2 * time.Second
 
 func runMove(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("move", flag.ContinueOnError)
@@ -86,6 +93,28 @@ func runMove(args []string, stdout, stderr io.Writer) int {
 		b, err := movable(ctx, ie, pos[0], *workspace, &res)
 		if err != nil || *dryRun {
 			return err
+		}
+		// The binding's mutation lock, which send, recycle and retire
+		// take: none of them acts on the agent while its pane moves and
+		// the binding follows. Under the lock, check everything again:
+		// the writer that held it may have changed the binding.
+		tctx, tcancel := context.WithTimeout(ctx, moveTargetWait)
+		unlock, err := send.LockTarget(tctx, ie.inst.Dir, b.ID)
+		tcancel()
+		if errors.Is(err, send.ErrTargetBusy) {
+			return fmt.Errorf("%w: %s is being sent to, recycled or retired; try again", errMoveRefused, b.MailName)
+		}
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		cur, err := movable(ctx, ie, pos[0], *workspace, &res)
+		if err != nil {
+			return err
+		}
+		if cur.ID != b.ID || cur.Generation != b.Generation || cur.PaneID != b.PaneID {
+			return fmt.Errorf("%w: %s's binding changed while nhm move waited for it (%s generation %d in %s, now %s generation %d in %s); try again",
+				errMoveRefused, b.MailName, b.ID, b.Generation, b.PaneID, cur.ID, cur.Generation, cur.PaneID)
 		}
 		mv, err := ie.herdr.PaneMove(ctx, herdr.PaneMoveParams{PaneID: b.PaneID, Destination: herdr.NewTabIn(res.ToWorkspace)})
 		if err == nil && !mv.Changed {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
@@ -294,5 +295,74 @@ func TestMoveRefusals(t *testing.T) {
 	}
 	if b := binding(t, inst, "IcyKnoll"); b.PaneID != "w1:p1" {
 		t.Errorf("the binding moved without proof: %+v", b)
+	}
+}
+
+// nhm move takes the binding's mutation lock, which send, recycle and
+// retire hold while they act on the agent. A held lock refuses the move;
+// a binding that changed while the move waited refuses it too.
+func TestMoveTakesTheBindingLock(t *testing.T) {
+	s, inst, _, _ := moveInstance(t)
+	if _, err := core.SwitchOwner(context.Background(), inst.Dir, core.OwnerNhm, time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	saved := moveTargetWait
+	t.Cleanup(func() { moveTargetWait = saved })
+	moveTargetWait = 100 * time.Millisecond
+	b := binding(t, inst, "IcyKnoll")
+	unlock, err := send.LockTarget(context.Background(), inst.Dir, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { unlock() }()
+	code, _, errOut := run("move", "IcyKnoll", "--workspace", "other", "--socket", s.SocketPath)
+	if code != exitRefused || !strings.Contains(errOut, "IcyKnoll is being sent to, recycled or retired") || len(moves(s)) != 0 {
+		t.Fatalf("move while another writer holds IcyKnoll = %d %s; moves %v", code, errOut, moves(s))
+	}
+
+	// A dry run makes the requests of the check that comes before the
+	// lock. When the real move has made as many, it waits for the lock.
+	moveTargetWait = 10 * time.Second
+	n := len(s.Requests())
+	if code, _, errOut := run("move", "IcyKnoll", "--workspace", "other", "--dry-run", "--socket", s.SocketPath); code != exitOK {
+		t.Fatalf("dry run = %d %s", code, errOut)
+	}
+	check := len(s.Requests()) - n
+	n = len(s.Requests())
+	type result struct {
+		code   int
+		errOut string
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, _, errOut := run("move", "IcyKnoll", "--workspace", "other", "--socket", s.SocketPath)
+		done <- result{code, errOut}
+	}()
+	for deadline := time.Now().Add(5 * time.Second); len(s.Requests())-n < check; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the move made %d of its check's %d requests", len(s.Requests())-n, check)
+		}
+	}
+	// Meanwhile the lock's holder gave the agent a new generation, in the
+	// same pane, as a recycle does.
+	db, err := store.Open(inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = bindings.NewStore(db).Occupy(context.Background(), b.ID, b.Generation, bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1",
+		PaneID: "w1:p1", HerdrAlias: "icyknoll", Kind: "claude", NativeSession: &bindings.NativeSession{Value: "sess-a"}})
+	_ = db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	unlock = func() {}
+	r := <-done
+	if r.code != exitRefused || !strings.Contains(r.errOut, "IcyKnoll's binding changed while nhm move waited for it") || len(moves(s)) != 0 {
+		t.Fatalf("move of a binding that changed meanwhile = %d %s; moves %v", r.code, r.errOut, moves(s))
+	}
+	// The refused move released the lock: the next move runs.
+	if code, _, errOut := run("move", "IcyKnoll", "--workspace", "other", "--socket", s.SocketPath); code != exitOK || len(moves(s)) != 1 {
+		t.Fatalf("move after the change = %d %s; moves %v", code, errOut, moves(s))
 	}
 }
