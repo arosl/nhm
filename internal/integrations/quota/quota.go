@@ -30,6 +30,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/arosl/nhm/internal/store"
 )
 
 // DefaultLimitPct is the fill at which `quota check` refuses a kind.
@@ -102,12 +104,11 @@ func DefaultEnv() Env {
 	if e.CodexHome == "" && home != "" {
 		e.CodexHome = filepath.Join(home, ".codex")
 	}
-	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" && home != "" {
-		state = filepath.Join(home, ".local", "state")
-	}
-	if state != "" {
-		e.RecordFile = filepath.Join(state, "nhm", "quota", "claude.json")
+	// nhm's state root ignores a relative XDG_STATE_HOME: the statusline
+	// that writes the record and the verbs that read it run in different
+	// directories (nhm-mwo).
+	if root, err := store.StateRoot(); err == nil {
+		e.RecordFile = filepath.Join(root, "quota", "claude.json")
 	}
 	return e
 }

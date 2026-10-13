@@ -21,8 +21,9 @@ import (
 
 // StateRoot returns $XDG_STATE_HOME/nhm, or ~/.local/state/nhm. A
 // relative XDG_STATE_HOME is ignored: the XDG Base Directory spec calls it
-// invalid, as os.UserConfigDir does for XDG_CONFIG_HOME, and it would name
-// another state directory in each working directory (nhm-mwo).
+// invalid, and it would name another state directory in each working
+// directory (nhm-mwo). (os.UserConfigDir does not ignore a relative
+// XDG_CONFIG_HOME: it returns an error.)
 func StateRoot() (string, error) {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" && filepath.IsAbs(dir) {
 		return filepath.Join(dir, "nhm"), nil

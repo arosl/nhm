@@ -197,3 +197,20 @@ func TestLimits(t *testing.T) {
 		t.Fatalf("reload = %+v %v", again, err)
 	}
 }
+
+// The Claude record is under nhm's state root: a relative XDG_STATE_HOME
+// is ignored, so the statusline and the verbs, in different directories,
+// use one file (nhm-mwo).
+func TestDefaultEnvRecordFileIgnoresARelativeStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", "rel-state")
+	if got, want := DefaultEnv().RecordFile, filepath.Join(home, ".local", "state", "nhm", "quota", "claude.json"); got != want {
+		t.Fatalf("relative: RecordFile = %q, want %q", got, want)
+	}
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	if got, want := DefaultEnv().RecordFile, filepath.Join(state, "nhm", "quota", "claude.json"); got != want {
+		t.Fatalf("absolute: RecordFile = %q, want %q", got, want)
+	}
+}

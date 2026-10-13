@@ -110,3 +110,19 @@ func TestLoaderOrder(t *testing.T) {
 		t.Fatal("a key with a path was accepted")
 	}
 }
+
+// A relative XDG_CONFIG_HOME is ignored, as the XDG spec says: the user's
+// templates stay in ~/.config, not in each working directory (nhm-mwo).
+func TestLoaderIgnoresARelativeConfigHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "rel-config")
+	if got, want := NewLoader("").UserDir, filepath.Join(home, ".config", "nhm", "templates"); got != want {
+		t.Fatalf("relative: UserDir = %q, want %q", got, want)
+	}
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	if got, want := NewLoader("").UserDir, filepath.Join(config, "nhm", "templates"); got != want {
+		t.Fatalf("absolute: UserDir = %q, want %q", got, want)
+	}
+}

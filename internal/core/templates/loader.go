@@ -33,10 +33,15 @@ const AcfsCatalog = ".acfs/onboard/docs/ntm/command_palette.md"
 
 // NewLoader returns the loader for a project root ("" for none).
 func NewLoader(projectRoot string) *Loader {
+	// The XDG spec calls a relative XDG_CONFIG_HOME invalid: it is
+	// ignored, as store.StateRoot ignores a relative XDG_STATE_HOME.
 	config := os.Getenv("XDG_CONFIG_HOME")
 	home, _ := os.UserHomeDir()
-	if config == "" && home != "" {
-		config = filepath.Join(home, ".config")
+	if !filepath.IsAbs(config) {
+		config = ""
+		if home != "" {
+			config = filepath.Join(home, ".config")
+		}
 	}
 	l := &Loader{}
 	if projectRoot != "" {

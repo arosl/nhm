@@ -3,11 +3,13 @@
 //
 //	import _ "github.com/arosl/nhm/internal/testenv"
 //
-// nhm ignores a relative XDG directory, as the XDG Base Directory spec
-// says (store.StateRoot, os.UserConfigDir), and nhm's tests set those
-// directories to t.TempDir(). Under a relative TMPDIR (a gate's `env -i
-// TMPDIR=rel go test`, nhm-mwo) t.TempDir() is relative too, and the tests
-// would fall back to the user's real state and config directories.
+// nhm does not use a relative XDG directory, as the XDG Base Directory
+// spec says: store.StateRoot, quota's record and the template loader
+// ignore it, and os.UserConfigDir returns an error for it. nhm's tests
+// set those directories to t.TempDir(). Under a relative TMPDIR (a gate's
+// `env -i TMPDIR=rel go test`, nhm-mwo) t.TempDir() is relative too, and
+// the tests would fall back to the user's real state and config
+// directories, or fail.
 package testenv
 
 import (
