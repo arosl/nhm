@@ -55,8 +55,12 @@ func runUI(args []string, stdout, stderr io.Writer) int {
 	case "spawn-popup":
 		return holdOnFailure(runSpawnPopup(stderr), stderr)
 	case "palette-popup":
-		// [ui] palette = "go": the Go palette, in the same popup.
+		// [ui] palette = "go", or a selection handed on (the board's
+		// space a): the Go palette, in the same popup.
 		engine, err := surfaceEngine("palette")
+		if c, cerr := popupContext(); cerr == nil {
+			engine, err = paletteEngine(c)
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "nhm ui palette: %v\n", err)
 			return holdOnFailure(exitError, stderr)

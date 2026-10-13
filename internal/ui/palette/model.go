@@ -27,6 +27,9 @@
 //     and the text in focus changed (memory.go).
 //   - The editor's construction is newEditor, which the Composer (the
 //     menu's and the board's editor) shares.
+//   - A selection another surface handed on (Options.Handed, the board's
+//     marks) is the only target: 1 sends to exactly it; the kind digits
+//     and the picker do not widen it (handed.go).
 //   - Catalog text is shown without terminal controls (clean).
 
 package palette
@@ -49,6 +52,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/integrations/xf"
+	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/tui/agent"
 	"github.com/arosl/nhm/internal/ui/tui/components"
 	"github.com/arosl/nhm/internal/ui/tui/icons"
@@ -164,6 +168,8 @@ type Model struct {
 	panesUnbound int
 	loadPanes    func(ctx context.Context) ([]Pane, int, error)
 	kindKeys     []KindKey
+	// handed is a selection another surface handed on (handed.go).
+	handed handed
 	// targetNotice, when set, is shown in the target phase (a digit with no
 	// agent behind it).
 	targetNotice string
@@ -249,6 +255,10 @@ type Options struct {
 	Bodies    Bodies
 	// XF searches the xf archive; nil uses xf on PATH.
 	XF *xf.Adapter
+	// Handed is a selection another surface (HandedBy, "board") handed
+	// on, frozen there: 1 sends to exactly it, and nothing widens it.
+	Handed   []ui.Target
+	HandedBy string
 }
 
 // customMessageKey is the reserved key for the synthetic "Custom message"
@@ -313,6 +323,7 @@ func NewWithOptions(session string, commands []PaletteCmd, opts Options) Model {
 	m.store = opts.Store
 	m.loadPanes = opts.Panes
 	m.kindKeys = opts.KindKeys
+	m.handed = handed{by: opts.HandedBy, targets: append([]ui.Target(nil), opts.Handed...)}
 	m.env = sendEnv{submitter: opts.Submitter, base: opts.Base, bodies: opts.Bodies}
 	m.xf = opts.XF
 	if m.xf == nil {
@@ -933,6 +944,10 @@ func (m *Model) updateTargetPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.send()
 
 	case key.Matches(msg, targetKeys.TargetKind):
+		if m.handed.present() {
+			m.targetNotice = m.handedNotice()
+			return *m, nil
+		}
 		kind := m.kindForKey(msg.String())
 		if kind == "" {
 			m.targetNotice = fmt.Sprintf("No kind has the key %s.", msg.String())
@@ -943,6 +958,10 @@ func (m *Model) updateTargetPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.send()
 
 	case key.Matches(msg, targetKeys.SelectAgents):
+		if m.handed.present() {
+			m.targetNotice = m.handedNotice()
+			return *m, nil
+		}
 		return m.enterSelectAgentsPhase()
 	}
 
@@ -1406,8 +1425,16 @@ func (m *Model) send() (tea.Model, tea.Cmd) {
 }
 
 // frozenTargets are the targets of m.target now: every agent of the last
-// read, one kind's, or the ones checked in the picker.
+// read, one kind's, or the ones checked in the picker. With a handed
+// selection, 1 is exactly that selection, as it was frozen.
 func (m Model) frozenTargets() Targets {
+	if m.handed.present() {
+		if m.target != TargetAll {
+			return nil
+		}
+		ts, _ := m.handedTargets()
+		return ts
+	}
 	var ts Targets
 	if m.target == TargetSelected {
 		for _, p := range m.agentPanes {
@@ -2175,11 +2202,16 @@ func (m Model) viewTargetPhase() string {
 	}
 	targets = append(targets, targetRow{KeySelect, ic.Target, "Select agents…", "pick specific agents", t.Mauve, t.Surface0,
 		m.paneCounts.totalAgents})
+	if m.handed.present() {
+		// nhm: a handed selection is the one target; nothing widens it.
+		ts, _ := m.handedTargets()
+		targets = []targetRow{{KeyAll, ic.Target, "Picked", "the agents picked on " + m.handed.surface(), t.Mauve, t.Surface0, len(ts)}}
+	}
 
 	for _, target := range targets {
 		// Count suffixes (best-effort)
 		countSuffix := ""
-		if m.paneCountsKnown {
+		if m.paneCountsKnown || m.handed.present() {
 			countSuffix = fmt.Sprintf(" (%d)", target.count)
 		}
 
@@ -2239,7 +2271,7 @@ func (m Model) viewTargetPhase() string {
 		}
 
 		samples := []string(nil)
-		if target.key != KeySelect {
+		if target.key != KeySelect && !m.handed.present() {
 			samples = m.samplePaneTitlesForTargetKey(target.key, maxSamples)
 		}
 		if len(samples) > 0 {
@@ -2257,7 +2289,9 @@ func (m Model) viewTargetPhase() string {
 		b.WriteString("\n")
 	}
 
-	// nhm: what the targets leave out, and why a key did nothing.
+	// nhm: the handed agents, what the targets leave out, and why a key
+	// did nothing.
+	b.WriteString(m.renderHanded())
 	b.WriteString(m.renderTargetNotes())
 
 	// What memory would add to the draft, when shown (memory.go).

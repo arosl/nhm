@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/store"
+	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/runner"
 )
@@ -126,6 +128,37 @@ func TestPaletteGoUsage(t *testing.T) {
 	out.Reset()
 	if code := runPaletteGo([]string{"--go", "stray"}, &out, &errOut); code != exitRefused {
 		t.Fatalf("a stray argument = %d", code)
+	}
+}
+
+// A selection handed on always gets the Go palette: the fzf palette
+// cannot honour one. Without one, [ui] palette decides.
+func TestPaletteEngineForAHandedSelection(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	c := ui.Context{SocketPath: "/run/h.sock", WorkspaceID: "w1"}
+	if e, err := paletteEngine(c); err != nil || e != engineFzf {
+		t.Fatalf("no selection, no config = %q %v", e, err)
+	}
+	picked := c.WithTargets("board", []ui.Target{{BindingID: "b1", Generation: 2, PaneID: "w1:p1"}})
+	if e, err := paletteEngine(picked); err != nil || e != engineGo {
+		t.Fatalf("a handed selection = %q %v", e, err)
+	}
+	writeTestFile(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "nhm", "config.toml"), "[ui]\npalette = \"go\"\n")
+	if e, err := paletteEngine(c); err != nil || e != engineGo {
+		t.Fatalf("[ui] palette = go = %q %v", e, err)
+	}
+}
+
+// An explicitly empty selection is refused before the palette opens.
+func TestPaletteGoRefusesAnEmptySelection(t *testing.T) {
+	data, err := json.Marshal(ui.Context{SocketPath: "/run/h.sock", WorkspaceID: "w1"}.WithTargets("board", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(ui.ContextEnv, string(data))
+	var out, errOut bytes.Buffer
+	if code := runPaletteGo(nil, &out, &errOut); code != exitRefused || !strings.Contains(errOut.String(), "empty") {
+		t.Fatalf("= %d %q", code, errOut.String())
 	}
 }
 

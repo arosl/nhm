@@ -29,6 +29,7 @@ import (
 	"github.com/arosl/nhm/internal/core/templates"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
+	"github.com/arosl/nhm/internal/ui"
 )
 
 // stripANSI removes ANSI escape sequences from text for test comparison.
@@ -1999,6 +2000,47 @@ func TestSmallTerminalSizes(t *testing.T) {
 			}
 			_ = m.View()
 		}
+	}
+}
+
+// A selection the board handed on is the only target: 1 sends to exactly
+// it, at the generations the board froze; the kind digits and the picker
+// never widen it; an unbound pick is named and gets no prompt.
+func TestHandedSelectionIsTheOnlyTarget(t *testing.T) {
+	rec := &sendRecorder{}
+	sub := NewSubmitter(rec.send, nil, nil, func() (string, error) { return "op-h", nil })
+	picked := []ui.Target{{BindingID: "b3", Generation: 7, PaneID: "w1:p3", Kind: "omp"}, {PaneID: "w1:p9", Session: "id:x"}}
+	m := NewWithOptions("swarm", testCommands, Options{Submitter: sub, Bodies: Bodies{Dir: t.TempDir()},
+		Base: send.Request{Session: "swarm", WorkspaceID: "w1"}, KindKeys: KindKeys(kinds.NewRegistry().All()),
+		Handed: picked, HandedBy: "board"})
+	m.panes, m.paneCountsKnown, m.paneCounts = testPanes(), true, countPanes(testPanes())
+	m.width, m.height = 140, 60
+	m.phase, m.selected = PhaseTarget, &m.commands[0]
+	view := stripANSI(m.View())
+	for _, want := range []string{"Picked (1)", "the agents picked on the board", "To: BlueLake", "1 picked agent(s) have no binding"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Oh My Pi") || strings.Contains(view, "Select agents") {
+		t.Fatalf("a handed selection offers other targets:\n%s", view)
+	}
+	for _, k := range []rune{'7', '2', '6'} {
+		m, _ = press(t, m, runeKey(k))
+		if m.phase != PhaseTarget || !strings.Contains(m.targetNotice, "The board picked the agents") {
+			t.Fatalf("key %c: phase %v notice %q", k, m.phase, m.targetNotice)
+		}
+	}
+	if len(rec.requests()) != 0 {
+		t.Fatal("a key widened the handed selection")
+	}
+	m, _ = press(t, m, runeKey('1'))
+	reqs := rec.waitRequests(t, 1)
+	if !reflect.DeepEqual(reqs[0].Selector.Panes, []string{"w1:p3"}) || len(reqs[0].Expect) != 1 || reqs[0].Expect["b3"] != 7 {
+		t.Fatalf("request = %+v", reqs[0])
+	}
+	if m.phase != PhaseResult {
+		t.Fatalf("phase = %v", m.phase)
 	}
 }
 

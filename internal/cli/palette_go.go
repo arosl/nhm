@@ -17,6 +17,7 @@ import (
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
+	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/runner"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
@@ -70,6 +71,15 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 	c, err := popupContext()
 	if err != nil {
 		return fail(exitError, err)
+	}
+	// A selection another surface handed on (the board's space a) is the
+	// palette's only target; an explicitly empty one is refused.
+	picked, pick, err := c.Selection()
+	if err != nil {
+		return fail(exitRefused, err)
+	}
+	if pick {
+		picked = nil
 	}
 	if *workspace != "" {
 		c.WorkspaceID, c.WorkspaceLabel = *workspace, ""
@@ -172,6 +182,8 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 		Submitter: sub,
 		Base:      base,
 		Bodies:    palette.Bodies{Dir: bodies},
+		Handed:    picked,
+		HandedBy:  c.Origin,
 	})
 	final, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
 	pending := ""
@@ -193,6 +205,16 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return exitOK
+}
+
+// paletteEngine is the palette that nhm ui palette-popup runs for c: the
+// Go palette when c hands on a selection (the fzf palette cannot honour
+// one, so it would widen it), else [ui] palette.
+func paletteEngine(c ui.Context) (string, error) {
+	if c.TargetMode == ui.TargetsExplicit {
+		return engineGo, nil
+	}
+	return surfaceEngine("palette")
 }
 
 // paletteReader reads what the core recorded for a send. With no record
