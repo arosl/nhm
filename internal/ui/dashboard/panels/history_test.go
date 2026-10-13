@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -751,5 +752,22 @@ func TestHistoryPanelCleansPromptsAndTakesNow(t *testing.T) {
 	panel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}}) // 1h, from the injected now
 	if len(panel.visibleEntries) != 1 {
 		t.Fatalf("1h filter = %d entries", len(panel.visibleEntries))
+	}
+}
+
+// nhm: a long prompt and long targets of runes wider than a byte are cut
+// by display width, never inside a rune.
+func TestHistoryPanelCutsByWidth(t *testing.T) {
+	// Two-byte runes only: a cut by bytes splits one at every other width.
+	// The widths take in each column layout (the targets show from 70).
+	for width := 40; width <= 110; width++ {
+		panel := NewHistoryPanel()
+		panel.SetSize(width, 20)
+		panel.SetEntries([]history.HistoryEntry{
+			{ID: "x", Prompt: strings.Repeat("ø", 200), Targets: []string{strings.Repeat("Æ", 12), strings.Repeat("Å", 12)}, Success: true},
+		}, nil)
+		if view := panel.View(); !utf8.ValidString(view) || strings.ContainsRune(view, utf8.RuneError) {
+			t.Fatalf("width %d: %q", width, view)
+		}
 	}
 }

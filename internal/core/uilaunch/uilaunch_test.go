@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -139,10 +138,6 @@ func TestOpenRegisterFocus(t *testing.T) {
 	}
 	if len(h.opened) != 1 || len(h.focused) != 1 || h.focused[0] != res.PaneID {
 		t.Fatalf("opened %d, focused %v", len(h.opened), h.focused)
-	}
-	boards, err := Boards(ctx, env, h)
-	if err != nil || len(boards) != 1 || boards[res.PaneID].Token != res.Token {
-		t.Fatalf("Boards = %v, %v", boards, err)
 	}
 	if err := Unregister(ctx, env, "w1", res.Token); err != nil {
 		t.Fatal(err)
@@ -383,22 +378,5 @@ func TestProcStartReadsSelf(t *testing.T) {
 	}
 	if _, err := ProcStart(-1); err == nil {
 		t.Fatal("ProcStart(-1) worked")
-	}
-}
-
-func TestBoardsSkipsOtherFiles(t *testing.T) {
-	env, _ := testEnv(t)
-	h := newFake("w1")
-	if err := os.MkdirAll(filepath.Join(env.InstanceDir, Dir), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"notes.txt", "board-.json", "board-w..json"} {
-		if err := os.WriteFile(filepath.Join(env.InstanceDir, Dir, name), []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	boards, err := Boards(context.Background(), env, h)
-	if err != nil || len(boards) != 0 {
-		t.Fatalf("Boards = %v, %v", boards, err)
 	}
 }

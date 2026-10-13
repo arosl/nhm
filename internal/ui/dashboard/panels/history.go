@@ -11,7 +11,8 @@
 // place of Gemini; now is injectable; PreviewOpen is new. Behaviour
 // edits: prompts are shown without terminal controls, and the empty state
 // and the preview's hint name only what the board does (no replay or copy
-// keys there yet).
+// keys there yet); a row's prompt and targets are cut by display width,
+// never inside a rune.
 
 package panels
 
@@ -653,8 +654,8 @@ func (m *HistoryPanel) rebuildTableRows() {
 		// Prompt (single line)
 		prompt := strings.ReplaceAll(cleanHistoryText(e.Prompt), "\n", " ")
 		maxPrompt := cols[len(cols)-1].Width
-		if len(prompt) > maxPrompt {
-			prompt = prompt[:maxPrompt-1] + "…"
+		if ansi.StringWidth(prompt) > maxPrompt {
+			prompt = ansi.Truncate(prompt, maxPrompt, "…")
 		}
 
 		// Build row based on column count
@@ -799,8 +800,8 @@ func (m *HistoryPanel) formatTargets(entry history.HistoryEntry, maxLen int) str
 		out = append(out, target)
 	}
 	s := cleanHistoryText(strings.Join(out, ","))
-	if maxLen > 0 && len(s) > maxLen {
-		return s[:maxLen-1] + "…"
+	if maxLen > 0 && ansi.StringWidth(s) > maxLen {
+		return ansi.Truncate(s, maxLen, "…")
 	}
 	return s
 }

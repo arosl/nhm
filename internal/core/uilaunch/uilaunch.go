@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -470,52 +469,6 @@ func Unregister(ctx context.Context, env Env, workspaceID, token string) error {
 		}
 		return env.remove(workspaceID)
 	})
-}
-
-// Boards lists the live boards of the instance, by pane id: nhm's own
-// panes, which agent counts, targets, adopt, maintain and kill's review
-// leave out. A record that cannot be checked is left out of the list
-// and named in the error.
-func Boards(ctx context.Context, env Env, h Herdr) (map[string]Launch, error) {
-	entries, err := os.ReadDir(filepath.Join(env.InstanceDir, Dir))
-	if os.IsNotExist(err) {
-		return map[string]Launch{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("uilaunch: %w", err)
-	}
-	out := map[string]Launch{}
-	var failed []string
-	for _, e := range entries {
-		ws, ok := strings.CutPrefix(e.Name(), "board-")
-		if !ok {
-			continue
-		}
-		ws, ok = strings.CutSuffix(ws, ".json")
-		if !ok || !store.ValidWorkspaceID(ws) {
-			continue
-		}
-		l, err := env.read(ws)
-		if err != nil || l == nil {
-			if err != nil {
-				failed = append(failed, err.Error())
-			}
-			continue
-		}
-		st, err := Verify(ctx, env, h, *l)
-		if err != nil {
-			failed = append(failed, ws+": "+err.Error())
-			continue
-		}
-		if st.State == Live {
-			out[l.PaneID] = *l
-		}
-	}
-	if len(failed) > 0 {
-		sort.Strings(failed)
-		return out, errors.New(strings.Join(failed, "; "))
-	}
-	return out, nil
 }
 
 func newToken() (string, error) {
