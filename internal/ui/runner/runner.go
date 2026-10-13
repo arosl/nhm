@@ -36,13 +36,20 @@ import (
 // Version is the job format this nhm writes and runs.
 const Version = 1
 
-// Verbs.
+// Verbs. The requests of send, retire and recycle are the core's own
+// (send.Request, lifecycle.RetireRequest, lifecycle.RecycleRequest), as
+// the action table's handler built them; the others have a request type
+// here. A job's id is its operation id.
 const (
-	VerbKill  = "kill"
-	VerbReap  = "reap"
-	VerbSpawn = "spawn"
-	VerbNew   = "new"
-	VerbWake  = "wake"
+	VerbKill      = "kill"
+	VerbReap      = "reap"
+	VerbSpawn     = "spawn"
+	VerbNew       = "new"
+	VerbWake      = "wake"
+	VerbSend      = "send"
+	VerbInterrupt = "interrupt"
+	VerbRetire    = "retire"
+	VerbRecycle   = "recycle"
 )
 
 // Codes are the CLI verbs' exit codes.
@@ -108,6 +115,12 @@ type NewRequest struct {
 // WakeRequest is one manual wake pass for the picked agents.
 type WakeRequest struct {
 	Recipients []ui.Target `json:"recipients"`
+}
+
+// InterruptRequest interrupts the reviewed bindings: binding id to the
+// generation the surface saw (wait.InterruptRequest's Expect).
+type InterruptRequest struct {
+	Expect map[string]int64 `json:"expect"`
 }
 
 // Result is what a job's process wrote when it ended.

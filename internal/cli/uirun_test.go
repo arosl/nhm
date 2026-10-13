@@ -112,6 +112,55 @@ func TestUIRunRefusesAnEmptySelection(t *testing.T) {
 	}
 }
 
+// The per-agent jobs run the handler's request; a dry run or an empty
+// interrupt is no job.
+func TestUIRunAgentJobs(t *testing.T) {
+	t.Chdir(t.TempDir())
+	s, inst, bs := waitInstance(t, func(pane string) map[string]any {
+		if pane == "w1:p1" {
+			return agentMap(pane, "claude", "idle", 4, 4)
+		}
+		return agentMap(pane, "codex", "working", 7, 0)
+	})
+	t.Setenv("HOME", t.TempDir())
+	old := lifecycleFacts
+	lifecycleFacts = cliFacts{}
+	t.Cleanup(func() { lifecycleFacts = old })
+	ownNhm(t, inst)
+	dir := t.TempDir()
+	var blue string
+	var gen int64
+	for _, b := range bs {
+		if b.MailName == "BlueLake" {
+			blue, gen = b.ID, b.Generation
+		}
+	}
+	j, path := writeJob(t, runner.VerbRetire, s.SocketPath, dir, lifecycle.RetireRequest{Target: blue, ExpectedGeneration: gen, Reason: "retire"})
+	if code, _, _ := run("ui", "run", path); code != 2 {
+		t.Fatalf("retire of a working agent = %d", code)
+	}
+	r := jobResult(t, path, j)
+	var res lifecycle.RetireResult
+	if json.Unmarshal(r.Result, &res) != nil || len(res.Refusals) == 0 || !strings.Contains(r.Error, "refused") {
+		t.Fatalf("retire result = %+v %s", r, r.Result)
+	}
+	for _, c := range []struct {
+		verb string
+		req  any
+	}{
+		{runner.VerbRetire, lifecycle.RetireRequest{Target: blue, DryRun: true}},
+		{runner.VerbInterrupt, runner.InterruptRequest{}},
+	} {
+		j, path := writeJob(t, c.verb, s.SocketPath, dir, c.req)
+		if code, _, _ := run("ui", "run", path); code != 2 {
+			t.Errorf("%s %+v = %d", c.verb, c.req, code)
+		}
+		if r := jobResult(t, path, j); r.Code != 2 || r.Error == "" {
+			t.Errorf("%s result = %+v", c.verb, r)
+		}
+	}
+}
+
 // A kill job runs kill's checks again: a refusal ends it before any
 // record, and the result says why.
 func TestUIRunKillRefusal(t *testing.T) {
