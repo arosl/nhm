@@ -248,8 +248,13 @@ func (m Model) why(a snapshot.Agent) string {
 	case actions.TakesAny:
 		return ""
 	case actions.TakesUnbound:
-		if a.Binding != nil {
+		switch {
+		case a.Binding != nil:
 			return "bound already, as " + clean(a.Binding.MailName)
+		case a.Session == nil:
+			// Without a session nhm cannot tell this agent from a later
+			// one in the pane (adopt's ExpectedSession).
+			return "herdr reports no agent session: adopt it by hand (nhm adopt <Name> --pane " + a.PaneID + ")"
 		}
 		return ""
 	}

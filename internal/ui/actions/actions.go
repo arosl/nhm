@@ -243,6 +243,11 @@ func (a Action) checkTargets(ts []ui.Target) error {
 			return fmt.Errorf("%w: a target names neither a binding nor a pane", ErrTargets)
 		case a.Takes == TakesUnbound && t.Bound():
 			return fmt.Errorf("%w: %s takes an agent with no binding; %s is bound", ErrTargets, a.ID, t.BindingID)
+		case a.Takes == TakesUnbound && t.Session == "":
+			// The session is what tells the reviewed agent from one that
+			// starts in the pane later (bindings.AdoptRequest.ExpectedSession).
+			return fmt.Errorf("%w: herdr reports no agent session in pane %s, so nhm cannot tell this agent from a later one there; "+
+				"adopt it by hand: nhm adopt <Name> --pane %s", ErrTargets, t.PaneID, t.PaneID)
 		case a.Takes == TakesBound && !t.Bound():
 			return fmt.Errorf("%w: pane %s has no binding: nhm %s acts on bound agents only (adopt binds one)", ErrTargets, t.PaneID, a.Label)
 		case seen[t.Key()]:

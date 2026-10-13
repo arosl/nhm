@@ -213,6 +213,16 @@ func TestWhatCanBePicked(t *testing.T) {
 	if p, ok := msg.(Picked); !ok || p.Targets[0].Bound() || p.Targets[0].Session != "id:s-1" {
 		t.Fatalf("adopt pick = %#v", msg)
 	}
+	// An unbound agent with no session cannot be frozen for adopt.
+	noSession := unbound("w1:p8", "")
+	noSession.Session = nil
+	snap = model(noSession)
+	b := ForAction(adopt, ui.Context{WorkspaceID: "w1"}, fixed(&snap))
+	b, _ = b.Update(b.Init()())
+	b, msg = press(t, b, "enter")
+	if msg != nil || !strings.Contains(b.note, "no agent session") {
+		t.Fatalf("adopt without a session: %#v, note %q", msg, b.note)
+	}
 }
 
 // TestStaleAnswersAreDropped: one read is in flight at a time; a refresh

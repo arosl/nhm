@@ -272,7 +272,16 @@ func (f *AgentForm) confirm() tea.Cmd {
 		return nil
 	}
 	f.phase, f.request = Running, nextRequest()
-	return doWithin(f.run, f.request, f.requestFor(f.params(), id), RunTimeout)
+	run, guard, key := doWithin(f.run, f.request, f.requestFor(f.params(), id), RunTimeout), f.run.Guard, f.key
+	return func() tea.Msg {
+		msg := run()
+		// The hold ends where the answer arrives, also when the form was
+		// closed meanwhile; a lost answer keeps it (Guard.Settle).
+		if d, ok := msg.(done); ok {
+			guard.Settle(key, d.err)
+		}
+		return msg
+	}
 }
 
 // Update takes keys and the core's answers.

@@ -176,6 +176,40 @@ func TestNoDoubleSubmit(t *testing.T) {
 	if len(c.interrupts) != 1 {
 		t.Fatalf("calls %v", c.interrupts)
 	}
+	// The answer came: the same request may run again, as a new operation.
+	three := agentForm(t, "agent.interrupt", c.core(), guard, tBlue)
+	three.press("tab", "enter")
+	if len(c.interrupts) != 2 || three.Phase() != Done || three.OperationID() == one.OperationID() {
+		t.Fatalf("after the answer: calls %v, phase %s", c.interrupts, three.Phase())
+	}
+}
+
+// TestLostAnswerKeepsTheHold: a lost answer keeps the request held, so a
+// new form for the same request cannot send it again (it may still run).
+func TestLostAnswerKeepsTheHold(t *testing.T) {
+	c := &agentCore{err: fmt.Errorf("operation op-1: %w", actions.ErrNoAnswer)}
+	guard := newGuard()
+	one := agentForm(t, "agent.interrupt", c.core(), guard, tBlue)
+	one.press("tab", "enter")
+	a, _ := actions.ByID("agent.interrupt")
+	two, err := NewAgentForm(a, c.core(), guard, agentCtx, []ui.Target{tBlue}, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two.step(two.Init())
+	if two.Phase() != Failed || !errors.Is(two.Err(), actions.ErrSubmitted) || len(c.interrupts) != 1 {
+		t.Fatalf("second form after a lost answer: %s %v, calls %v", two.Phase(), two.Err(), c.interrupts)
+	}
+}
+
+// TestAdoptNeedsASession: an unbound agent without an agent session is
+// refused before the form opens.
+func TestAdoptNeedsASession(t *testing.T) {
+	adopt, _ := actions.ByID("agent.adopt")
+	_, err := NewAgentForm(adopt, (&agentCore{}).core(), newGuard(), agentCtx, []ui.Target{{PaneID: "w1:p6", Kind: "claude"}}, names)
+	if !errors.Is(err, actions.ErrTargets) {
+		t.Fatalf("adopt without a session: %v", err)
+	}
 }
 
 // TestStaleGenerationShownPerTarget: the core refuses a target whose

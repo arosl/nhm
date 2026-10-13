@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/arosl/nhm/internal/core/bindings"
@@ -44,5 +45,12 @@ func TestAdoptNamesTheReviewedAgent(t *testing.T) {
 	req.Targets = []ui.Target{bound1}
 	if _, err := a.Do(context.Background(), f.core(), req); !errors.Is(err, ErrTargets) {
 		t.Fatalf("a bound agent: %v", err)
+	}
+	// Neither is an agent herdr reports no session for: nothing would tell
+	// it from another agent that starts in its pane before the adopt.
+	req.Targets = []ui.Target{{PaneID: "w1:p6", Kind: "claude"}}
+	if _, err := a.Do(context.Background(), f.core(), req); !errors.Is(err, ErrTargets) || !strings.Contains(err.Error(), "nhm adopt") ||
+		len(f.adopted) != 2 {
+		t.Fatalf("an agent without a session: %v (adopts %d)", err, len(f.adopted))
 	}
 }

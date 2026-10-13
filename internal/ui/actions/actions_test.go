@@ -447,8 +447,28 @@ func TestGuardSubmitsOnce(t *testing.T) {
 	if _, err := g.Submit(key); !errors.Is(err, ErrSubmitted) {
 		t.Fatalf("second submit: %v", err)
 	}
-	if next, _ := g.Review(key); next == id {
-		t.Fatal("a new review after the submission kept the old id")
+	// The review's pattern of the board's composer (review, submit; review,
+	// submit) must not send twice: a held request has no new review.
+	if again, err := g.Review(key); !errors.Is(err, ErrSubmitted) || again != "" {
+		t.Fatalf("review of a held request = %q %v", again, err)
+	}
+	// Another request may run meanwhile; the held one stays held.
+	other, err := g.Review(ReviewKey("send", edited))
+	if err != nil || other == id {
+		t.Fatalf("another request = %q %v", other, err)
+	}
+	if _, err := g.Review(key); !errors.Is(err, ErrSubmitted) {
+		t.Fatalf("the held request after another review: %v", err)
+	}
+	// A lost answer keeps the hold; an answer ends it, and the same text is
+	// then a new operation.
+	g.Settle(key, ErrNoAnswer)
+	if _, err := g.Review(key); !errors.Is(err, ErrSubmitted) {
+		t.Fatalf("after a lost answer: %v", err)
+	}
+	g.Settle(key, nil)
+	if next, err := g.Review(key); err != nil || next == id || next == other {
+		t.Fatalf("after the answer = %q %v", next, err)
 	}
 	g2 := NewGuard(func() (string, error) { return "", errors.New("no clock") })
 	if _, err := g2.Review(key); err == nil {
