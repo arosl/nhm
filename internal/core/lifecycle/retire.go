@@ -474,7 +474,11 @@ func check(ctx context.Context, env Env, req RetireRequest, b bindings.Binding, 
 	var fetchErr error
 	for _, wt := range wts {
 		// The mail name and the alias: a suffixed alias (name-2) still
-		// leaves worktrees named after the agent (nhm-4xt).
+		// leaves worktrees named after the agent (nhm-4xt). Today every
+		// alias starts with the mail name's word, so the alias adds no
+		// match; it stays in case an alias ever does not. In a nested
+		// project that shares this work tree, a same-name agent of the
+		// other project matches too: the refusal names the worktree.
 		if wt == project || !namesAgent(wt, b.MailName, alias) {
 			continue
 		}
