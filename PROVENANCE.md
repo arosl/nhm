@@ -123,6 +123,9 @@ The same rules apply to code from pt and dcg.
 | `internal/integrations/xf/LICENSE` | `LICENSE` | none |
 | `internal/integrations/xf/xf.go` | `internal/tools/xf.go`, `internal/tools/adapter.go` (in part) | provenance header; only `Detect`, `Search` and their types, without ntm's tool registry, version, capability, health and doctor checks; names without the `XF` prefix; the binary is a field; an `io.LimitReader` in place of `LimitedBuffer` |
 | `internal/integrations/xf/xf_test.go` | `internal/tools/xf_test.go` (in part) | provenance header; nhm's names; only the search test; the fake-binary tests are nhm's |
+| `internal/integrations/cass/LICENSE` | `LICENSE` | none |
+| `internal/integrations/cass/keywords_ntm.go` | `internal/cass/inject.go` (in part) | provenance header; only `ExtractKeywords` and its helpers (`tokenize`, `removeCodeBlocks`, the stop words), unchanged; nhm joins the keywords with OR (`KeywordQuery` in `cass.go`), where ntm's `QueryCASS` joins them with spaces |
+| `internal/integrations/cass/keywords_ntm_test.go` | `internal/cass/inject_test.go` (in part) | provenance header; only the tests of those functions, unchanged |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 

@@ -119,6 +119,8 @@ type Report struct {
 
 // Request is one retrieval.
 type Request struct {
+	// Query is the task's text. CM ranks it as it is; CASS gets its
+	// keywords, any of them (cass.KeywordQuery).
 	Query     string
 	Workspace string
 	CM        Mode
@@ -196,7 +198,13 @@ func (r *Retriever) Retrieve(ctx context.Context, req Request) Retrieval {
 	}()
 	go func() {
 		defer wg.Done()
-		out.CASS = r.once(ctx, SourceCASS, req.CASS, req, r.cass)
+		creq := req
+		creq.Query = cass.KeywordQuery(req.Query)
+		if creq.Query == "" && req.CASS != "" && req.CASS != Off {
+			out.CASS = Report{Enabled: true, Mode: req.CASS, SkippedReason: "no keywords in the query"}
+			return
+		}
+		out.CASS = r.once(ctx, SourceCASS, req.CASS, creq, r.cass)
 	}()
 	wg.Wait()
 	return out

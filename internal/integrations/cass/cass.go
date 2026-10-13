@@ -104,6 +104,15 @@ type Search struct {
 	MaxContent int
 }
 
+// KeywordQuery is the query nhm gives cass for a text: its keywords
+// (ntm's ExtractKeywords, at most 10), any of them. cass's lexical search
+// needs every word of a query, so a whole task as the query finds nothing,
+// and a long one may use up the time budget (nhm-vbx). With OR, cass ranks
+// the hits that hold most keywords first. "" when the text has none.
+func KeywordQuery(text string) string {
+	return strings.Join(ExtractKeywords(text), " OR ")
+}
+
 // args adds --data-dir. Every value goes as --flag=value and every
 // positional after "--": a query or a path that starts with "-" is never
 // read as a flag.

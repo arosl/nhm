@@ -74,8 +74,10 @@ const memoryUsage = `Usage: nhm memory <query> [--project DIR] [--cm MODE] [--ca
 
 Show the block that send --with-memory --with-cass would put before a
 prompt for this query: CM's rules and CASS's hits, each with its id,
-version and hash, and the items left out with the reason. Nothing is
-sent and nothing is written. A MODE is off, best-effort or required
+version and hash, and the items left out with the reason. CM ranks the
+query as it is; CASS gets its keywords, any of them (a query with no
+keywords skips CASS). Nothing is sent and nothing is written. A MODE is
+off, best-effort or required
 (default best-effort for both). The block of a real send also leaves
 out what the agent's current context already got.
 `

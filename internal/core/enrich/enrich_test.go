@@ -73,12 +73,19 @@ func (f *fakeCM) OutcomeApply(_ context.Context, session string) error {
 }
 
 type fakeCASS struct {
-	hits  []cass.Hit
-	err   error
-	state string
+	hits    []cass.Hit
+	err     error
+	state   string
+	mu      sync.Mutex
+	queries []string
 }
 
-func (f *fakeCASS) Search(context.Context, cass.Search) ([]cass.Hit, error) { return f.hits, f.err }
+func (f *fakeCASS) Search(_ context.Context, s cass.Search) ([]cass.Hit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queries = append(f.queries, s.Query)
+	return f.hits, f.err
+}
 func (f *fakeCASS) IndexSession(context.Context, string, string, string) (string, error) {
 	return f.state, f.err
 }
@@ -112,6 +119,25 @@ func TestRetrieverRunsEachQueryOnceUnderOneBudget(t *testing.T) {
 	}
 }
 
+// CM ranks the task's text; CASS gets its keywords, any of them, since
+// cass needs every word of a query (nhm-vbx). A task with no keywords
+// skips CASS, required or not: there is nothing to search for.
+func TestCASSGetsTheTasksKeywords(t *testing.T) {
+	f, c := &fakeCM{rules: rules(1, 10)}, &fakeCASS{hits: []cass.Hit{{SourcePath: "/s.jsonl", LineNumber: 1, Content: "earlier"}}}
+	task := "You are a new agent on the e06 plan. Read AGENTS.md, then pick the e06 plan's next bead; reply slow."
+	r := NewRetriever(f, c, Budgets{}, time.Now())
+	got := r.Retrieve(context.Background(), Request{Query: task, CM: BestEffort, CASS: Required})
+	want := "agent OR e06 OR plan OR agents OR then OR pick OR next OR bead OR reply OR slow"
+	if got.CM.Query != task || got.CASS.Query != want || len(c.queries) != 1 || c.queries[0] != want ||
+		len(got.CASS.Items) != 1 || got.Err() != nil {
+		t.Fatalf("cm query %q, cass %+v, searched %q", got.CM.Query, got.CASS, c.queries)
+	}
+	got = r.Retrieve(context.Background(), Request{Query: "fix it", CM: BestEffort, CASS: Required})
+	if !got.CASS.Enabled || got.CASS.SkippedReason == "" || got.CASS.Error != "" || got.Err() != nil || len(c.queries) != 1 {
+		t.Fatalf("no keywords: cass %+v, searched %q", got.CASS, c.queries)
+	}
+}
+
 func TestBudgetIsTotalAndRequiredFailureRefuses(t *testing.T) {
 	f := &fakeCM{rules: rules(1, 10), delay: time.Second}
 	r := NewRetriever(f, &fakeCASS{}, Budgets{Total: 50 * time.Millisecond}, time.Now())
@@ -130,7 +156,7 @@ func TestBudgetIsTotalAndRequiredFailureRefuses(t *testing.T) {
 	}
 	// Missing tools: best-effort records it, required refuses.
 	r = NewRetriever(nil, nil, Budgets{}, time.Now())
-	got = r.Retrieve(context.Background(), Request{Query: "q", CM: BestEffort, CASS: Required})
+	got = r.Retrieve(context.Background(), Request{Query: "login", CM: BestEffort, CASS: Required})
 	if got.CM.Error == "" || !errors.Is(got.Err(), ErrRequired) || !strings.Contains(got.Err().Error(), "cass") {
 		t.Fatalf("got %+v, %v", got, got.Err())
 	}
@@ -140,7 +166,7 @@ func TestItemBudgetBlockBudgetAndFrame(t *testing.T) {
 	f := &fakeCM{rules: append(rules(1, 3000), rules(8, 600)[1:]...)}
 	hits := []cass.Hit{{SourcePath: "/s.jsonl", LineNumber: 3, Agent: "codex", Content: "earlier  work\nhere", CreatedAtMS: 1791777605000}}
 	r := NewRetriever(f, &fakeCASS{hits: hits}, Budgets{}, time.Now())
-	retr := r.Retrieve(context.Background(), Request{Query: "q", CM: BestEffort, CASS: BestEffort})
+	retr := r.Retrieve(context.Background(), Request{Query: "login", CM: BestEffort, CASS: BestEffort})
 	first := retr.CM.Items[0]
 	if first.Reason != ReasonTruncated || first.Bytes > DefaultItemBytes || first.Version == "" || first.SHA256 == "" {
 		t.Fatalf("first = %+v", first)
@@ -429,7 +455,7 @@ func TestItemsAreRedacted(t *testing.T) {
 	hits := []cass.Hit{{SourcePath: "/s.jsonl", LineNumber: 2, Agent: "codex", Content: "export ANTHROPIC_API_KEY=" + key}}
 	r := NewRetriever(&fakeCM{rules: []cm.Rule{{ID: "b-1", Content: "Use password: hunter2hunter2 for staging"}}},
 		&fakeCASS{hits: hits}, Budgets{}, time.Now())
-	retr := r.Retrieve(context.Background(), Request{Query: "q", CM: BestEffort, CASS: BestEffort})
+	retr := r.Retrieve(context.Background(), Request{Query: "login", CM: BestEffort, CASS: BestEffort})
 	p := PlanFor(retr, nil, 0)
 	if strings.Contains(p.Block, key) || strings.Contains(p.Block, "hunter2") {
 		t.Fatalf("a secret is in the block: %q", p.Block)

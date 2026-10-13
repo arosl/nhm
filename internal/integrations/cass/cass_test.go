@@ -26,6 +26,18 @@ const searchAnswer = `{"query":"q","count":1,"hits":[{"title":"T","snippet":"s",
 "score":2.7,"source_path":"/h/.codex/sessions/2026/10/12/rollout-x-abc.jsonl","agent":"codex","workspace":"/p",
 "created_at":1791777605000,"conversation_id":2,"line_number":7,"match_type":"exact"}]}`
 
+// The E06 kickoff (nhm-vbx): as one query cass needs every word and
+// finds nothing; its keywords, any of them, find the earlier session.
+func TestKeywordQuery(t *testing.T) {
+	task := "You are a new agent on the e06 plan. Read AGENTS.md, then pick the e06 plan's next bead; reply slow."
+	if got, want := KeywordQuery(task), "agent OR e06 OR plan OR agents OR then OR pick OR next OR bead OR reply OR slow"; got != want {
+		t.Errorf("KeywordQuery = %q, want %q", got, want)
+	}
+	if got := KeywordQuery("fix the bug in it"); got != "" {
+		t.Errorf("only stop words = %q, want none", got)
+	}
+}
+
 func TestSearchArgsAndHits(t *testing.T) {
 	s := &script{outs: []string{searchAnswer}}
 	c := Client{Run: s.run, DataDir: "/d"}

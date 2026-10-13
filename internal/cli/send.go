@@ -73,7 +73,8 @@ targets (nhm wake --recipients <targets> --once), so the mail is read.
 --with-memory puts CM's rules for the prompt before it, --with-cass
 CASS's hits; both are best-effort, in a framed block of reference
 material. A rule that the agent's current context already got is left
-out. --memory-query sets the query (default: the prompt's start). The
+out. --memory-query sets the query (default: the prompt's start); CM
+ranks it as it is, CASS gets its keywords, any of them. The
 template's enrichment and ~/.config/nhm/config.toml give the defaults;
 flags win. The CASS duplicate check (on by default; --no-cass-check or
 --no-cass turns it off, --force skips it) warns when CASS finds the same
