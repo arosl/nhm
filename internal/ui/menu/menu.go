@@ -318,13 +318,20 @@ func (m *Model) View() string {
 		body = strings.Split(strings.TrimRight(helpText, "\n"), "\n")
 	} else {
 		rows := m.Rows(m.level)
+		labels := make([]string, len(rows))
+		col := 0
+		for i, a := range rows {
+			labels[i] = a.Label
+			if a.Kind == actions.KindGroup {
+				labels[i] += " ›"
+			}
+			col = max(col, len([]rune(labels[i])))
+		}
 		lines := make([]string, len(rows))
 		for i, a := range rows {
-			label := a.Label
-			if a.Kind == actions.KindGroup {
-				label += " ›"
-			}
-			line := fmt.Sprintf("%s  %-18s %s", a.Menu.Key, label, a.Help)
+			// The label column fits the level's longest label, so a help
+			// text never runs into a label.
+			line := fmt.Sprintf("%s  %-*s  %s", a.Menu.Key, col, labels[i], a.Help)
 			style := lipgloss.NewStyle()
 			if why := m.unavailable(a); why != "" {
 				style = style.Foreground(t.Overlay)

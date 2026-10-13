@@ -303,6 +303,12 @@ func TestSmallClient(t *testing.T) {
 		!strings.Contains(lines[len(lines)-1], "q close") {
 		t.Fatalf("40x12, cursor on %s:\n%s", last.ID, v)
 	}
+	// A long label keeps a gap before its help text.
+	m.level, m.cursor = "diagnostics", 0
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if v := m.View(); !strings.Contains(v, "unfinished operations  operations with no final") {
+		t.Fatalf("diagnostics:\n%s", v)
+	}
 	// A screen taller than the popup keeps its top.
 	if got := fit(strings.Repeat("x\n", 30)+"end", 12); len(strings.Split(got, "\n")) != 12 || !strings.HasPrefix(got, "x") ||
 		!strings.Contains(got, "more below") {
