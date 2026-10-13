@@ -120,6 +120,9 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/tui/components/statusbar_test.go` | `internal/tui/components/statusbar_test.go` | provenance header |
 | `internal/ui/palette/LICENSE` | `LICENSE` | none |
 | `internal/ui/palette/catalog.go` | `internal/config/config.go` (in part) | provenance header; only the `PaletteCmd` and `PaletteState` types, without TOML tags, and `PaletteCmd.Source`; the commands come from nhm's palette catalogs (`templates.ReadCatalog`) in the fzf palette's order, not from ntm's config |
+| `internal/integrations/xf/LICENSE` | `LICENSE` | none |
+| `internal/integrations/xf/xf.go` | `internal/tools/xf.go`, `internal/tools/adapter.go` (in part) | provenance header; only `Detect`, `Search` and their types, without ntm's tool registry, version, capability, health and doctor checks; names without the `XF` prefix; the binary is a field; an `io.LimitReader` in place of `LimitedBuffer` |
+| `internal/integrations/xf/xf_test.go` | `internal/tools/xf_test.go` (in part) | provenance header; nhm's names; only the search test; the fake-binary tests are nhm's |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
