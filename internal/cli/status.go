@@ -625,8 +625,9 @@ func watchVerb(v readVerb, args []string, stdout, stderr io.Writer, knobs func()
 
 // watchEvents subscribes to agent changes and signals on each event. It
 // subscribes again after a loss (and signals then too: the loss may hide
-// a change). It subscribes to every live agent pane, since herdr's status
-// subscription is per pane.
+// a change), at once after a stream that delivered events, else after a
+// growing wait (watchWait). It subscribes to every live agent pane, since
+// herdr's status subscription is per pane.
 func watchEvents(ctx context.Context, h *herdr.Client, events chan<- struct{}) {
 	signalOnce := func() {
 		select {
@@ -634,7 +635,15 @@ func watchEvents(ctx context.Context, h *herdr.Client, events chan<- struct{}) {
 		default:
 		}
 	}
+	var wait time.Duration
 	for ctx.Err() == nil {
+		if wait > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
 		subs := []herdr.Subscription{herdr.SubscribeAgentDetected(), herdr.SubscribePaneClosed(), herdr.SubscribePaneExited()}
 		if snap, err := h.Snapshot(ctx); err == nil {
 			for _, a := range snap.Agents {
@@ -643,18 +652,16 @@ func watchEvents(ctx context.Context, h *herdr.Client, events chan<- struct{}) {
 		}
 		st, err := h.Subscribe(ctx, subs...)
 		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * time.Second):
-			}
+			wait = watchWait(wait, false, 0)
 			continue
 		}
+		start, delivered := time.Now(), false
 		for {
 			ev, err := st.Next()
 			if err != nil {
 				break
 			}
+			delivered = true
 			signalOnce()
 			if ev.Kind == herdr.EventPaneAgentDetected {
 				// A new pane needs its own status subscription.
@@ -663,7 +670,27 @@ func watchEvents(ctx context.Context, h *herdr.Client, events chan<- struct{}) {
 		}
 		st.Close()
 		signalOnce()
+		wait = watchWait(wait, delivered, time.Since(start))
 	}
+}
+
+// The wait before watchEvents subscribes again, after a failed subscribe
+// or a stream that ended with no event: it doubles from watchBackoffMin
+// up to watchBackoffMax, so a herdr that ends each stream at once gets no
+// tight snapshot and subscribe loop (nor the board continuous refreshes).
+var (
+	watchBackoffMin = 250 * time.Millisecond
+	watchBackoffMax = 10 * time.Second
+)
+
+// watchWait is the wait before the next subscription: none after a
+// stream that delivered an event or lived watchBackoffMax, else the last
+// wait doubled, within watchBackoffMin and watchBackoffMax.
+func watchWait(last time.Duration, delivered bool, lived time.Duration) time.Duration {
+	if delivered || lived >= watchBackoffMax {
+		return 0
+	}
+	return min(max(2*last, watchBackoffMin), watchBackoffMax)
 }
 
 func buildInfo() snapshot.BuildInfo {

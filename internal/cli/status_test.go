@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/robot/contract"
 	"github.com/arosl/nhm/internal/store"
@@ -465,5 +466,62 @@ func TestRobotFormat(t *testing.T) {
 	env, code = robotRun(t, "--robot-status")
 	if code != 2 || env.ErrorCode != "DEPENDENCY_MISSING" {
 		t.Fatalf("no herdr = %d %+v", code, env)
+	}
+}
+
+// watchWait: no wait after a stream that delivered events or lived long;
+// else the wait doubles, from the minimum up to the maximum.
+func TestWatchWait(t *testing.T) {
+	for _, c := range []struct {
+		last      time.Duration
+		delivered bool
+		lived     time.Duration
+		want      time.Duration
+	}{
+		{0, false, 0, watchBackoffMin},
+		{watchBackoffMin, false, time.Second, 2 * watchBackoffMin},
+		{6 * time.Second, false, 0, watchBackoffMax},
+		{watchBackoffMax, false, 0, watchBackoffMax},
+		{watchBackoffMax, true, 0, 0},
+		{watchBackoffMax, false, watchBackoffMax, 0},
+	} {
+		if got := watchWait(c.last, c.delivered, c.lived); got != c.want {
+			t.Errorf("watchWait(%v, %v, %v) = %v, want %v", c.last, c.delivered, c.lived, got, c.want)
+		}
+	}
+}
+
+// A herdr that ends each stream at once (nhm-hny): watchEvents waits
+// longer each time, not a tight snapshot and subscribe loop.
+func TestWatchEventsBacksOffAStreamThatEndsAtOnce(t *testing.T) {
+	oldMin, oldMax := watchBackoffMin, watchBackoffMax
+	watchBackoffMin, watchBackoffMax = 20*time.Millisecond, 80*time.Millisecond
+	t.Cleanup(func() { watchBackoffMin, watchBackoffMax = oldMin, oldMax })
+	s := herdrtest.New(t)
+	s.Handle("events.subscribe", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "subscription_started"}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchEvents(ctx, herdr.New(s.SocketPath), make(chan struct{}, 1))
+	}()
+	for end := time.Now().Add(400 * time.Millisecond); time.Now().Before(end); {
+		s.DropSubscriptions()
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	n := 0
+	for _, r := range s.Requests() {
+		if r.Method == "events.subscribe" {
+			n++
+		}
+	}
+	// Waits of 20, 40, 80, 80… ms: about six subscribes in 400 ms. With
+	// no wait it was hundreds.
+	if n < 2 || n > 12 {
+		t.Fatalf("%d subscribes in 400 ms", n)
 	}
 }
