@@ -56,7 +56,9 @@ agent splits the biggest pane of a tab of its project that has room, or
 opens a tab. A tab with one agent has the agent's name; with more, the
 project's directory name. --label or --group always opens new tabs, and a
 tab from before this rule is never joined. --per-tab 1 gives each agent
-its own tab.
+its own tab. A --label that is the project's directory name reads as the
+shared label: a later spawn may join that tab, and nhm maintain gives it
+its last agent's name.
 
 Admission runs first: a quota at 90 % or a known limit refuses (--force
 overrides the quota only); unknown quota is a warning (refused with

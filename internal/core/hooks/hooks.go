@@ -443,6 +443,9 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	for _, w := range bindings.Label(ctx, env.Herdr, b) {
 		r.warn("%s", w)
 	}
+	if w := bindings.MailAgentWarning(b); w != "" {
+		r.warn("%s", w)
+	}
 	if !kept {
 		// The binding stands; the candidate stays pending until its token
 		// is stored (the already-bound path above).
@@ -684,7 +687,7 @@ func keepTabLabel(ctx context.Context, env Env, st paneState, b *bindings.Bindin
 		r.warn("tab label of %s not read: %v", st.agent.TabID, err)
 		return
 	}
-	if tab.PaneCount != 1 || !defaultTabLabel(tab.Label) && tab.Label != bindings.ProjectTabLabel(b.MailProjectKey) {
+	if tab.PaneCount != 1 || (!defaultTabLabel(tab.Label) && tab.Label != bindings.ProjectTabLabel(b.MailProjectKey)) {
 		return
 	}
 	if _, err := env.Herdr.TabRename(ctx, tab.TabID, b.MailName); err != nil {
