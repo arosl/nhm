@@ -394,7 +394,11 @@ func (m *Model) preview(w, height int) string {
 		return title.Render(strings.Repeat("─", w))
 	}
 	p, ok := m.b.Preview()
-	head := title.Render(ansi.Truncate("── "+rowName(r)+" · "+r.Agent.PaneID+" "+strings.Repeat("─", w), w, ""))
+	name := board.Clean(rowName(r))
+	if !strings.Contains(name, r.Agent.PaneID) {
+		name += " · " + r.Agent.PaneID
+	}
+	head := title.Render(ansi.Truncate("── "+name+" "+strings.Repeat("─", w), w, ""))
 	if !ok {
 		return head + "\n" + title.Render("reading the pane…")
 	}

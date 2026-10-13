@@ -728,9 +728,15 @@ func (m *Model) Frozen() error {
 	return nil
 }
 
+// rowName is a row's name: the Mail name, else herdr's name, else the
+// kind and the pane, as attention names an unbound agent ("claude in
+// w1:p3").
 func rowName(r board.Row) string {
-	if r.Name != "" {
+	switch {
+	case r.Name != "":
 		return r.Name
+	case r.Kind() != "" && r.PaneID() != "":
+		return r.Kind() + " in " + r.PaneID()
 	}
 	return r.PaneID()
 }

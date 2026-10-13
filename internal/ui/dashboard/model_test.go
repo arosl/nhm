@@ -187,6 +187,10 @@ func TestBoardShowsItsWorkspace(t *testing.T) {
 	if !strings.Contains(v, " ?") {
 		t.Fatalf("unknown mail is not shown as ?:\n%s", v)
 	}
+	// An unbound agent with no name is its kind in its pane.
+	if got := rowName(board.Row{Agent: &snapshot.Agent{PaneID: "w1:p9", Kind: "codex"}}); got != "codex in w1:p9" {
+		t.Fatalf("rowName = %q", got)
+	}
 }
 
 // Pane, name and title text cannot drive the terminal.
