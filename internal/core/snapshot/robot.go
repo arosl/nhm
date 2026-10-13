@@ -312,7 +312,7 @@ func TailFor(m *Model, ws Workspace, reads map[string]herdr.PaneRead, errs map[s
 			key = a.PaneID
 		}
 		_, safe, conf := Activity(a.State)
-		po := robot.PaneOutput{Type: NTMType(a.Kind), State: tailState(a.State), Lines: []string{},
+		po := robot.PaneOutput{Type: NTMType(a.Kind), State: PaneState(a.State), Lines: []string{},
 			ObservationState: "live", ObservationFreshness: Fresh, ObservationConfidence: conf, SafeToDispatch: safe,
 			CaptureCollectedAt: m.GeneratedAt.Format(time.RFC3339), CaptureProvenance: "live"}
 		if err := errs[a.PaneID]; err != nil {
@@ -326,7 +326,9 @@ func TailFor(m *Model, ws Workspace, reads map[string]herdr.PaneRead, errs map[s
 	return out
 }
 
-func tailState(s herdr.AgentStatus) string {
+// PaneState maps herdr's state to ntm's pane state of --robot-tail and
+// --robot-interrupt: active, idle or unknown.
+func PaneState(s herdr.AgentStatus) string {
 	switch s {
 	case herdr.StatusWorking:
 		return "active"

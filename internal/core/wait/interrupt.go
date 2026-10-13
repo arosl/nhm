@@ -23,6 +23,10 @@ const (
 	InterruptSent    = "sent"
 	InterruptRefused = "refused"
 	InterruptFailed  = "failed"
+	// InterruptSkipped: SkipResting left an agent at its prompt alone.
+	InterruptSkipped = "skipped"
+	// InterruptWouldSend: a dry run would send the key.
+	InterruptWouldSend = "would_send"
 )
 
 // VerbInterrupt is the operation verb.
@@ -63,6 +67,14 @@ type InterruptRequest struct {
 	// Interrupt takes no target lock: it must reach an agent that a send
 	// or a recycle holds; the check runs just before the key.
 	Expect map[string]int64
+	// SkipResting is ntm's robot interrupt without --force (nhm-hir): an
+	// agent at its prompt (herdr's idle or done) gets no key, and its
+	// status is skipped.
+	SkipResting bool
+	// DryRun checks each target as for an interrupt, but claims no
+	// operation and sends no key: a target that would get its key is
+	// would_send.
+	DryRun bool
 }
 
 // Interrupt refusal reasons of Expect.
@@ -91,6 +103,17 @@ func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req Inte
 	if req.Expect != nil {
 		request["expect"] = req.Expect
 	}
+	if req.SkipResting {
+		request["skip_resting"] = true
+	}
+	if req.DryRun {
+		res := InterruptResult{Status: "dry_run", Targets: []InterruptTarget{}}
+		for _, b := range req.Targets {
+			res.Targets = append(res.Targets, interruptOne(ctx, h, bs, b, req))
+		}
+		res.Targets = append(res.Targets, notSelected(req)...)
+		return res, nil
+	}
 	claim, err := db.ClaimOperation(ctx, store.ClaimRequest{
 		ID: req.OperationID, Verb: VerbInterrupt, Scope: req.Scope, Request: request,
 	}, now())
@@ -102,25 +125,23 @@ func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req Inte
 		res.Existing, res.Status = true, claim.Operation.Status
 		return res, nil
 	}
-	sent, failed := 0, 0
+	// A skipped agent is as good as a sent one: it is at its prompt.
+	ok, failed := 0, 0
 	for _, b := range req.Targets {
-		t := interruptOne(ctx, h, bs, b, req.Expect)
+		t := interruptOne(ctx, h, bs, b, req)
 		switch t.Status {
-		case InterruptSent:
-			sent++
+		case InterruptSent, InterruptSkipped:
+			ok++
 		case InterruptFailed:
 			failed++
 		}
 		res.Targets = append(res.Targets, t)
 	}
-	for _, id := range missingExpected(req.Expect, req.Targets) {
-		res.Targets = append(res.Targets, InterruptTarget{BindingID: id, Generation: req.Expect[id],
-			Status: InterruptRefused, Reason: ReasonNotSelected})
-	}
+	res.Targets = append(res.Targets, notSelected(req)...)
 	switch {
-	case sent == len(res.Targets):
+	case ok == len(res.Targets):
 		res.Status = "done"
-	case sent > 0:
+	case ok > 0:
 		res.Status = "partial"
 	case failed > 0:
 		res.Status = "failed"
@@ -131,6 +152,16 @@ func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req Inte
 		return res, err
 	}
 	return res, nil
+}
+
+// notSelected refuses each expected binding that is not a target.
+func notSelected(req InterruptRequest) []InterruptTarget {
+	var out []InterruptTarget
+	for _, id := range missingExpected(req.Expect, req.Targets) {
+		out = append(out, InterruptTarget{BindingID: id, Generation: req.Expect[id],
+			Status: InterruptRefused, Reason: ReasonNotSelected})
+	}
+	return out
 }
 
 // missingExpected lists, sorted, the expected bindings not in targets.
@@ -145,7 +176,7 @@ func missingExpected(expect map[string]int64, targets []bindings.Binding) []stri
 	return out
 }
 
-func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding, expect map[string]int64) InterruptTarget {
+func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding, req InterruptRequest) InterruptTarget {
 	t := InterruptTarget{BindingID: b.ID, MailName: b.MailName, PaneID: b.PaneID, Slot: b.Slot, Kind: b.Kind, Generation: b.Generation}
 	refuse := func(reason string) InterruptTarget {
 		t.Status, t.Reason = InterruptRefused, reason
@@ -159,8 +190,8 @@ func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding,
 	if cur.Generation != b.Generation || cur.Status != bindings.Active || cur.PaneID != b.PaneID {
 		return refuse(fmt.Sprintf("the binding changed since selection (generation %d, %s, pane %s)", cur.Generation, cur.Status, cur.PaneID))
 	}
-	if expect != nil {
-		want, ok := expect[cur.ID]
+	if req.Expect != nil {
+		want, ok := req.Expect[cur.ID]
 		switch {
 		case !ok:
 			return refuse(ReasonNotReviewed)
@@ -183,6 +214,14 @@ func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding,
 	t.StateBefore = a.AgentStatus
 	if a.Agent != "" && a.Agent != cur.Kind {
 		return refuse(fmt.Sprintf("the pane holds a %s agent; the binding is %s", a.Agent, cur.Kind))
+	}
+	if req.SkipResting && (a.AgentStatus == herdr.StatusIdle || a.AgentStatus == herdr.StatusDone) {
+		t.Keys, t.Status, t.Reason = nil, InterruptSkipped, "the agent is at its prompt"
+		return t
+	}
+	if req.DryRun {
+		t.Status = InterruptWouldSend
+		return t
 	}
 	if err := h.AgentSendKeys(ctx, cur.PaneID, t.Keys...); err != nil {
 		// A transport error after the write may still have delivered the

@@ -36,6 +36,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotFlag(args, "--robot-wait") {
 		return runRobotWait(args, stdout)
 	}
+	if hasRobotFlag(args, "--robot-interrupt") {
+		return runRobotInterrupt(args, stdout)
+	}
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
