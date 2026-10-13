@@ -76,26 +76,50 @@ func Select(ctx context.Context, l Lister, agents []herdr.AgentInfo, workspaceID
 			byPane[agents[i].PaneID] = &agents[i]
 		}
 	}
+	// The kinds and the states narrow a name first: a name with a kind or
+	// a state that leaves one agent names that agent (nhm-y2e).
+	narrows := func(b bindings.Binding) bool {
+		if len(sel.Kinds) > 0 && !slices.Contains(sel.Kinds, b.Kind) {
+			return false
+		}
+		if len(sel.States) > 0 {
+			a := byPane[b.PaneID]
+			return a != nil && slices.Contains(sel.States, a.AgentStatus)
+		}
+		return true
+	}
 	named := map[string]bool{}
 	var candidates []Candidate
 	for _, n := range sel.Names {
 		// A workspace can hold agents of several projects: a name that
 		// matches two of them names neither (nhm-ktm).
-		var hits []string
+		found := false
+		var hits []bindings.Binding
 		for _, b := range list {
 			if nameMatches(b, n) {
-				hits = append(hits, b.ID+" ("+b.MailProjectKey+")")
-				named[b.ID] = true
+				found = true
+				if narrows(b) {
+					hits = append(hits, b)
+				}
 			}
 		}
 		if len(hits) > 1 {
+			ids := make([]string, len(hits))
+			for i, b := range hits {
+				ids[i] = b.ID + " (" + b.MailProjectKey + ")"
+			}
 			hint := ""
 			if projectKey == "" {
 				hint = "; give --project"
 			}
-			return nil, nil, fmt.Errorf("%w: %s in workspace %s: %s%s", bindings.ErrAmbiguous, n, workspaceID, strings.Join(hits, ", "), hint)
+			return nil, nil, fmt.Errorf("%w: %s in workspace %s: %s%s", bindings.ErrAmbiguous, n, workspaceID, strings.Join(ids, ", "), hint)
 		}
 		if len(hits) == 1 {
+			named[hits[0].ID] = true
+		}
+		if found {
+			// A bound name is never a candidate, even when the kinds or
+			// the states leave it out.
 			continue
 		}
 		c, ok := candidate(byPane, n)

@@ -16,7 +16,7 @@ import (
 func TestSelectRefusesANameOfTwoProjects(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	w.bind(t, "YellowPeak", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	w.bind(t, "YellowPeak", "w1:t1", "w1:p1", "claude", herdr.StatusWorking)
 	other, err := w.env.Bindings.Create(ctx, bindings.New{MailName: "YellowPeak", MailProjectKey: "/acfs", ProjectID: "acfs",
 		Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t2", PaneID: "w1:p2",
 			HerdrAlias: "yellowpeak-2", Kind: "claude", Model: "m-claude"}})
@@ -41,6 +41,18 @@ func TestSelectRefusesANameOfTwoProjects(t *testing.T) {
 	ts, _, err = Select(ctx, w.env.Bindings, agents, "w1", "", "", Selector{Names: []string{"yellowpeak-2"}})
 	if err != nil || len(ts) != 1 || ts[0].Binding.ID != other.ID {
 		t.Fatalf("yellowpeak-2: %+v %v", ts, err)
+	}
+	// A state narrows the name first: only /acfs's YellowPeak is idle
+	// (nhm-y2e, ScarletBass's review).
+	idle := Selector{Names: []string{"YellowPeak"}, States: []herdr.AgentStatus{herdr.StatusIdle}}
+	if ts, _, err = Select(ctx, w.env.Bindings, agents, "w1", "", "", idle); err != nil || len(ts) != 1 || ts[0].Binding.ID != other.ID {
+		t.Fatalf("the name and a state: %+v %v", ts, err)
+	}
+	// A bound name that the state leaves out is no target, and never an
+	// unbound candidate.
+	done := Selector{Names: []string{"YellowPeak"}, States: []herdr.AgentStatus{herdr.StatusDone}}
+	if ts, cs, err := Select(ctx, w.env.Bindings, agents, "w1", "", "", done); !errors.Is(err, ErrNoTargets) || len(ts) != 0 || len(cs) != 0 {
+		t.Fatalf("the name and a state no agent has: %+v %+v %v", ts, cs, err)
 	}
 	res, err := Send(ctx, w.env, base(Request{Message: "hi", ProjectKey: "/acfs", Selector: sel}))
 	if err != nil || len(res.Targets) != 1 || res.Targets[0].PaneID != "w1:p2" || w.fake.promptCount() != 1 {

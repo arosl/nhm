@@ -42,15 +42,23 @@ func Select(ctx context.Context, l Lister, workspaceID, projectKey string, sel S
 	if err != nil {
 		return nil, err
 	}
+	// The other lists narrow a name first: a name with a slot or a kind
+	// that leaves one agent names that agent.
+	narrow := Selector{Slots: sel.Slots, Kinds: sel.Kinds}
 	for _, n := range sel.Names {
+		found := false
 		var hits []string
 		for _, b := range all {
-			if nameMatches(b, n) {
+			if !nameMatches(b, n) {
+				continue
+			}
+			found = true
+			if len(Filter([]bindings.Binding{b}, narrow)) == 1 {
 				hits = append(hits, fmt.Sprintf("%s (slot %s, %s)", b.MailName, b.Slot, b.MailProjectKey))
 			}
 		}
 		switch {
-		case len(hits) == 0:
+		case !found:
 			return nil, fmt.Errorf("%w: %s has no active binding in workspace %s", ErrNoTargets, n, workspaceID)
 		case len(hits) > 1:
 			return nil, fmt.Errorf("%w: %s in workspace %s: %s; name one by its slot", bindings.ErrAmbiguous, n, workspaceID, strings.Join(hits, ", "))

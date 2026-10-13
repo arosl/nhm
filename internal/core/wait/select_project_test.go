@@ -19,7 +19,7 @@ func TestSelectRefusesANameOfTwoProjects(t *testing.T) {
 	mine := create(t, s, "YellowPeak", "w1:t1", "w1:p1", "claude")
 	other, err := s.Create(ctx, bindings.New{MailName: "YellowPeak", MailProjectKey: "/acfs", ProjectID: "acfs",
 		Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p2",
-			HerdrAlias: "yellowpeak-2", Kind: "claude"}})
+			HerdrAlias: "yellowpeak-2", Kind: "codex"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +38,9 @@ func TestSelectRefusesANameOfTwoProjects(t *testing.T) {
 		"the herdr name":    {"", Selector{Names: []string{"yellowpeak-2"}}, other.ID},
 		"the slot":          {"", Selector{Slots: []string{other.Slot}}, other.ID},
 		"no name: both are": {"", Selector{}, ""},
+		// The other lists narrow the name first (ScarletBass's review).
+		"the name and its slot": {"", Selector{Names: []string{"YellowPeak"}, Slots: []string{mine.Slot}}, mine.ID},
+		"the name and its kind": {"", Selector{Names: []string{"YellowPeak"}, Kinds: []string{"codex"}}, other.ID},
 	} {
 		got, err := Select(ctx, s, "w1", sel.project, sel.sel)
 		switch {
