@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -156,9 +158,9 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm palette: pins and favorites: %v\n", err)
 	}
-	bodies, err := os.MkdirTemp("", "nhm-palette-")
+	bodies, err := palette.NewBodies(palette.StateDir(os.Getenv), time.Now())
 	if err != nil {
-		return fail(exitError, err)
+		return fail(exitError, fmt.Errorf("the drafts' directory: %w", err))
 	}
 
 	ws := c.WorkspaceID
@@ -181,20 +183,33 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 		KindKeys:  palette.KindKeys(kinds.All()),
 		Submitter: sub,
 		Base:      base,
-		Bodies:    palette.Bodies{Dir: bodies},
+		Bodies:    bodies,
 		Handed:    picked,
 		HandedBy:  c.Origin,
 	})
-	final, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
+	// herdr closing the popup hangs the palette up: it then ends as on q,
+	// and a send in flight is handed to its job before the process ends.
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM)
+	defer stop()
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	go func() {
+		<-sigCtx.Done()
+		p.Quit()
+	}()
+	final, err := p.Run()
 	pending := ""
 	if fm, ok := final.(palette.Model); ok {
 		pending = fm.Pending()
 	}
 	if pending != "" {
-		// The job runs on and may still read its template: its file stays.
-		fmt.Fprintf(stderr, "nhm palette: the send %s runs on; recent operations shows its result\n", pending)
-	} else {
-		_ = os.RemoveAll(bodies)
+		// The digit started the send in this process: it must reach its
+		// job, which then runs on its own, before this process ends.
+		if paletteHandOff(sub, jobs, pending, paletteHandOffWait) {
+			fmt.Fprintf(stderr, "nhm palette: the send %s runs on; recent operations shows its result\n", pending)
+		} else {
+			fmt.Fprintf(stderr, "nhm palette: the send %s had not started after %s; recent operations shows whether it ran\n",
+				pending, paletteHandOffWait)
+		}
 	}
 	if err != nil {
 		return fail(exitError, err)
@@ -205,6 +220,46 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return exitOK
+}
+
+// paletteHandOffWait bounds how long the palette waits at its exit for a
+// send in flight to reach its job.
+const paletteHandOffWait = 10 * time.Second
+
+// paletteHandOff waits until the send opID no longer needs this process:
+// nhm ui run has claimed its job (the job runs in a session of its own
+// and outlives the palette), or the submission has ended. It is false
+// when neither happened within wait.
+func paletteHandOff(sub *palette.Submitter, jobs runner.Client, opID string, wait time.Duration) bool {
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	t := time.NewTicker(runner.WaitPoll / 4)
+	defer t.Stop()
+	for {
+		if !sub.InFlight() || jobClaimed(jobs, opID) {
+			return true
+		}
+		select {
+		case <-deadline.C:
+			return false
+		case <-t.C:
+		}
+	}
+}
+
+// jobClaimed reports whether nhm ui run has claimed job id, or the job has
+// its result.
+func jobClaimed(jobs runner.Client, id string) bool {
+	recent, err := jobs.Recent(0)
+	if err != nil {
+		return false
+	}
+	for _, e := range recent {
+		if e.Job.ID == id {
+			return e.Claimed || e.Result != nil
+		}
+	}
+	return false
 }
 
 // paletteEngine is the palette that nhm ui palette-popup runs for c: the

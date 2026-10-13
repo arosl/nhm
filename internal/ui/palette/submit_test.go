@@ -17,6 +17,7 @@ import (
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
+	"github.com/arosl/nhm/internal/ui/forms"
 )
 
 func u64(v uint64) *uint64 { return &v }
@@ -223,6 +224,97 @@ func TestBodiesAreTemplateBodies(t *testing.T) {
 	// A key that is not a file name gives "draft".
 	if path, _ := bodies.Path(Payload{Key: "../x", Text: "t", Rev: 9}); filepath.Base(path) != "draft.md" {
 		t.Fatalf("path = %s", path)
+	}
+}
+
+// A run's drafts get a 0700 directory of their own. A start removes the
+// runs in which nothing changed for DraftsKeep, and nothing else: not a
+// run that wrote a draft lately, not a directory the palette did not make.
+func TestNewBodiesPrunesOldRuns(t *testing.T) {
+	state := t.TempDir()
+	now := time.Now()
+	root := filepath.Join(state, "drafts")
+	mk := func(rel string, age time.Duration) string {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := now.Add(-age)
+		for q := p; q != root; q = filepath.Dir(q) {
+			if err := os.Chtimes(q, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return p
+	}
+	stale := mk("run-old/3/a.md", DraftsKeep+time.Hour)
+	// A run started long ago whose newest draft is recent stays, even
+	// when its directories are old.
+	mk("run-long/1/a.md", DraftsKeep+time.Hour)
+	recent := mk("run-long/9/b.md", time.Minute)
+	old := now.Add(-DraftsKeep - time.Hour)
+	for _, d := range []string{filepath.Dir(recent), filepath.Dir(filepath.Dir(recent))} {
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := mk("notes/x.md", DraftsKeep+time.Hour)
+
+	b, err := NewBodies(state, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(filepath.Dir(stale))); !os.IsNotExist(err) {
+		t.Fatalf("a stale run stays: %v", err)
+	}
+	for _, p := range []string{recent, other} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s was removed: %v", p, err)
+		}
+	}
+	if filepath.Dir(b.Dir) != root || !strings.HasPrefix(filepath.Base(b.Dir), "run-") {
+		t.Fatalf("dir = %s", b.Dir)
+	}
+	if st, err := os.Stat(b.Dir); err != nil || st.Mode().Perm() != 0o700 {
+		t.Fatalf("dir = %v %v", st, err)
+	}
+	// Two palettes at once get two runs.
+	b2, err := NewBodies(state, now)
+	if err != nil || b2.Dir == b.Dir {
+		t.Fatalf("second run = %s %v", b2.Dir, err)
+	}
+	// With no state directory, the run gets a temporary directory.
+	t.Setenv("TMPDIR", t.TempDir())
+	b3, err := NewBodies("", now)
+	if err != nil || !strings.HasPrefix(b3.Dir, os.Getenv("TMPDIR")) {
+		t.Fatalf("no state directory = %s %v", b3.Dir, err)
+	}
+}
+
+// The palette waits for a send as long as the board and the agent form
+// do: a slow send is never "lost" in one surface and answered in another.
+func TestSubmitTimeoutIsTheFormsWait(t *testing.T) {
+	if SubmitTimeout != forms.RunTimeout {
+		t.Fatalf("SubmitTimeout = %s, forms.RunTimeout = %s", SubmitTimeout, forms.RunTimeout)
+	}
+}
+
+// The result's summary counts the targets in the core's words.
+func TestStatusCounts(t *testing.T) {
+	res := send.Result{Targets: []send.Receipt{
+		{Status: send.StatusPossiblySubmitted}, {Status: send.StatusSubmitted}, {Status: send.StatusSubmitted},
+		{Status: send.StatusFailed}, {Status: "zz_new\x1b[31m"}, {Status: send.StatusAttemptStarted},
+	}}
+	want := "2 submitted, 1 failed, 1 possibly_submitted, 1 attempt_started, 1 zz_new"
+	if got := statusCounts(res); got != want {
+		t.Fatalf("counts = %q, want %q", got, want)
+	}
+	if got := statusCounts(send.Result{}); got != "no targets" {
+		t.Fatalf("no targets = %q", got)
 	}
 }
 

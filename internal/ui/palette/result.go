@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -70,7 +71,8 @@ func (s submission) sentAny() bool {
 }
 
 // Pending is the operation id of a submission whose answer has not come
-// back, or "": the caller says, after the program exits, that it runs on.
+// back, or "": after the program exits, the caller waits until the send
+// has reached its job, which runs on, and says so.
 func (m Model) Pending() string {
 	if m.sub.inFlight {
 		return m.sub.opID
@@ -196,7 +198,7 @@ func unfilled(err error) []string {
 func (m *Model) updateResultPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, resultKeys.Quit):
-		// The core finishes a send in flight; the caller waits for it.
+		// A send in flight runs on in its job; the caller hands it over.
 		m.quitting = true
 		return *m, tea.Quit
 	case key.Matches(msg, resultKeys.Again):
@@ -215,7 +217,8 @@ func (m *Model) updateResultPhase(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return *m, nil
 }
 
-// backToCommands starts over at the command list, with a fresh draft.
+// backToCommands starts over at the command list, with a fresh draft and
+// an empty filter; the cursor stays on the prompt just sent.
 func (m *Model) backToCommands() {
 	m.phase = PhaseCommand
 	m.selected = nil
@@ -223,6 +226,8 @@ func (m *Model) backToCommands() {
 	m.vars = varsState{}
 	m.sub = submission{}
 	m.targetNotice = ""
+	m.filter.SetValue("")
+	m.updateFiltered()
 	m.filter.Focus()
 }
 
@@ -423,23 +428,18 @@ func (m Model) renderReceipts(res send.Result, width int) string {
 	unknown := lipgloss.NewStyle().Foreground(t.Warning).Bold(true)
 	name := lipgloss.NewStyle().Foreground(t.Text).Bold(true)
 
-	counts := res.Counts()
-	b.WriteString("  " + dim.Render(fmt.Sprintf("%d submitted, %d refused or failed, %d unknown",
-		counts[send.StatusSubmitted], counts[send.StatusRefused]+counts[send.StatusFailed],
-		counts[send.StatusPossiblySubmitted]+counts[send.StatusAttemptStarted]+counts[send.StatusPending])) + "\n\n")
+	b.WriteString("  " + dim.Render(statusCounts(res)) + "\n\n")
 	for _, rc := range res.Targets {
 		who := clean(rc.MailName)
 		if who == "" {
 			who = clean(rc.Key)
 		}
-		var mark, what string
+		mark, what := bad.Render(ic.Cross), rc.Status
 		switch {
 		case rc.Status == send.StatusSubmitted:
-			mark, what = ok.Render(ic.Check), "submitted"
+			mark = ok.Render(ic.Check)
 		case send.Unknown(rc.Status):
-			mark, what = unknown.Render("?"), "unknown, maybe sent ("+rc.Status+")"
-		default:
-			mark, what = bad.Render(ic.Cross), rc.Status
+			mark = unknown.Render("?")
 		}
 		if reason := rc.Result.Reason; reason != "" {
 			what += ": " + reason
@@ -450,6 +450,9 @@ func (m Model) renderReceipts(res send.Result, width int) string {
 		b.WriteString("  " + line + "\n")
 		b.WriteString("      " + dim.Render(layout.TruncateWidthDefault(clean(what), max(width-8, 20))) + "\n")
 	}
+	if slices.ContainsFunc(res.Targets, func(rc send.Receipt) bool { return send.Unknown(rc.Status) }) {
+		b.WriteString("\n  " + unknown.Render("?") + " " + dim.Render("The prompt may have arrived; the palette never sends it again.") + "\n")
+	}
 	if line := memoryAttached(res); line != "" {
 		b.WriteString("\n  " + dim.Render(line) + "\n")
 	}
@@ -457,6 +460,37 @@ func (m Model) renderReceipts(res send.Result, width int) string {
 		b.WriteString("  " + lipgloss.NewStyle().Foreground(t.Warning).Render(ic.Warning+"  "+clean(w)) + "\n")
 	}
 	return b.String()
+}
+
+// statusOrder is the order statusCounts names the core's statuses in.
+var statusOrder = []string{send.StatusSubmitted, send.StatusRefused, send.StatusFailed,
+	send.StatusPossiblySubmitted, send.StatusAttemptStarted, send.StatusPending}
+
+// statusCounts counts the targets by the core's status, in its words:
+// "2 submitted, 1 possibly_submitted". A status the palette does not
+// know is counted too, after the others.
+func statusCounts(res send.Result) string {
+	counts := res.Counts()
+	var parts []string
+	for _, st := range statusOrder {
+		if n := counts[st]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, st))
+		}
+	}
+	var other []string
+	for st := range counts {
+		if !slices.Contains(statusOrder, st) {
+			other = append(other, st)
+		}
+	}
+	slices.Sort(other)
+	for _, st := range other {
+		parts = append(parts, fmt.Sprintf("%d %s", counts[st], clean(st)))
+	}
+	if len(parts) == 0 {
+		return "no targets"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // memoryAttached says what memory the send put before the prompts: the

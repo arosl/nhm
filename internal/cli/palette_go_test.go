@@ -171,6 +171,64 @@ func TestPaletteGoRefusesAnEmptySelection(t *testing.T) {
 	}
 }
 
+// At its exit, the palette waits for a send in flight until nhm ui run
+// has claimed its job (the job then runs on its own) or the submission
+// has ended, and no longer than its bound.
+func TestPaletteHandOff(t *testing.T) {
+	jobs := runner.Client{JobDir: t.TempDir()}
+	release := make(chan struct{})
+	opID, err := store.NewOperationID(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := palette.NewSubmitter(func(_ context.Context, req send.Request) (send.Result, error) {
+		<-release
+		return send.Result{OperationID: req.OperationID}, nil
+	}, nil, nil, func() (string, error) { return opID, nil })
+	if _, _, _, err := sub.Submit(send.Request{Message: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	wait := 300 * time.Millisecond
+
+	// No job yet: the wait ends at its bound.
+	start := time.Now()
+	if paletteHandOff(sub, jobs, opID, wait) {
+		t.Fatal("handed off with no job")
+	}
+	if d := time.Since(start); d < wait {
+		t.Fatalf("waited %s, want %s", d, wait)
+	}
+	// A job that nhm ui run has not claimed may never start.
+	j, err := runner.NewJob(runner.VerbSend, ui.Context{SocketPath: "/run/h.sock", Cwd: t.TempDir()}, send.Request{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.ID = opID
+	data, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runner.JobPath(jobs.JobDir, opID), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if paletteHandOff(sub, jobs, opID, wait) {
+		t.Fatal("handed off to an unclaimed job")
+	}
+	// Claimed: it runs on its own.
+	if err := runner.Claim(jobs.JobDir, opID); err != nil {
+		t.Fatal(err)
+	}
+	if !paletteHandOff(sub, jobs, opID, 5*time.Second) {
+		t.Fatal("a claimed job was not handed off")
+	}
+	// A submission that ended needs no job.
+	close(release)
+	sub.Wait()
+	if !paletteHandOff(sub, jobs, "op-none", 5*time.Second) {
+		t.Fatal("an ended submission waited")
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

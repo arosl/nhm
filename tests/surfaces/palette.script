@@ -1,0 +1,82 @@
+# The Go palette through an attached herdr client (nhm-qbi.6, plan-v4
+# section 10's palette cases): prefix+a with [ui] palette = "go"; a
+# catalog prompt sent to IcyKnoll through a runner job, its receipt, and
+# the record read back; a {{thread}} prompt that the core refuses before
+# its claim, asked for, then sent; an emptied draft refused; esc out.
+# The fake agent's log proves what reached it. tests/surfaces_e2e.sh
+# runs it.
+#
+# herdr confirms a prompt when the agent reports that it works, as a
+# real claude's hooks do. The fake agent has no hooks, so a watcher
+# reports for it once the prompt is in its log (working, then idle, then
+# it releases the pane); the receipt is then "submitted".
+sleep 2
+note dismiss herdr's first-run welcome (continue) and settings screen (esc)
+key enter
+sleep 1.5
+key esc
+sleep 1.5
+note a catalog in the user's config: a plain prompt and one with {{thread}}; a label with a colour code
+run printf '## Smoke\n### ping | Ping \033[31mred\033[0m label\nPALETTE-PING from the palette.\n### fix | Fix the thread\nFix {{thread}} now: PALETTE-FIX.\n### bye | Say bye\nPALETTE-BYE from a closed popup.\n' >"$XDG_CONFIG_HOME/nhm/command_palette.md"
+note prefix+a: nhm bind's key opens the Go palette in a popup
+key ctrl+b a
+expect 10 nhm Command Palette
+expect 3 Ping red label
+note enter on ping: the target screen fits the popup and counts IcyKnoll under claude
+key enter
+expect 5 Select Target
+expect 5 Claude (cc) (1)
+expect 2 Antigravity (agy) (0)
+note 1 sends to every agent shown, IcyKnoll, as a runner job
+run (for _ in $(seq 150); do grep -q PALETTE-PING "$HERDR_WORK/fake.log" && break; sleep 0.1; done; r() { herdr pane report-agent --source e2e --agent claude --state "$1" w1:p1; }; r working; sleep 1; r idle; herdr pane release-agent --source e2e --agent claude w1:p1) </dev/null >/dev/null 2>&1 &
+key 1
+expect 5 operation op-
+check grep -q PALETTE-PING "$HERDR_WORK/fake.log"
+expect 20 1 submitted
+expect 2 IcyKnoll
+note r reads what the core recorded
+key r
+expect 10 As the core recorded it
+note enter: back to the list, its filter empty; filter to fix, enter, 2 (claude)
+key enter
+expect 5 nhm Command Palette
+send fix
+expect 3 Fix the thread
+key enter
+expect 5 Select Target
+key 2
+note the core refuses the unfilled {{thread}} before its claim; the palette asks
+expect 20 Fill the template
+expect 2 thread:
+run (for _ in $(seq 150); do grep -q 'Fix nhm-1 now' "$HERDR_WORK/fake.log" && break; sleep 0.1; done; r() { herdr pane report-agent --source e2e --agent claude --state "$1" w1:p1; }; r working; sleep 1; r idle; herdr pane release-agent --source e2e --agent claude w1:p1) </dev/null >/dev/null 2>&1 &
+send nhm-1
+key enter
+expect 5 operation op-
+check grep -q 'Fix nhm-1 now: PALETTE-FIX' "$HERDR_WORK/fake.log"
+expect 20 1 submitted
+note enter: back to the list; fix again, e, empty the draft, ctrl+s, 1: refused
+key enter
+expect 5 nhm Command Palette
+send fix
+expect 3 Fix the thread
+key enter
+expect 5 Select Target
+key e
+expect 5 Edit Prompt
+key ctrl+u ctrl+s
+expect 5 Select Target
+key 1
+expect 5 Message is empty
+note esc out: the editor, the targets, the list closes the popup
+key esc esc esc
+refute 3 nhm Command Palette
+note prefix+a again: bye, 1, and q at once; the popup closes, and the send still reaches IcyKnoll
+key ctrl+b a
+expect 10 nhm Command Palette
+send bye
+expect 3 Say bye
+key enter
+expect 5 Select Target
+key 1 q
+refute 3 nhm Command Palette
+check for _ in $(seq 150); do grep -q PALETTE-BYE "$HERDR_WORK/fake.log" && exit 0; sleep 0.1; done; exit 1

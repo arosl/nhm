@@ -33,6 +33,9 @@
 //   - c and s in the target phase switch CM's rules and CASS's hits for
 //     the sends, shown on the target screen (memory.go, nhm-t63).
 //   - Catalog text is shown without terminal controls (clean).
+//   - The target screen's label column fits its longest label, and its
+//     rows drop their blank lines and samples when the screen would not
+//     fit the popup, so its title and keys stay in view.
 
 package palette
 
@@ -2223,13 +2226,11 @@ func (m Model) viewTargetPhase() string {
 		targets = []targetRow{{KeyAll, ic.Target, "Picked", "the agents picked on " + m.handed.surface(), t.Mauve, t.Surface0, len(ts)}}
 	}
 
-	for _, target := range targets {
-		// Count suffixes (best-effort)
-		countSuffix := ""
-		if m.paneCountsKnown || m.handed.present() {
-			countSuffix = fmt.Sprintf(" (%d)", target.count)
-		}
-
+	// nhm: the label column fits the longest label (nhm has more kinds than
+	// ntm, with longer names), and the rows lose their blank lines and
+	// samples when the screen would not fit the popup, so that its title
+	// and keys stay in view.
+	labelOf := func(target targetRow) string {
 		labelText := target.label
 		if target.key == KeyAll {
 			star := strings.TrimSpace(ic.Star)
@@ -2238,91 +2239,114 @@ func (m Model) viewTargetPhase() string {
 			}
 			labelText = star + " " + labelText
 		}
+		// Count suffixes (best-effort)
+		if m.paneCountsKnown || m.handed.present() {
+			labelText += fmt.Sprintf(" (%d)", target.count)
+		}
+		return labelText
+	}
+	labelWidth := 18
+	for _, target := range targets {
+		labelWidth = max(labelWidth, lipgloss.Width(labelOf(target))+1)
+	}
+	renderRows := func(compact bool) string {
+		var b strings.Builder
+		for _, target := range targets {
+			// Key badge
+			keyBadge := lipgloss.NewStyle().
+				Background(target.color).
+				Foreground(t.Base).
+				Bold(true).
+				Padding(0, 1).
+				Render(target.key)
 
-		// Key badge
-		keyBadge := lipgloss.NewStyle().
-			Background(target.color).
-			Foreground(t.Base).
-			Bold(true).
-			Padding(0, 1).
-			Render(target.key)
+			// Icon with color
+			iconStyled := lipgloss.NewStyle().
+				Foreground(target.color).
+				Bold(true).
+				Render(target.icon)
 
-		// Icon with color
-		iconStyled := lipgloss.NewStyle().
-			Foreground(target.color).
-			Bold(true).
-			Render(target.icon)
+			// Label
+			labelStyle := lipgloss.NewStyle().
+				Foreground(t.Text).
+				Bold(true).
+				Width(labelWidth)
 
-		// Label
-		labelStyle := lipgloss.NewStyle().
-			Foreground(t.Text).
-			Bold(true).
-			Width(18)
+			// Description
+			descStyle := lipgloss.NewStyle().
+				Foreground(t.Overlay).
+				Italic(true)
 
-		// Description
-		descStyle := lipgloss.NewStyle().
-			Foreground(t.Overlay).
-			Italic(true)
+			line := fmt.Sprintf("  %s  %s  %s %s",
+				keyBadge,
+				iconStyled,
+				labelStyle.Render(labelOf(target)),
+				descStyle.Render(target.desc))
 
-		line := fmt.Sprintf("  %s  %s  %s %s",
-			keyBadge,
-			iconStyled,
-			labelStyle.Render(labelText+countSuffix),
-			descStyle.Render(target.desc))
-
-		b.WriteString(line + "\n")
-
-		// Representative pane samples (width-tier aware, avoid wrapping).
-		maxSamples := 0
-		switch {
-		case m.tier >= layout.TierWide:
-			if target.key == KeyAll {
-				maxSamples = 3
-			} else {
-				maxSamples = 2
+			b.WriteString(line + "\n")
+			if compact {
+				continue
 			}
-		case m.tier >= layout.TierSplit:
-			maxSamples = 1
-		}
 
-		samples := []string(nil)
-		if target.key != KeySelect && !m.handed.present() {
-			samples = m.samplePaneTitlesForTargetKey(target.key, maxSamples)
-		}
-		if len(samples) > 0 {
-			sampleText := "e.g. " + strings.Join(samples, ", ")
-			sampleIndent := "      "
-			maxWidth := boxWidth - 2 - len(sampleIndent)
-			if maxWidth < 10 {
-				maxWidth = 10
+			// Representative pane samples (width-tier aware, avoid wrapping).
+			maxSamples := 0
+			switch {
+			case m.tier >= layout.TierWide:
+				if target.key == KeyAll {
+					maxSamples = 3
+				} else {
+					maxSamples = 2
+				}
+			case m.tier >= layout.TierSplit:
+				maxSamples = 1
 			}
-			sampleText = layout.TruncateWidthDefault(sampleText, maxWidth)
-			sampleStyle := lipgloss.NewStyle().Foreground(t.Subtext).Italic(true)
-			b.WriteString("  " + sampleIndent + sampleStyle.Render(sampleText) + "\n")
-		}
 
-		b.WriteString("\n")
+			samples := []string(nil)
+			if target.key != KeySelect && !m.handed.present() {
+				samples = m.samplePaneTitlesForTargetKey(target.key, maxSamples)
+			}
+			if len(samples) > 0 {
+				sampleText := "e.g. " + strings.Join(samples, ", ")
+				sampleIndent := "      "
+				maxWidth := boxWidth - 2 - len(sampleIndent)
+				if maxWidth < 10 {
+					maxWidth = 10
+				}
+				sampleText = layout.TruncateWidthDefault(sampleText, maxWidth)
+				sampleStyle := lipgloss.NewStyle().Foreground(t.Subtext).Italic(true)
+				b.WriteString("  " + sampleIndent + sampleStyle.Render(sampleText) + "\n")
+			}
+
+			b.WriteString("\n")
+		}
+		return b.String()
 	}
 
+	var tail strings.Builder
 	// nhm: the handed agents, what the targets leave out, and why a key
 	// did nothing.
-	b.WriteString(m.renderHanded())
-	b.WriteString(m.renderTargetNotes())
+	tail.WriteString(m.renderHanded())
+	tail.WriteString(m.renderTargetNotes())
 
 	// What memory would add to the draft, when shown (memory.go).
 	if block := m.renderMemory(boxWidth); block != "" {
-		b.WriteString(lipgloss.NewStyle().MarginLeft(2).Render(block) + "\n")
+		tail.WriteString(lipgloss.NewStyle().MarginLeft(2).Render(block) + "\n")
 	}
 
 	// Divider
-	b.WriteString("  " + styles.GradientDivider(boxWidth, string(t.Surface2), string(t.Surface1)) + "\n\n")
+	tail.WriteString("  " + styles.GradientDivider(boxWidth, string(t.Surface2), string(t.Surface1)) + "\n\n")
 
 	// Help bar
-	b.WriteString("  " + m.renderTargetHelpBar() + "\n")
+	tail.WriteString("  " + m.renderTargetHelpBar() + "\n")
+
+	view := b.String() + renderRows(false) + tail.String()
+	if m.height > 0 && lipgloss.Height(view) > m.height {
+		view = b.String() + renderRows(true) + tail.String()
+	}
 
 	// Center the compact target picker so it reads as a floating dialog rather
 	// than a block pinned to the top-left of the popup (#204).
-	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Center, b.String())
+	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Center, view)
 }
 
 // renderSendingLine is the "Sending: <label> (edited)" line of the target

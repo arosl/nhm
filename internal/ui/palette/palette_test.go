@@ -23,6 +23,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
@@ -1658,8 +1659,10 @@ func TestResultScreenShowsReceipts(t *testing.T) {
 	next, _ := m.Update(cmd().(SubmitMsg))
 	m = next.(Model)
 	view := stripANSI(m.View())
-	for _, want := range []string{"operation op-test", "1 submitted, 1 refused or failed, 1 unknown", "IcyKnoll", "submitted",
-		"RedFox", "refused: the agent is working", "BlueLake", "unknown, maybe sent", "memory: 1 CM rule(s), 0 CASS item(s) attached, for 1 target(s)"} {
+	for _, want := range []string{"operation op-test", "1 submitted, 1 refused, 1 possibly_submitted", "IcyKnoll", "submitted",
+		"RedFox", "refused: the agent is working", "BlueLake", "possibly_submitted: lost_reply",
+		"The prompt may have arrived; the palette never sends it again.",
+		"memory: 1 CM rule(s), 0 CASS item(s) attached, for 1 target(s)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("result view missing %q:\n%s", want, view)
 		}
@@ -2000,6 +2003,57 @@ func TestSmallTerminalSizes(t *testing.T) {
 			}
 			_ = m.View()
 		}
+	}
+}
+
+// enter on the result screen starts over: every prompt in the list (the
+// filter is empty), the cursor on the prompt just sent, a fresh draft.
+func TestResultEnterStartsOver(t *testing.T) {
+	m := sendModel(t, testPanes(), &sendRecorder{})
+	m.filter.SetValue("docs")
+	m.updateFiltered()
+	if len(m.filtered) != 1 {
+		t.Fatalf("filtered = %v", m.filtered)
+	}
+	m.phase, m.selected = PhaseTarget, &m.filtered[0]
+	m, cmd := press(t, m, runeKey('1'))
+	next, _ := m.Update(cmd().(SubmitMsg))
+	m, _ = press(t, next.(Model), tea.KeyMsg{Type: tea.KeyEnter})
+	if m.phase != PhaseCommand || m.filter.Value() != "" || len(m.filtered) != len(m.commands) {
+		t.Fatalf("phase %v filter %q filtered %d", m.phase, m.filter.Value(), len(m.filtered))
+	}
+	if m.filtered[m.cursor].Key != "docs" || m.draft.Present() || m.selected != nil {
+		t.Fatalf("cursor on %q, draft %v, selected %v", m.filtered[m.cursor].Key, m.draft.Present(), m.selected)
+	}
+}
+
+// The target screen fits nhm's palette popup at a 120x40 herdr client
+// (73x25 inside): its title, every key and the help stay in view, and no
+// label wraps. A larger popup keeps ntm's spacing.
+func TestTargetScreenFitsThePopup(t *testing.T) {
+	m := sendModel(t, testPanes(), &sendRecorder{})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 73, Height: 25})
+	m = next.(Model)
+	m.phase, m.selected = PhaseTarget, &m.commands[0]
+	view := stripANSI(m.View())
+	if h := lipgloss.Height(view); h > 25 {
+		t.Fatalf("view is %d lines:\n%s", h, view)
+	}
+	want := []string{"Select Target", "Antigravity (agy) (0)", "Select agents… (4)", "1  all agents"}
+	for _, k := range m.kindKeys {
+		want = append(want, " "+k.Key+" ")
+	}
+	for _, w := range want {
+		if !strings.Contains(view, w) {
+			t.Fatalf("view missing %q:\n%s", w, view)
+		}
+	}
+	if strings.Contains(view, "\n\n   2 ") {
+		t.Fatalf("the rows keep their blank lines:\n%s", view)
+	}
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 60})
+	if view := stripANSI(next.(Model).View()); !strings.Contains(view, "\n\n   2 ") {
+		t.Fatalf("a large popup lost ntm's spacing:\n%s", view)
 	}
 }
 

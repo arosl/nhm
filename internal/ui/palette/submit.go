@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -73,9 +74,80 @@ var (
 // Dir/<rev>/<key>.md, so the core's messages name the prompt. A file
 // holds the draft after a newline: the core reads it as a template
 // body, never as front matter, even when the draft starts with "---".
-// The caller removes Dir when the palette exits.
+// Nothing removes Dir when the palette exits: a send's job reads its
+// template when it starts, and it may start after the palette ended.
+// NewBodies removes old runs instead.
 type Bodies struct {
 	Dir string
+}
+
+// DraftsKeep is how long a palette run's drafts stay. A send's job reads
+// its template within seconds of its start, and a job that is not
+// claimed in time never runs.
+const DraftsKeep = 24 * time.Hour
+
+// draftsRun is the name of a palette run's draft directory; NewBodies
+// removes only directories with this prefix.
+const draftsRun = "run-"
+
+// NewBodies makes this palette run's draft directory, 0700, under
+// stateDir's "drafts" (StateDir), after it removes the runs that no
+// file has changed in for DraftsKeep. With no state directory, the run
+// gets a directory in TMPDIR, which stays.
+func NewBodies(stateDir string, now time.Time) (Bodies, error) {
+	if stateDir == "" {
+		dir, err := os.MkdirTemp("", "nhm-palette-")
+		return Bodies{Dir: dir}, err
+	}
+	root, err := filepath.Abs(filepath.Join(stateDir, "drafts"))
+	if err != nil {
+		return Bodies{}, err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return Bodies{}, err
+	}
+	pruneDrafts(root, now.Add(-DraftsKeep))
+	dir, err := os.MkdirTemp(root, draftsRun)
+	return Bodies{Dir: dir}, err
+}
+
+// pruneDrafts removes the run directories under root whose newest entry
+// is older than before. It is best effort: a run that cannot be read or
+// removed now is tried again at the next start. A palette left open that
+// long gets its run directory again at its next send (Path).
+func pruneDrafts(root string, before time.Time) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), draftsRun) {
+			continue
+		}
+		run := filepath.Join(root, e.Name())
+		if newest, ok := newestChange(run); ok && newest.Before(before) {
+			_ = os.RemoveAll(run)
+		}
+	}
+}
+
+// newestChange is the newest modification time in the tree at dir; ok
+// is false when a part of it cannot be read.
+func newestChange(dir string) (newest time.Time, ok bool) {
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		return nil
+	})
+	return newest, err == nil
 }
 
 // Path writes p's text and returns the file's path.
@@ -163,10 +235,12 @@ type MemoryModes struct {
 type MemoryFunc func(ctx context.Context, text string, modes MemoryModes) (Memory, error)
 
 // Deadlines of the async calls. A submission is not cancelled when the
-// popup closes; its deadline only bounds a hung call.
+// popup closes; its deadline only bounds a hung call. SubmitTimeout is
+// the board's and the agent form's wait (forms.RunTimeout), so a slow
+// send is not "lost" in one surface and answered in another.
 const (
 	MemoryTimeout = 30 * time.Second
-	SubmitTimeout = 2 * time.Minute
+	SubmitTimeout = 15 * time.Minute
 	ReadTimeout   = 10 * time.Second
 )
 
