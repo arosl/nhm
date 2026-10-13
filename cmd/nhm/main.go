@@ -7,6 +7,9 @@ import (
 
 	"github.com/arosl/nhm/internal/cli"
 	"github.com/arosl/nhm/internal/ui"
+	// Pins Lip Gloss's background before bubbletea's init asks the
+	// terminal for it: see package termbg.
+	_ "github.com/arosl/nhm/internal/ui/tui/termbg"
 )
 
 func main() {

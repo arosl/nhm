@@ -69,7 +69,9 @@ func openPopup(name string, stderr io.Writer) int {
 	}
 	root, err := store.StateRoot()
 	if err == nil {
-		_, err = store.Lookup(root, c.SocketPath)
+		var inst store.Instance
+		inst, err = store.Lookup(root, c.SocketPath)
+		c.InstanceID = inst.ID
 	}
 	if errors.Is(err, store.ErrNotEnrolled) {
 		// Plugins are user-global: a server nhm is not enrolled for gets a

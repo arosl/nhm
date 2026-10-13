@@ -19,8 +19,10 @@
 // The value is ntm's default, dark. A UI sets the real one before its
 // program starts, without terminal I/O: theme.ApplyLipGlossDefaults.
 //
-// Package ui imports this package, so every binary that links nhm's UI
-// links it too (TestBinariesLinkTermbg).
+// cmd/nhm imports this package, so the binary that holds nhm's UI links
+// it (TestBinariesLinkTermbg). nhm-hook links neither this package nor
+// bubbletea or Lip Gloss (TestHookLinksNoTUI): package ui, which the hook
+// imports, must not import internal/ui/tui.
 package termbg
 
 import "github.com/charmbracelet/lipgloss"
