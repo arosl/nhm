@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -204,8 +205,9 @@ const recycleUsage = `Usage: nhm recycle <Name> [-t KEY [--bead ID] | --prompt T
        nhm recycle --self [-t KEY [--bead ID] | --prompt T] [--no-handoff] [--wait D] [--json]
 
 Give the same agent a fresh session in the same pane, with the same name,
-tab and slot: preserve its transcript, compose a handoff (the bead's
-latest handoff comment, cass pack of the session, cm context), stop the
+tab and slot: preserve its transcript, compose a handoff (the newest
+handoff comment on the agent's beads in progress, cass pack of the
+session, cm context; the output names the bead), stop the
 old agent with its kind's exit command, start the successor in the same
 pane, bump the binding's generation, and send the kickoff with the
 handoff. Sends and wakes skip the agent while it recycles. On a failure
@@ -289,14 +291,24 @@ func runRecycle(args []string, stdout, stderr io.Writer) int {
 	env.OperationID, env.Result, env.Warnings = res.OperationID, res, res.Warnings
 	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
 		if res.Handoff != nil {
-			fmt.Fprintf(w, "handoff: %s", strings.Join(res.Handoff.Sources, ", "))
-			if len(res.Handoff.Degraded) > 0 {
-				fmt.Fprintf(w, " (degraded: %s)", strings.Join(res.Handoff.Degraded, "; "))
-			}
-			fmt.Fprintln(w)
+			fmt.Fprintln(w, handoffLine(res))
 		}
 		fmt.Fprintf(w, "recycled %s in %s: generation %d, kickoff %s\n", res.MailName, res.PaneID, res.Generation, dash(res.KickoffStatus))
 	})
+}
+
+// handoffLine is recycle's line about its handoff: its sources, with the
+// bead whose comment it holds, and the sources that failed.
+func handoffLine(res lifecycle.RecycleResult) string {
+	sources := slices.Clone(res.Handoff.Sources)
+	if i := slices.Index(sources, "bead"); i >= 0 && res.HandoffBead != "" {
+		sources[i] = "bead " + res.HandoffBead
+	}
+	line := "handoff: " + strings.Join(sources, ", ")
+	if len(res.Handoff.Degraded) > 0 {
+		line += " (degraded: " + strings.Join(res.Handoff.Degraded, "; ") + ")"
+	}
+	return line
 }
 
 const reapUsage = `Usage: nhm reap [session] [--idle MIN] [--all-workspaces] [--dry-run]

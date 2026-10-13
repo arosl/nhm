@@ -34,8 +34,37 @@ type Bead struct {
 	Title      string `json:"title"`
 	Status     string `json:"status"`
 	HasHandoff bool   `json:"has_handoff"`
-	// Handoff is the latest handoff comment.
-	Handoff string `json:"-"`
+	// Handoff is the newest handoff comment. HandoffAt is the time br
+	// gives it, in whole seconds (zero without one), and HandoffID its
+	// comment id, which br counts up.
+	Handoff   string    `json:"-"`
+	HandoffAt time.Time `json:"-"`
+	HandoffID int64     `json:"-"`
+}
+
+// handoffAfter reports whether b's handoff comment is newer than o's: by
+// br's time, then, in the same second, by br's comment id.
+func (b Bead) handoffAfter(o Bead) bool {
+	if !b.HandoffAt.Equal(o.HandoffAt) {
+		return b.HandoffAt.After(o.HandoffAt)
+	}
+	return b.HandoffID > o.HandoffID
+}
+
+// handoffBead is the bead the agent's handoff is about: of its beads in
+// progress, the one with the newest handoff comment; with no handoff
+// comment on any, the first. nil when there is no bead.
+func handoffBead(beads []Bead) *Bead {
+	if len(beads) == 0 {
+		return nil
+	}
+	pick := 0
+	for i, b := range beads {
+		if best := beads[pick]; b.HasHandoff && (!best.HasHandoff || b.handoffAfter(best)) {
+			pick = i
+		}
+	}
+	return &beads[pick]
 }
 
 // Facts are the external reads of retire and reap. Every method fails
@@ -423,14 +452,25 @@ func assignedIn(ctx context.Context, root string, db []string, agent string) ([]
 			return nil, err
 		}
 		var comments []struct {
-			Text string `json:"text"`
+			ID        int64  `json:"id"`
+			Text      string `json:"text"`
+			CreatedAt string `json:"created_at"`
 		}
 		if err := json.Unmarshal(out, &comments); err != nil {
 			return nil, fmt.Errorf("br comments %s: %w", is.ID, err)
 		}
+		// The newest handoff comment; of two that tie, the later one in
+		// br's list.
 		for _, c := range comments {
-			if IsHandoff(c.Text) {
-				b.HasHandoff, b.Handoff = true, c.Text
+			if !IsHandoff(c.Text) {
+				continue
+			}
+			at, err := time.Parse(time.RFC3339, c.CreatedAt)
+			if err != nil {
+				return nil, fmt.Errorf("br comments %s: the time of a handoff comment: %w", is.ID, err)
+			}
+			if next := (Bead{HandoffAt: at.UTC(), HandoffID: c.ID}); !b.HasHandoff || !b.handoffAfter(next) {
+				b.HasHandoff, b.Handoff, b.HandoffAt, b.HandoffID = true, c.Text, next.HandoffAt, next.HandoffID
 			}
 		}
 		beads = append(beads, b)

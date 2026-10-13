@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
@@ -59,7 +60,9 @@ type RecycleRequest struct {
 	ExpectedGeneration int64
 }
 
-// RecycleResult is how far a recycle got.
+// RecycleResult is how far a recycle got. HandoffBead is the bead in
+// progress the handoff is about: the one with the agent's newest handoff
+// comment, else the first.
 type RecycleResult struct {
 	OperationID   string     `json:"operation_id,omitempty"`
 	MailName      string     `json:"mail_name"`
@@ -70,6 +73,7 @@ type RecycleResult struct {
 	Error         string     `json:"error,omitempty"`
 	Transcript    *Preserved `json:"transcript,omitempty"`
 	Handoff       *Handoff   `json:"handoff,omitempty"`
+	HandoffBead   string     `json:"handoff_bead,omitempty"`
 	KickoffOp     string     `json:"kickoff_operation,omitempty"`
 	KickoffStatus string     `json:"kickoff_submission,omitempty"`
 	Warnings      []string   `json:"warnings"`
@@ -107,6 +111,9 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 		return res, fmt.Errorf("recycle stopped at %s: %w", stage, err)
 	}
 	a := kinds.Lookup(b.Kind)
+	// A bad kickoff is refused before the wait. Without --bead, it is
+	// rendered again under the lock, from the agent's beads as they are
+	// then.
 	kick, err := recycleStatic(ctx, env, req, b)
 	if err != nil {
 		return fail(StageCheck, err)
@@ -150,6 +157,15 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	if agent.Agent != "" && agent.Agent != b.Kind {
 		return fail(StageCheck, fmt.Errorf("pane %s holds a %s agent; the binding is %s", b.PaneID, agent.Agent, b.Kind))
 	}
+	// The agent's beads as they are after the wait, read at most once:
+	// the kickoff's bead_* placeholders (without --bead) and the handoff
+	// take the same bead.
+	beads := sync.OnceValues(assignedReader(ctx, env, b))
+	if req.BeadID == "" {
+		if kick, err = recycleKickoff(ctx, env, req, b, beads); err != nil {
+			return fail(StageCheck, err)
+		}
+	}
 	claimed := map[string]any{"binding_id": b.ID, "generation": b.Generation, "template": req.Template, "prompt": req.Prompt, "no_handoff": req.NoHandoff}
 	if req.BeadID != "" {
 		claimed["bead_id"] = req.BeadID
@@ -185,13 +201,16 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	res.Stage = StageHandoff
 	if !req.NoHandoff && env.Handoff != nil {
 		var bead *Bead
-		if beads, err := env.Facts.Assigned(ctx, b.MailProjectKey, b.MailName); err == nil && len(beads) > 0 {
-			bead = &beads[0]
-		} else if err != nil {
+		if list, err := beads(); err == nil {
+			bead = handoffBead(list)
+		} else {
 			res.Warnings = append(res.Warnings, "beads: "+err.Error())
 		}
 		h := env.Handoff(ctx, b, bead, original)
 		res.Handoff = &h
+		if bead != nil {
+			res.HandoffBead = bead.ID
+		}
 	}
 
 	// Stop the old agent, then wait for the shell prompt and the cleared
@@ -318,7 +337,17 @@ func recycleStatic(ctx context.Context, env Env, req RecycleRequest, b bindings.
 	case kinds.Lookup(b.Kind).ExitCommand == "":
 		return "", fmt.Errorf("nhm knows no exit command for %s; retire it and spawn anew", b.Kind)
 	}
-	return recycleKickoff(ctx, env, req, b)
+	return recycleKickoff(ctx, env, req, b, assignedReader(ctx, env, b))
+}
+
+// assignedReader reads the agent's beads in progress.
+func assignedReader(ctx context.Context, env Env, b bindings.Binding) func() ([]Bead, error) {
+	return func() ([]Bead, error) {
+		if env.Facts == nil {
+			return nil, errors.New("nhm has no bead facts here")
+		}
+		return env.Facts.Assigned(ctx, b.MailProjectKey, b.MailName)
+	}
 }
 
 // waitTurn waits up to req.WaitTurn for the agent to end its turn: idle
@@ -341,9 +370,10 @@ func waitTurn(ctx context.Context, env Env, req RecycleRequest, b bindings.Bindi
 
 // recycleKickoff is the successor's prompt: --prompt as typed, a
 // template, or ACFS's default_new_agent. A template's bead_* placeholders
-// come from --bead, else from the agent's bead in progress (nhm-e8c); a
-// bead is read only when --bead names one or the template needs one.
-func recycleKickoff(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) (string, error) {
+// come from --bead, else from the agent's bead in progress, which beads
+// reads (nhm-e8c); a bead is read only when --bead names one or the
+// template needs one.
+func recycleKickoff(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding, beads func() ([]Bead, error)) (string, error) {
 	if req.Prompt != "" && req.Template != "" {
 		return "", fmt.Errorf("give --prompt or -t, not both")
 	}
@@ -370,7 +400,7 @@ func recycleKickoff(ctx context.Context, env Env, req RecycleRequest, b bindings
 			return text, err
 		}
 	}
-	bead, err := kickoffBead(ctx, env, req, b)
+	bead, err := kickoffBead(ctx, env, req, b, beads)
 	if err != nil {
 		return "", err
 	}
@@ -378,22 +408,22 @@ func recycleKickoff(ctx context.Context, env Env, req RecycleRequest, b bindings
 }
 
 // kickoffBead reads the bead for the kickoff's bead_* placeholders:
-// --bead, else the agent's first bead in progress, the one the handoff
-// reads.
-func kickoffBead(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) (send.Bead, error) {
+// --bead, else the agent's bead in progress with the newest handoff
+// comment, the one the handoff reads.
+func kickoffBead(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding, beads func() ([]Bead, error)) (send.Bead, error) {
 	id := req.BeadID
 	if id == "" {
 		if env.Facts == nil {
 			return send.Bead{}, fmt.Errorf("the kickoff fills bead_* placeholders and nhm cannot read %s's beads: give --bead ID", b.MailName)
 		}
-		beads, err := env.Facts.Assigned(ctx, b.MailProjectKey, b.MailName)
+		list, err := beads()
 		if err != nil {
 			return send.Bead{}, fmt.Errorf("the kickoff fills bead_* placeholders and %s's beads cannot be read: %w; give --bead ID", b.MailName, err)
 		}
-		if len(beads) == 0 {
+		if len(list) == 0 {
 			return send.Bead{}, fmt.Errorf("the kickoff fills bead_* placeholders and %s has no bead in progress: give --bead ID", b.MailName)
 		}
-		id = beads[0].ID
+		id = handoffBead(list).ID
 	}
 	if env.Bead == nil {
 		return send.Bead{}, fmt.Errorf("bead %s: nhm has no bead reader here", id)
