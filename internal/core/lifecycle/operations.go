@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -81,6 +82,31 @@ func RecentOperations(ctx context.Context, db *store.DB, limit int) ([]RecentOpe
 		}
 	}
 	return ops, nil
+}
+
+// ErrNoOperation means no operation has the id (yet).
+var ErrNoOperation = errors.New("no such operation")
+
+// ReadOperation reads one operation with its receipts: a surface that
+// started an operation in another process follows it by id. It only
+// reads.
+func ReadOperation(ctx context.Context, db *store.DB, id string) (RecentOperation, error) {
+	row, err := db.Operation(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RecentOperation{}, fmt.Errorf("%w: %s", ErrNoOperation, id)
+	}
+	if err != nil {
+		return RecentOperation{}, err
+	}
+	op := RecentOperation{OperationID: row.ID, Verb: row.Verb, Status: row.Status, CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt, Completed: row.CompletedAt}
+	if json.Valid([]byte(row.ScopeJSON)) {
+		op.Scope = json.RawMessage(row.ScopeJSON)
+	}
+	if op.Targets, err = operationTargets(ctx, db, id); err != nil {
+		return RecentOperation{}, err
+	}
+	return op, nil
 }
 
 func operationTargets(ctx context.Context, db *store.DB, id string) ([]OperationTarget, error) {

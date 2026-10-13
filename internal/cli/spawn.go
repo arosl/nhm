@@ -368,21 +368,43 @@ func runNew(args []string, stdout, stderr io.Writer) int {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
 	defer ie.db.Close()
-	s, err := projectScope(ctx, ie.inst.ID, *project)
-	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
+	res, s, code, err := newWorkspace(ctx, ie, pos[0], *project)
+	if s != nil {
+		env.Scope = *s
 	}
-	env.Scope = s
+	if code == exitOK || res.WorkspaceID != "" {
+		env.Result = res
+	}
+	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
+		fmt.Fprintf(w, "created workspace %s (%s) in %s\n", res.Session, res.WorkspaceID, s.ProjectRoot)
+	})
+}
+
+// newResult is what nhm new created.
+type newResult struct {
+	Session     string `json:"session"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+// newWorkspace creates a workspace with the label and the project (""
+// is the cwd's) as its cwd, with no agent: nhm new and the menu's new
+// job. A label in use is refused. The scope is nil when the project
+// cannot be resolved.
+func newWorkspace(ctx context.Context, ie *instanceEnv, label, project string) (newResult, *core.Scope, int, error) {
+	res := newResult{Session: label}
+	s, err := projectScope(ctx, ie.inst.ID, project)
+	if err != nil {
+		return res, nil, exitRefused, err
+	}
 	snap, err := ie.herdr.Snapshot(ctx)
 	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
+		return res, &s, exitError, err
 	}
 	for _, w := range snap.Workspaces {
-		if w.Label == pos[0] || w.WorkspaceID == pos[0] {
-			return output(stdout, stderr, *asJSON, env, fmt.Errorf("workspace %s exists (%s)", pos[0], w.WorkspaceID), exitRefused, nil)
+		if w.Label == label || w.WorkspaceID == label {
+			return res, &s, exitRefused, fmt.Errorf("workspace %s exists (%s)", label, w.WorkspaceID)
 		}
 	}
-	var created string
 	lctx, cancel := context.WithTimeout(ctx, lockWait)
 	defer cancel()
 	code := exitOK
@@ -392,22 +414,19 @@ func runNew(args []string, stdout, stderr io.Writer) int {
 			return err
 		}
 		focus := false
-		c, err := ie.herdr.WorkspaceCreate(ctx, herdrWorkspace(pos[0], s.ProjectRoot, &focus))
+		c, err := ie.herdr.WorkspaceCreate(ctx, herdrWorkspace(label, s.ProjectRoot, &focus))
 		if err != nil {
 			return err
 		}
 		if c.Workspace != nil {
-			created = c.Workspace.WorkspaceID
+			res.WorkspaceID = c.Workspace.WorkspaceID
 		}
 		return nil
 	})
 	if err != nil && code == exitOK {
 		code = exitError
 	}
-	env.Result = map[string]string{"session": pos[0], "workspace_id": created}
-	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
-		fmt.Fprintf(w, "created workspace %s (%s) in %s\n", pos[0], created, s.ProjectRoot)
-	})
+	return res, &s, code, err
 }
 
 func herdrWorkspace(label, cwd string, focus *bool) herdr.WorkspaceCreateParams {

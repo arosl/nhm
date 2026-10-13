@@ -332,6 +332,23 @@ func runReap(args []string, stdout, stderr io.Writer) int {
 		}
 		req.ProjectKey = s.MailProjectKey
 	}
+	items, code, err := reapSweep(ctx, ie, lenv, req)
+	env.Result = map[string]any{"agents": items}
+	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
+		for _, it := range items {
+			line := fmt.Sprintf("%s: %s", it.MailName, strings.ReplaceAll(it.Action, "_", " "))
+			if it.Reason != "" {
+				line += ": " + it.Reason
+			}
+			fmt.Fprintln(w, line)
+		}
+	})
+}
+
+// reapSweep runs reap for nhm reap and the menu's reap job: a dry run as
+// it is, a sweep under the owner lock. Agents with unread mail or pending
+// acks are kept.
+func reapSweep(ctx context.Context, ie *instanceEnv, lenv lifecycle.Env, req lifecycle.ReapRequest) ([]lifecycle.ReapItem, int, error) {
 	mail, _ := agentmail.NewClient("")
 	state := func(ctx context.Context, project, agent string) (int, int, error) {
 		msgs, err := mail.FetchInbox(ctx, project, agent, 50)
@@ -348,24 +365,19 @@ func runReap(args []string, stdout, stderr io.Writer) int {
 		return rerr
 	}
 	code := exitOK
-	if *dryRun {
-		err = run()
-		if err != nil {
+	var err error
+	if req.DryRun {
+		if err = run(); err != nil {
 			code = exitError
 		}
 	} else {
 		code, err = underOwner(ctx, ie, run)
 	}
-	env.Result = map[string]any{"agents": items}
-	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
-		for _, it := range items {
-			line := fmt.Sprintf("%s: %s", it.MailName, strings.ReplaceAll(it.Action, "_", " "))
-			if it.Reason != "" {
-				line += ": " + it.Reason
-			}
-			fmt.Fprintln(w, line)
-		}
-	})
+	// An empty reviewed set is a refusal.
+	if errors.Is(err, lifecycle.ErrRefused) {
+		code = exitRefused
+	}
+	return items, code, err
 }
 
 // keepPaths are nhm's config and ACFS's agents.toml.
@@ -430,18 +442,9 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
-	var res lifecycle.KillResult
-	code, err := underOwner(ctx, ie, func() error {
-		var kerr error
-		res, kerr = lifecycle.KillWith(ctx, lenv, lifecycle.KillRequest{WorkspaceID: ws, Yes: *yes, NoBeads: *noBeads, OperationID: *opID})
-		return kerr
-	})
+	res, code, err := killUnderOwner(ctx, ie, lenv, lifecycle.KillRequest{WorkspaceID: ws, Yes: *yes, NoBeads: *noBeads, OperationID: *opID})
 	if res.OperationID != "" {
 		env.OperationID = res.OperationID
-	}
-	// Only a rule's refusal exits 2; herdr or Agent Mail failing is 1.
-	if errors.Is(err, lifecycle.ErrRefused) {
-		code = exitRefused
 	}
 	env.Result = res
 	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
@@ -450,4 +453,20 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(w, "closed workspace %s\n", ws)
 	})
+}
+
+// killUnderOwner runs kill under the owner lock, for nhm kill and the
+// menu's kill job. Only a rule's refusal exits 2; herdr or Agent Mail
+// failing is 1.
+func killUnderOwner(ctx context.Context, ie *instanceEnv, lenv lifecycle.Env, req lifecycle.KillRequest) (lifecycle.KillResult, int, error) {
+	var res lifecycle.KillResult
+	code, err := underOwner(ctx, ie, func() error {
+		var kerr error
+		res, kerr = lifecycle.KillWith(ctx, lenv, req)
+		return kerr
+	})
+	if errors.Is(err, lifecycle.ErrRefused) {
+		code = exitRefused
+	}
+	return res, code, err
 }

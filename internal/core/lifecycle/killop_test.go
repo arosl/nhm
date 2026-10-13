@@ -33,6 +33,14 @@ func TestKillWithACallersOperationID(t *testing.T) {
 	if op := killOp(t, w); op.OperationID != "op-menu-1" || op.Status != KillClosed {
 		t.Fatalf("operation = %+v", op)
 	}
+	// The menu follows the record by its id.
+	op, err := ReadOperation(ctx, w.db, "op-menu-1")
+	if err != nil || op.Verb != VerbKill || op.Completed == nil || len(op.Targets) != 2 || string(op.Scope) != `{"workspace_id":"w1"}` {
+		t.Fatalf("read = %+v %s %v", op, op.Scope, err)
+	}
+	if _, err := ReadOperation(ctx, w.db, "op-none"); !errors.Is(err, ErrNoOperation) {
+		t.Fatalf("a missing id = %v", err)
+	}
 	// The same id again is refused before any effect, whatever it asks.
 	w.bind(t, "RedStone", "w1:p3", herdr.StatusIdle)
 	res, err = KillWith(ctx, w.env, KillRequest{WorkspaceID: "w1", Yes: true, OperationID: "op-menu-1"})

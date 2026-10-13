@@ -19,15 +19,20 @@ import (
 
 const uiUsage = `Usage: nhm ui palette|board|menu|spawn      (herdr's plugin actions run these)
        nhm ui palette-popup|board-popup|menu-popup|spawn-popup   (the popups run these)
+       nhm ui run JOB-FILE                    (a surface starts this for a mutation)
 
 An action captures the workspace and pane it was invoked in and opens
 the popup with them; the popup acts on those ids only. A server that is
 not enrolled gets a note and no popup. Typed by hand, use nhm palette,
-nhm board and nhm menu instead.
+nhm board and nhm menu instead. nhm ui run runs a job a surface wrote,
+once, in a session of its own, so the job outlives the popup.
 `
 
 // runUI is `nhm ui`.
 func runUI(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 2 && args[0] == "run" {
+		return runJob(args[1], stdout, stderr)
+	}
 	if len(args) != 1 {
 		fmt.Fprint(stderr, uiUsage)
 		return exitRefused
