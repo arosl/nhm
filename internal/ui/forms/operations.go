@@ -297,6 +297,11 @@ func targetRow(t lifecycle.OperationTarget) TargetRow {
 	return row
 }
 
+// Clean removes terminal control sequences and control bytes other than
+// newline and tab from outside text before a surface shows it (plan-v4
+// section 4).
+func Clean(s string) string { return clean(s) }
+
 // ansiPattern matches CSI and OSC sequences and lone escapes (nhm read's
 // pattern).
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-Z\\-_]`)

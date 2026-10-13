@@ -32,7 +32,7 @@ var table = []Action{
 		Covers: []string{"read", "watch"}},
 	{ID: "agent.zoom", Label: "zoom", Help: "focus and zoom the agent's pane", Kind: KindAction, Scope: ScopeAgents,
 		Selection: SelectOne, Takes: TakesAny, Menu: MenuPlace{Parent: "agent", Key: "z"},
-		Board: BoardPlace{Keys: []string{"z", "enter"}}, Covers: []string{"zoom"}},
+		Board: BoardPlace{Keys: []string{"z", "enter"}}, Covers: []string{"zoom"}, run: runZoom, needs: needsZoom},
 	{ID: "agent.inbox", Label: "inbox", Help: "the agent's unread mail; it stays unread", Kind: KindView, Scope: ScopeAgents,
 		Selection: SelectOne, Menu: MenuPlace{Parent: "agent", Key: "i"}, Board: BoardPlace{Keys: []string{"i"}},
 		Covers: []string{"mail inbox"}},
@@ -50,7 +50,7 @@ var table = []Action{
 		Covers: []string{"adopt"}, run: runAdopt, needs: needsAdopt},
 
 	{ID: "workspace.attach", Label: "focus", Help: "focus a workspace", Kind: KindAction, Scope: ScopeNone,
-		Menu: MenuPlace{Parent: "workspace", Key: "f"}, Covers: []string{"attach"}},
+		Menu: MenuPlace{Parent: "workspace", Key: "f"}, Covers: []string{"attach"}, run: runAttach, needs: needsFocus},
 	{ID: "workspace.new", Label: "new", Help: "create a workspace: label and project directory", Kind: KindForm, Scope: ScopeNone,
 		Menu: MenuPlace{Parent: "workspace", Key: "n"}, Covers: []string{"new"}, run: runNew, needs: needsNew},
 	{ID: "spawn.new", Label: "spawn a session", Help: "create a session and spawn agents in it: wizard, dry run, confirm",

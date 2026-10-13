@@ -130,8 +130,12 @@ func (m *Model) surface(id string) *exec.Cmd {
 }
 
 func (m *Model) canView(id string) bool {
-	if id == "operations" {
+	switch {
+	case id == "operations":
 		return m.env.Operations != nil
+	case slices.Contains(views.ForIDs, id):
+		// An agent's view needs the picker for its agent.
+		return m.env.Agents != nil
 	}
 	_, ok := views.New(id, m.env.Views)
 	return ok

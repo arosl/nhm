@@ -30,6 +30,8 @@ const (
 	// directory (default: the context's directory).
 	ParamLabel   = "label"
 	ParamProject = "project"
+	// ParamWorkspace is the workspace focus focuses (its id).
+	ParamWorkspace = "workspace"
 )
 
 // Errors of the workspace handlers.
@@ -202,6 +204,30 @@ func runWake(ctx context.Context, core Core, req Request) (Result, error) {
 		out.Status = "nudged"
 	}
 	return out, err
+}
+
+// runZoom focuses the picked agent's workspace and zooms its pane. It
+// changes no agent, so it needs no review.
+func runZoom(ctx context.Context, core Core, req Request) (Result, error) {
+	t := req.Targets[0]
+	pane, err := core.Zoom(ctx, t)
+	if err != nil {
+		return Result{Status: "refused", Targets: []TargetResult{{Target: t, Status: "refused", Reason: err.Error()}}}, err
+	}
+	return Result{Status: "zoomed", Targets: []TargetResult{{Target: t, Name: pane, Status: "zoomed"}},
+		Lines: []string{"zoomed " + pane + "; close the menu to see it"}}, nil
+}
+
+// runAttach focuses the workspace of ParamWorkspace. It changes no agent.
+func runAttach(ctx context.Context, core Core, req Request) (Result, error) {
+	ws := strings.TrimSpace(req.Params[ParamWorkspace])
+	if ws == "" {
+		return Result{Status: "refused"}, errors.New("actions: pick the workspace to focus")
+	}
+	if err := core.Focus(ctx, ws); err != nil {
+		return Result{Status: "failed"}, err
+	}
+	return Result{Status: "focused", Lines: []string{"focused " + ws + "; close the menu to see it"}}, nil
 }
 
 // ValidLabel checks a workspace label for new and spawn: not empty, at

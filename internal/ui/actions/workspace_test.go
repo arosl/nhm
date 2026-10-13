@@ -127,6 +127,44 @@ func TestReapReviewThenExactlyTheSet(t *testing.T) {
 	}
 }
 
+// zoom and focus change no agent: no operation id, no review.
+func TestZoomAndFocus(t *testing.T) {
+	var zoomed []ui.Target
+	var focused []string
+	core := Core{
+		Zoom: func(_ context.Context, tg ui.Target) (string, error) {
+			zoomed = append(zoomed, tg)
+			if tg.Generation == 9 {
+				return "", errors.New("the agent you picked is gone")
+			}
+			return "w1:p1", nil
+		},
+		Focus: func(_ context.Context, ws string) error { focused = append(focused, ws); return nil },
+	}
+	b1 := ui.Target{BindingID: "b1", Generation: 2, PaneID: "w1:p1"}
+	zoom := mustAction(t, "agent.zoom")
+	res, err := zoom.Do(context.Background(), core, Request{Context: ctxKill, Targets: []ui.Target{b1}})
+	if err != nil || res.Status != "zoomed" || len(zoomed) != 1 || zoomed[0] != b1 {
+		t.Fatalf("zoom = %+v %v", res, err)
+	}
+	gone := b1
+	gone.Generation = 9
+	if res, err := zoom.Do(context.Background(), core, Request{Context: ctxKill, Targets: []ui.Target{gone}}); err == nil || res.Status != "refused" {
+		t.Fatalf("zoom of a gone agent = %+v %v", res, err)
+	}
+	focus := mustAction(t, "workspace.attach")
+	if _, err := focus.Do(context.Background(), core, Request{Context: ctxKill}); err == nil {
+		t.Fatal("focus with no workspace was accepted")
+	}
+	if res, err := focus.Do(context.Background(), core, Request{Context: ctxKill, Params: map[string]string{ParamWorkspace: "w2"}}); err != nil ||
+		res.Status != "focused" || focused[0] != "w2" {
+		t.Fatalf("focus = %+v %v", res, err)
+	}
+	if why := zoom.Unavailable(ctxKill, Core{}); why != "this surface cannot zoom" {
+		t.Fatalf("zoom without its seam: %q", why)
+	}
+}
+
 func TestWakeNewAndSpawn(t *testing.T) {
 	b1 := ui.Target{BindingID: "b1", Generation: 2}
 	w := &wsCore{wakeRep: wake.Report{Decisions: []wake.Decision{{BindingID: "b1", MailName: "IcyKnoll", Action: wake.ActionNudged,

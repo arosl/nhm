@@ -58,6 +58,13 @@ type Core struct {
 	// (lifecycle.ReadOperation); it only reads. A form shows a running
 	// operation's progress with it.
 	Operation func(ctx context.Context, id string) (lifecycle.RecentOperation, error)
+	// Zoom focuses the target's workspace and zooms its pane (nhm zoom).
+	// A bound target is found by its binding, and refused when the
+	// binding is at another generation: the agent picked is gone. It
+	// changes no agent. It returns the pane it zoomed.
+	Zoom func(ctx context.Context, t ui.Target) (string, error)
+	// Focus focuses a workspace (nhm attach); it changes no agent.
+	Focus func(ctx context.Context, workspaceID string) error
 }
 
 // SpawnRequest is a spawn or an add as the spawn wizard collects it. The
@@ -90,6 +97,8 @@ func needsReap(c Core) string  { return needsSeam(c.Reap != nil, "reap") }
 func needsWake(c Core) string  { return needsSeam(c.Wake != nil, "wake agents") }
 func needsNew(c Core) string   { return needsSeam(c.New != nil, "create a workspace") }
 func needsSpawn(c Core) string { return needsSeam(c.Spawn != nil, "spawn") }
+func needsZoom(c Core) string  { return needsSeam(c.Zoom != nil, "zoom") }
+func needsFocus(c Core) string { return needsSeam(c.Focus != nil, "focus a workspace") }
 
 // needsSend is why the core cannot send.
 func needsSend(c Core) string {

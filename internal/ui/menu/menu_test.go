@@ -142,8 +142,17 @@ func TestRowsShowWhatCanOpen(t *testing.T) {
 		t.Errorf("a surface that is not there shows: %q", top)
 	}
 	ws := ids(m.Rows("workspace"))
-	if !strings.Contains(ws, "workspace.kill") || strings.Contains(ws, "workspace.attach") {
+	if !strings.Contains(ws, "workspace.kill") || !strings.Contains(ws, "workspace.attach") {
 		t.Errorf("workspace level = %q", ws)
+	}
+	// Built, but this core has no focus seam: shown, with the reason.
+	attach, _ := actions.ByID("workspace.attach")
+	if why := m.unavailable(attach); why != "this surface cannot focus a workspace" {
+		t.Errorf("focus without its seam: %q", why)
+	}
+	// An agent's view needs the picker: hidden without one.
+	if agent := ids(m.Rows("agent")); strings.Contains(agent, "agent.read") || strings.Contains(agent, "agent.inbox") {
+		t.Errorf("agent views without a picker: %q", agent)
 	}
 	if diag := ids(m.Rows("diagnostics")); !strings.Contains(diag, "diag.doctor") {
 		t.Errorf("diagnostics = %q", diag)

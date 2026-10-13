@@ -14,6 +14,7 @@ import (
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
+	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/runner"
@@ -196,6 +197,27 @@ func TestUICoreRunsMutationsAsJobs(t *testing.T) {
 	var ar bindings.AdoptRequest
 	if j := seenJob(t, jobs, "op-ui-8"); j.Verb != runner.VerbAdopt || j.Decode(&ar) != nil || ar.ExpectedSession != "claude:s9" || ar.PaneID != "w1:p9" {
 		t.Fatalf("adopt job = %+v %+v", j, ar)
+	}
+	// zoom finds a bound agent by its binding and refuses one at another
+	// generation; it runs in the surface.
+	var herdrCalls []string
+	for _, name := range []string{"workspace.focus", "pane.zoom"} {
+		name := name
+		s.Handle(name, func(r herdrtest.Request) (any, *herdrtest.Error) {
+			herdrCalls = append(herdrCalls, name+" "+string(r.Params))
+			if name == "pane.zoom" {
+				return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p1", "zoomed": true}}, nil
+			}
+			return map[string]any{"type": "ok"}, nil
+		})
+	}
+	stale := ui.Target{BindingID: icy.ID, Generation: icy.Generation + 1, PaneID: "w1:p1"}
+	if _, err := core.Zoom(ctx, stale); err == nil || !strings.Contains(err.Error(), "gone") || len(herdrCalls) != 0 {
+		t.Fatalf("zoom of a stale target = %v %v", err, herdrCalls)
+	}
+	if pane, err := core.Zoom(ctx, ui.Target{BindingID: icy.ID, Generation: icy.Generation}); err != nil || pane != "w1:p1" ||
+		len(herdrCalls) != 2 || !strings.Contains(herdrCalls[0], `"w1"`) {
+		t.Fatalf("zoom = %q %v %v", pane, err, herdrCalls)
 	}
 	// The send base is nhm send's for the workspace, with no selector.
 	if _, err := uiSendBase(ctx, ie, ui.Context{}); err == nil {

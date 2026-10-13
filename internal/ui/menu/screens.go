@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/forms"
@@ -31,6 +34,15 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 		if a.ID == "operations" {
 			return &opsScreen{v: forms.NewOperationsView(m.env.Operations, 0, nil)}, nil
 		}
+		if slices.Contains(views.ForIDs, a.ID) {
+			return m.pickFor(a, func(ts []ui.Target) (screen, error) {
+				v, ok := views.NewFor(a.ID, m.env.Views, ts[0])
+				if !ok {
+					return nil, errors.New("not built yet")
+				}
+				return &viewScreen{v: v}, nil
+			})
+		}
 		v, ok := views.New(a.ID, m.env.Views)
 		if !ok {
 			return nil, errors.New("not built yet")
@@ -47,6 +59,11 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 		return newKillScreen(run, c), nil
 	case "workspace.new":
 		return newNewScreen(run, c), nil
+	case "workspace.attach":
+		if m.env.Agents == nil {
+			return nil, errors.New("no workspace list here")
+		}
+		return newWorkspacesScreen(a, m.env.Core, c, m.env.Agents), nil
 	}
 	if a.Selection == actions.SelectNone || a.Selection == "" {
 		return nil, errors.New("this menu has no form for it yet")
@@ -55,7 +72,14 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 	if err != nil {
 		return nil, err
 	}
-	ts, pick, err := a.Targets(c)
+	return m.pickFor(a, next)
+}
+
+// pickFor freezes a's targets: the context's explicit selection, or the
+// agent picker's pick; then next opens with them. It never widens a
+// selection.
+func (m *Model) pickFor(a actions.Action, next func([]ui.Target) (screen, error)) (screen, error) {
+	ts, pick, err := a.Targets(m.env.Context)
 	switch {
 	case err != nil:
 		return nil, err
@@ -64,7 +88,7 @@ func (m *Model) screenFor(a actions.Action) (screen, error) {
 	case m.env.Agents == nil:
 		return nil, errors.New("no agent picker here")
 	}
-	return &pickerScreen{p: picker.ForAction(a, c, m.env.Agents), next: next}, nil
+	return &pickerScreen{p: picker.ForAction(a, m.env.Context, m.env.Agents), next: next}, nil
 }
 
 // after is what opens once the targets are frozen.
@@ -75,6 +99,10 @@ func (m *Model) after(a actions.Action, run forms.Runner) (func([]ui.Target) (sc
 	case "send":
 		return func(ts []ui.Target) (screen, error) {
 			return newSendScreen(a, m.env.Core, run.Guard, m.env.Context, ts, m.width, m.height-2, m.env.Memory), nil
+		}, nil
+	case "agent.zoom":
+		return func(ts []ui.Target) (screen, error) {
+			return newDoScreen(a, m.env.Core, actions.Request{Context: m.env.Context, Targets: ts}), nil
 		}, nil
 	}
 	if forms.IsAgentAction(a.ID) {
@@ -337,6 +365,146 @@ func (s *sendScreen) View(width, height int) string {
 		out += "\n" + s.err.Error()
 	}
 	return out
+}
+
+// doScreen runs an action that changes no agent (zoom, focus) at once,
+// and shows its answer.
+type doScreen struct {
+	a       actions.Action
+	core    actions.Core
+	req     actions.Request
+	request uint64
+	ended   bool
+	res     actions.Result
+	err     error
+}
+
+type doDone struct {
+	request uint64
+	res     actions.Result
+	err     error
+}
+
+func newDoScreen(a actions.Action, core actions.Core, req actions.Request) *doScreen {
+	return &doScreen{a: a, core: core, req: req}
+}
+
+func (s *doScreen) Init() tea.Cmd {
+	s.request = nextRequest()
+	a, core, req, rid := s.a, s.core, s.req, s.request
+	return func() tea.Msg {
+		res, err := a.Do(context.Background(), core, req)
+		return doDone{request: rid, res: res, err: err}
+	}
+}
+
+func (s *doScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
+	switch m := msg.(type) {
+	case doDone:
+		if m.request == s.request {
+			s.ended, s.res, s.err = true, m.res, m.err
+		}
+	case tea.KeyMsg:
+		return nil, s.ended || m.String() == "esc"
+	}
+	return nil, false
+}
+
+func (s *doScreen) View(width, _ int) string {
+	if !s.ended {
+		return s.a.Label + "…\n"
+	}
+	out := forms.ResultText(s.res)
+	if s.err != nil {
+		out += clip("error: "+s.err.Error(), width) + "\n"
+	}
+	return out + "\nany key closes\n"
+}
+
+// workspacesScreen lists the workspaces to focus one (workspace.attach).
+type workspacesScreen struct {
+	a       actions.Action
+	core    actions.Core
+	ctx     ui.Context
+	src     picker.Source
+	request uint64
+	list    []snapshot.Workspace
+	cursor  int
+	err     error
+	loaded  bool
+}
+
+type workspacesRead struct {
+	request uint64
+	list    []snapshot.Workspace
+	err     error
+}
+
+func newWorkspacesScreen(a actions.Action, core actions.Core, c ui.Context, src picker.Source) *workspacesScreen {
+	return &workspacesScreen{a: a, core: core, ctx: c, src: src}
+}
+
+func (s *workspacesScreen) Init() tea.Cmd {
+	s.request = nextRequest()
+	src, rid := s.src, s.request
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m, err := src(ctx)
+		if err != nil {
+			return workspacesRead{request: rid, err: err}
+		}
+		return workspacesRead{request: rid, list: m.Workspaces}
+	}
+}
+
+func (s *workspacesScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
+	switch m := msg.(type) {
+	case workspacesRead:
+		if m.request == s.request {
+			s.loaded, s.list, s.err = true, m.list, m.err
+		}
+	case tea.KeyMsg:
+		switch m.String() {
+		case "esc", "q", "left", "backspace":
+			return nil, true
+		case "up":
+			s.cursor = max(0, s.cursor-1)
+		case "down":
+			s.cursor = min(len(s.list)-1, s.cursor+1)
+		case "enter":
+			if s.cursor < len(s.list) {
+				req := actions.Request{Context: s.ctx, Params: map[string]string{actions.ParamWorkspace: s.list[s.cursor].ID}}
+				next := newDoScreen(s.a, s.core, req)
+				return func() tea.Msg { return openScreen{s: next} }, false
+			}
+		}
+	}
+	return nil, false
+}
+
+func (s *workspacesScreen) View(width, _ int) string {
+	var b strings.Builder
+	b.WriteString("focus a workspace\n\n")
+	switch {
+	case !s.loaded:
+		b.WriteString("reading the workspaces…\n")
+	case s.err != nil:
+		b.WriteString(clip("herdr did not answer: "+s.err.Error(), width) + "\n")
+	}
+	for i, w := range s.list {
+		mark := "  "
+		if i == s.cursor {
+			mark = "▶ "
+		}
+		line := fmt.Sprintf("%s (%s), %d agent(s)", forms.Clean(w.Label), forms.Clean(w.ID), w.AgentCount)
+		if w.Focused {
+			line += ", focused"
+		}
+		b.WriteString(mark + clip(line, width-2) + "\n")
+	}
+	b.WriteString("\n↑/↓ · enter: focus · esc: back")
+	return b.String()
 }
 
 // requests numbers the menu's own async requests, so an answer to a

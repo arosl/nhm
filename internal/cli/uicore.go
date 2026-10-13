@@ -115,7 +115,50 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 		Operation: func(ctx context.Context, id string) (lifecycle.RecentOperation, error) {
 			return lifecycle.ReadOperation(ctx, ie.db, id)
 		},
+		Zoom:  func(ctx context.Context, t ui.Target) (string, error) { return uiZoom(ctx, ie, t) },
+		Focus: func(ctx context.Context, ws string) error { return ie.herdr.WorkspaceFocus(ctx, ws) },
 	}
+}
+
+// uiZoom is nhm zoom for a frozen target: it focuses the target's
+// workspace and zooms its pane. A bound target is found by its binding,
+// which may have moved; one at another generation is refused, never
+// swapped for the agent now in its pane. Zoom changes no agent, so it
+// runs in the surface.
+func uiZoom(ctx context.Context, ie *instanceEnv, t ui.Target) (string, error) {
+	pane, ws := t.PaneID, ""
+	if t.Bound() {
+		b, err := bindings.NewStore(ie.db).Get(ctx, t.BindingID)
+		if err != nil {
+			return "", err
+		}
+		if b.Status != bindings.Active || b.Generation != t.Generation {
+			return "", fmt.Errorf("the agent you picked is gone: %s is %s at generation %d, not %d", b.MailName, b.Status,
+				b.Generation, t.Generation)
+		}
+		pane, ws = b.PaneID, b.WorkspaceID
+	}
+	if ws == "" {
+		snap, err := ie.herdr.Snapshot(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, p := range snap.Panes {
+			if p.PaneID == pane {
+				ws = p.WorkspaceID
+			}
+		}
+	}
+	if pane == "" || ws == "" {
+		return "", fmt.Errorf("pane %q is gone", pane)
+	}
+	if err := ie.herdr.WorkspaceFocus(ctx, ws); err != nil {
+		return "", err
+	}
+	if _, err := ie.herdr.PaneZoom(ctx, pane, "on"); err != nil {
+		return "", err
+	}
+	return pane, nil
 }
 
 // uiJobs is a surface's runner client: this nhm binary with the surface's
