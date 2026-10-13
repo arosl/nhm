@@ -106,7 +106,9 @@ func runGoBoard(stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm board: %v\n", err)
 		return exitRefused
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// herdr closing the board's tab hangs the pane up: the board then ends
+	// as it does on q, and unregisters.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	lenv := uilaunch.Env{InstanceDir: ie.inst.Dir, InstanceID: ie.inst.ID}
