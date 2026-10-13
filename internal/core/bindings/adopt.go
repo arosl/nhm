@@ -21,7 +21,7 @@ import (
 type Env struct {
 	DB       *store.DB
 	Bindings *Store
-	Herdr    Herdr
+	Herdr    EnvHerdr
 	// ConfigHome holds Agent Mail's identity files; "" means
 	// agentmail.ConfigHome().
 	ConfigHome string
@@ -173,6 +173,7 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, alias
 		res.Created = true
 	}
 	res.Warnings = append(res.Warnings, decorate(ctx, env, res.Binding, agent)...)
+	res.Warnings = append(res.Warnings, Label(ctx, env.Herdr, res.Binding)...)
 	path, warn := writeIdentity(env, res.Binding)
 	res.IdentityPath = path
 	res.Warnings = appendIf(res.Warnings, warn)
@@ -208,6 +209,35 @@ func decorate(ctx context.Context, env Env, b Binding, agent herdr.AgentInfo) []
 		return []string{fmt.Sprintf("herdr name %s not applied to %s: %v", b.HerdrAlias, b.PaneID, err)}
 	}
 	return nil
+}
+
+// Label names a new binding's pane "<Name> <model>", and its tab
+// "<Name>" when the tab holds only that pane, as spawn does. Adopt and
+// the hooks' bind call it. Failures come back as warnings: the binding
+// holds either way.
+func Label(ctx context.Context, h Labeler, b Binding) []string {
+	var warnings []string
+	label := b.MailName
+	if b.Model != "" {
+		label += " " + b.Model
+	}
+	if _, err := h.PaneRename(ctx, b.PaneID, label); err != nil {
+		warnings = append(warnings, "pane label: "+err.Error())
+	}
+	if b.TabID == "" {
+		return warnings
+	}
+	tab, err := h.TabGet(ctx, b.TabID)
+	if err != nil {
+		return append(warnings, "tab label: "+err.Error())
+	}
+	if tab.PaneCount != 1 || tab.Label == b.MailName {
+		return warnings
+	}
+	if _, err := h.TabRename(ctx, tab.TabID, b.MailName); err != nil {
+		warnings = append(warnings, "tab label: "+err.Error())
+	}
+	return warnings
 }
 
 func writeIdentity(env Env, b Binding) (string, string) {

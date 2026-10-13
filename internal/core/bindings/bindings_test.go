@@ -207,10 +207,11 @@ func TestAlias(t *testing.T) {
 
 // fakeHerdr is a session snapshot and process table.
 type fakeHerdr struct {
-	snap    herdr.SessionSnapshot
-	procs   map[string][]herdr.Process
-	renamed map[string]string
-	fail    error
+	snap       herdr.SessionSnapshot
+	procs      map[string][]herdr.Process
+	renamed    map[string]string
+	paneLabels map[string]string
+	fail       error
 }
 
 func (f *fakeHerdr) Snapshot(context.Context) (herdr.SessionSnapshot, error) { return f.snap, f.fail }
@@ -230,6 +231,39 @@ func (f *fakeHerdr) AgentRename(_ context.Context, target, name string) (herdr.A
 		}
 	}
 	return herdr.AgentInfo{PaneID: target, Name: name}, nil
+}
+
+func (f *fakeHerdr) PaneRename(_ context.Context, pane, label string) (herdr.PaneInfo, error) {
+	if f.paneLabels == nil {
+		f.paneLabels = map[string]string{}
+	}
+	f.paneLabels[pane] = label
+	return herdr.PaneInfo{PaneID: pane}, nil
+}
+
+func (f *fakeHerdr) TabGet(_ context.Context, tab string) (herdr.TabInfo, error) {
+	for _, t := range f.snap.Tabs {
+		if t.TabID == tab {
+			return t, nil
+		}
+	}
+	return herdr.TabInfo{}, errors.New("tab_not_found: " + tab)
+}
+
+func (f *fakeHerdr) TabRename(_ context.Context, tab, label string) (herdr.TabInfo, error) {
+	for i := range f.snap.Tabs {
+		if f.snap.Tabs[i].TabID == tab {
+			f.snap.Tabs[i].Label = label
+			return f.snap.Tabs[i], nil
+		}
+	}
+	return herdr.TabInfo{}, errors.New("tab_not_found: " + tab)
+}
+
+// tabLabel is the label of a tab in the fake session.
+func (f *fakeHerdr) tabLabel(tab string) string {
+	t, _ := f.TabGet(context.Background(), tab)
+	return t.Label
 }
 
 // session builds a snapshot: one tab per pane, labelled, with an agent.
@@ -364,7 +398,7 @@ func testEnv(t *testing.T, h *fakeHerdr) (Env, string) {
 
 func TestAdoptCreatesRenamesAndWritesTheIdentityFile(t *testing.T) {
 	fakeProcStart(t, map[int64]int64{300: 77})
-	h := session(paneSpec{pane: "w1:p1", kind: "claude", session: "sess-9", pid: 300})
+	h := session(paneSpec{pane: "w1:p1", kind: "claude", session: "sess-9", pid: 300, tabLabel: "5"})
 	env, home := testEnv(t, h)
 	project := t.TempDir()
 	ctx := context.Background()
@@ -379,6 +413,11 @@ func TestAdoptCreatesRenamesAndWritesTheIdentityFile(t *testing.T) {
 	}
 	if h.renamed["w1:p1"] != "icyknoll" {
 		t.Fatalf("herdr rename = %v", h.renamed)
+	}
+	// The labels, as spawn sets them (nhm-qyz): the pane "<Name> <model>",
+	// the tab, which holds only this pane, "<Name>".
+	if h.paneLabels["w1:p1"] != "IcyKnoll opus" || h.tabLabel("w1:t1") != "IcyKnoll" || len(res.Warnings) != 0 {
+		t.Fatalf("labels: pane %v, tab %q, warnings %v", h.paneLabels, h.tabLabel("w1:t1"), res.Warnings)
 	}
 	rec, ok, err := agentmail.ReadIdentity(home, project, "w1:p1")
 	if err != nil || !ok || rec.Name != "IcyKnoll" || res.IdentityPath == "" {
@@ -431,6 +470,21 @@ func TestAdoptHandoffBumpsTheGeneration(t *testing.T) {
 	// A handoff to another name is refused.
 	if _, err := Adopt(ctx, env, AdoptRequest{MailName: "BlueLake", PaneID: "w1:p2", HandoffFrom: old.ID}); err == nil {
 		t.Fatal("handoff under another name accepted")
+	}
+}
+
+// A tab that holds other panes keeps its label: it names more than the
+// adopted agent.
+func TestAdoptLeavesASharedTabsLabel(t *testing.T) {
+	h := session(paneSpec{pane: "w1:p1", kind: "claude", tabLabel: "work"})
+	h.snap.Tabs[0].PaneCount = 2
+	env, _ := testEnv(t, h)
+	res, err := Adopt(context.Background(), env, AdoptRequest{MailName: "IcyKnoll", PaneID: "w1:p1", ProjectKey: t.TempDir(), ProjectID: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.paneLabels["w1:p1"] != "IcyKnoll" || h.tabLabel("w1:t1") != "work" || len(res.Warnings) != 0 {
+		t.Fatalf("labels: pane %v, tab %q, warnings %v", h.paneLabels, h.tabLabel("w1:t1"), res.Warnings)
 	}
 }
 

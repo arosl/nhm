@@ -81,6 +81,13 @@ func (c *Client) TabCreate(ctx context.Context, p TabCreateParams) (Created, err
 	return r, err
 }
 
+// TabGet reads one tab: its label and how many panes it holds.
+func (c *Client) TabGet(ctx context.Context, tabID string) (TabInfo, error) {
+	var r tabResult
+	err := c.call(ctx, "tab.get", tabParams{TabID: tabID}, &r, 0)
+	return r.Tab, err
+}
+
 // TabRename sets a tab's label.
 func (c *Client) TabRename(ctx context.Context, tabID, label string) (TabInfo, error) {
 	var r tabResult

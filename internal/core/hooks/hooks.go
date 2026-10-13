@@ -35,10 +35,8 @@ import (
 
 // Herdr is what the hooks need from herdr; *herdr.Client has it.
 type Herdr interface {
-	bindings.Herdr
+	bindings.EnvHerdr
 	AgentGet(ctx context.Context, target string) (herdr.AgentInfo, error)
-	PaneRename(ctx context.Context, paneID, label string) (herdr.PaneInfo, error)
-	TabRename(ctx context.Context, tabID, label string) (herdr.TabInfo, error)
 }
 
 // Env is an enrolled instance, opened, and the hook's environment.
@@ -61,6 +59,10 @@ type Env struct {
 	// Settle is how long a hook polls herdr for its session to appear
 	// (0 means 700 ms).
 	Settle time.Duration
+	// TabLabels makes the reconcile also name a bound agent's tab that
+	// still has herdr's default label. nhm maintain's name pass sets it;
+	// a hook does not, to keep each hook cheap.
+	TabLabels bool
 }
 
 func (e Env) now() time.Time {
@@ -420,7 +422,9 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	kept := repairBinding(env, c, b, r)
 	*bp = &b
 	r.act("bound %s to %s as %s", b.PaneID, b.MailName, b.ID)
-	labelPane(ctx, env, b, r)
+	for _, w := range bindings.Label(ctx, env.Herdr, b) {
+		r.warn("%s", w)
+	}
 	if !kept {
 		// The binding stands; the candidate stays pending until its token
 		// is stored (the already-bound path above).
@@ -565,11 +569,48 @@ func keepTrue(ctx context.Context, env Env, st paneState, b *bindings.Binding, r
 	if b.HerdrAlias != "" && st.agent.Name != b.HerdrAlias {
 		if _, err := env.Herdr.AgentRename(ctx, b.PaneID, b.HerdrAlias); err != nil {
 			r.warn("herdr name %s not applied to %s: %v", b.HerdrAlias, b.PaneID, err)
-			return nil
+		} else {
+			r.act("named %s %s", b.PaneID, b.HerdrAlias)
 		}
-		r.act("named %s %s", b.PaneID, b.HerdrAlias)
+	}
+	if env.TabLabels {
+		keepTabLabel(ctx, env, st, b, r)
 	}
 	return nil
+}
+
+// keepTabLabel names a bound agent's tab "<Name>" when the tab holds
+// only the agent's pane and still has herdr's default label. A label
+// that spawn, the user or a tool set stays.
+func keepTabLabel(ctx context.Context, env Env, st paneState, b *bindings.Binding, r *Reconcile) {
+	if st.agent.TabID == "" {
+		return
+	}
+	tab, err := env.Herdr.TabGet(ctx, st.agent.TabID)
+	if err != nil {
+		r.warn("tab label of %s not read: %v", st.agent.TabID, err)
+		return
+	}
+	if tab.PaneCount != 1 || !defaultTabLabel(tab.Label) {
+		return
+	}
+	if _, err := env.Herdr.TabRename(ctx, tab.TabID, b.MailName); err != nil {
+		r.warn("tab label %s not applied to %s: %v", b.MailName, tab.TabID, err)
+		return
+	}
+	r.act("labelled tab %s %s", tab.TabID, b.MailName)
+}
+
+// defaultTabLabel reports whether a tab label is herdr's default: the
+// number the tab had when herdr made it ("5"), which herdr keeps when
+// it numbers the tabs again.
+func defaultTabLabel(label string) bool {
+	for _, c := range label {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // displace marks a binding displaced and takes its marks off the pane:
@@ -606,30 +647,6 @@ func occupant(ctx context.Context, env Env, st paneState, mailName, model string
 	}
 	occ.ForegroundPID, occ.ForegroundStart = processFacts(ctx, env.Herdr, a.PaneID, a.Agent)
 	return occ
-}
-
-// labelPane names a new binding's pane "<Name> <model>", and its tab
-// "<Name>" when the tab holds only that pane. Failures are warnings.
-func labelPane(ctx context.Context, env Env, b bindings.Binding, r *Reconcile) {
-	label := b.MailName
-	if b.Model != "" {
-		label += " " + b.Model
-	}
-	if _, err := env.Herdr.PaneRename(ctx, b.PaneID, label); err != nil {
-		r.warn("pane label: %v", err)
-	}
-	snap, err := env.Herdr.Snapshot(ctx)
-	if err != nil {
-		r.warn("tab label: %v", err)
-		return
-	}
-	for _, t := range snap.Tabs {
-		if t.TabID == b.TabID && t.PaneCount == 1 {
-			if _, err := env.Herdr.TabRename(ctx, t.TabID, b.MailName); err != nil {
-				r.warn("tab label: %v", err)
-			}
-		}
-	}
 }
 
 // processFacts reads the agent's process in a pane and its start time:

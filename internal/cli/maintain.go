@@ -29,7 +29,9 @@ Run the maintenance pass (plan-v8 2.8): settle wake attempts that never
 finished, read every bound agent's inbox without consuming it (mail sent
 from the am CLI or the web UI that no hook saw), deliver the due wakes
 (cooldown and rate limit passed, agent idle or done), and reconcile each
-bound pane's name. With --mail-from, it also runs the limits scan and
+bound pane's name. A bound agent's tab that still has herdr's default
+label (a number) and holds only that pane gets the agent's Mail name.
+With --mail-from, it also runs the limits scan and
 mails each new limit event (nhm limits).
 
 --once (the default) runs one pass; this is what ACFS's systemd timer
@@ -188,9 +190,10 @@ func (ie *instanceEnv) maintainPass(ctx context.Context, opts maintainOptions) (
 	res.Wake = &wr
 	res.Warnings = append(res.Warnings, wr.Warnings...)
 
-	// The cheap name reconcile: each bound pane, as a plugin event would.
+	// The cheap name reconcile: each bound pane, as a plugin event would,
+	// and its tab when herdr's default label (a number) is still on it.
 	henv := hooks.Env{DB: ie.db, Bindings: w.Bindings, Herdr: ie.herdr, InstanceDir: ie.inst.Dir,
-		Getenv: os.Getenv, Now: time.Now, LockWait: time.Second}
+		Getenv: os.Getenv, Now: time.Now, LockWait: time.Second, TabLabels: true}
 	active, err := w.Bindings.List(ctx, bindings.Filter{Statuses: []bindings.Status{bindings.Active}})
 	if err != nil {
 		return res, err

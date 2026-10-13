@@ -18,6 +18,20 @@ type Herdr interface {
 	AgentRename(ctx context.Context, target, name string) (herdr.AgentInfo, error)
 }
 
+// Labeler is what Label needs from herdr; *herdr.Client has it.
+type Labeler interface {
+	PaneRename(ctx context.Context, paneID, label string) (herdr.PaneInfo, error)
+	TabGet(ctx context.Context, tabID string) (herdr.TabInfo, error)
+	TabRename(ctx context.Context, tabID, label string) (herdr.TabInfo, error)
+}
+
+// EnvHerdr is what Env needs from herdr: Herdr, and the labels that
+// adopt sets. *herdr.Client has it.
+type EnvHerdr interface {
+	Herdr
+	Labeler
+}
+
 // ProcStart returns a process's start time in clock ticks since boot
 // (field 22 of /proc/<pid>/stat). A variable so tests can replace it.
 var ProcStart = func(pid int64) (int64, error) {

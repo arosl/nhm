@@ -50,6 +50,7 @@ var methodResults = map[string][]string{
 	"session.snapshot":          {"session_snapshot"},
 	"workspace.create":          {"workspace_created"},
 	"tab.create":                {"tab_created"},
+	"tab.get":                   {"tab_info"},
 	"tab.rename":                {"tab_info"},
 	"agent.list":                {"agent_list"},
 	"agent.get":                 {"agent_info"},

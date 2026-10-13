@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -32,16 +33,19 @@ type pane struct {
 	cwd     string
 }
 
-// world is a herdr stub with mutable panes, and the calls nhm made.
+// world is a herdr stub with mutable panes in one tab, w1:t1, and the
+// calls nhm made.
 type world struct {
-	t     *testing.T
-	mu    sync.Mutex
-	panes map[string]*pane
-	calls []string
+	t        *testing.T
+	mu       sync.Mutex
+	panes    map[string]*pane
+	calls    []string
+	tabLabel string
+	tabPanes int
 }
 
 func newWorld(t *testing.T) (*world, *herdr.Client) {
-	w := &world{t: t, panes: map[string]*pane{}}
+	w := &world{t: t, panes: map[string]*pane{}, tabLabel: "1", tabPanes: 1}
 	s := herdrtest.New(t)
 	s.Handle("agent.get", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var p struct{ Target string }
@@ -92,8 +96,20 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.calls = append(w.calls, "tab.rename "+p.TabID+" "+p.Label)
-		return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": p.TabID, "workspace_id": "w1",
-			"number": 1, "label": p.Label, "focused": false, "pane_count": 1, "agent_status": "idle"}}, nil
+		w.tabLabel = p.Label
+		return map[string]any{"type": "tab_info", "tab": w.tabJSON()}, nil
+	})
+	s.Handle("tab.get", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			TabID string `json:"tab_id"`
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		if p.TabID != "w1:t1" {
+			return nil, &herdrtest.Error{Code: "tab_not_found", Message: "tab " + p.TabID + " not found"}
+		}
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return map[string]any{"type": "tab_info", "tab": w.tabJSON()}, nil
 	})
 	s.Handle("session.snapshot", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		w.mu.Lock()
@@ -105,11 +121,10 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 				agents = append(agents, w.agentJSON(id, pn))
 			}
 		}
+		tab := w.tabJSON()
 		w.mu.Unlock()
 		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 22, "version": "0.9.3",
-			"workspaces": []any{}, "panes": panes, "agents": agents,
-			"tabs": []any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1, "label": "1",
-				"focused": false, "pane_count": 1, "agent_status": "idle"}}}}, nil
+			"workspaces": []any{}, "panes": panes, "agents": agents, "tabs": []any{tab}}}, nil
 	})
 	s.Handle("pane.process_info", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var p struct {
@@ -131,6 +146,12 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 			"shell_pid": 10, "foreground_processes": procs}}, nil
 	})
 	return w, herdr.New(s.SocketPath)
+}
+
+// tabJSON is tab w1:t1; the caller holds w.mu.
+func (w *world) tabJSON() map[string]any {
+	return map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1, "label": w.tabLabel,
+		"focused": false, "pane_count": w.tabPanes, "agent_status": "idle"}
 }
 
 func (w *world) agentJSON(id string, pn *pane) map[string]any {
@@ -162,14 +183,27 @@ func (w *world) get(id string) pane {
 }
 
 func (w *world) called(prefix string) bool {
+	return w.count(prefix) > 0
+}
+
+// count is how many calls start with prefix.
+func (w *world) count(prefix string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	n := 0
 	for _, c := range w.calls {
 		if strings.HasPrefix(c, prefix) {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
+}
+
+// setTab sets tab w1:t1's label and how many panes it holds.
+func (w *world) setTab(label string, panes int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.tabLabel, w.tabPanes = label, panes
 }
 
 type harness struct {
@@ -364,6 +398,57 @@ func TestRestartInPlaceGetsItsNameBack(t *testing.T) {
 	rep, _ = RunPluginEvent(context.Background(), h.env, PaneEvent{PaneID: "w1:p1"})
 	if len(rep.Actions) != 0 {
 		t.Fatalf("second event: %v", rep.Actions)
+	}
+}
+
+// nhm maintain's name pass names a bound agent's tab that still has
+// herdr's default label, a number (nhm-qyz). A hook leaves the tab
+// alone; a label that someone set, and a tab with other panes, stay.
+func TestMaintainLabelsATabLeftAtItsNumber(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	if _, err := h.env.Bindings.Create(ctx, bindings.New{MailName: "IcyKnoll", MailProjectKey: "/p", ProjectID: "proj-p",
+		Provenance: bindings.Adopted, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p1",
+			HerdrAlias: "icyknoll", Kind: "claude", NativeSession: &bindings.NativeSession{Value: "sess-a"},
+			ForegroundPID: 500, ForegroundStart: 5000}}); err != nil {
+		t.Fatal(err)
+	}
+	h.world.setTab("5", 1)
+	if _, err := ReconcilePane(ctx, h.env, "w1:p1"); err != nil {
+		t.Fatal(err)
+	}
+	if h.world.called("tab.") {
+		t.Fatalf("a hook's reconcile touched the tab: %v", h.world.calls)
+	}
+
+	h.env.TabLabels = true
+	r, err := ReconcilePane(ctx, h.env, "w1:p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.world.called("tab.rename w1:t1 IcyKnoll") || !slices.Contains(r.Actions, "labelled tab w1:t1 IcyKnoll") || len(r.Warnings) != 0 {
+		t.Fatalf("maintain: calls %v, report %+v", h.world.calls, r)
+	}
+	if r, _ = ReconcilePane(ctx, h.env, "w1:p1"); len(r.Actions) != 0 || h.world.count("tab.rename") != 1 {
+		t.Fatalf("second pass: calls %v, report %+v", h.world.calls, r)
+	}
+	for _, tab := range []struct {
+		label string
+		panes int
+	}{{"work", 1}, {"7", 2}} {
+		h.world.setTab(tab.label, tab.panes)
+		if r, err = ReconcilePane(ctx, h.env, "w1:p1"); err != nil || len(r.Actions) != 0 || h.world.count("tab.rename") != 1 {
+			t.Fatalf("tab %q with %d panes: calls %v, report %+v %v", tab.label, tab.panes, h.world.calls, r, err)
+		}
+	}
+}
+
+func TestDefaultTabLabel(t *testing.T) {
+	for label, want := range map[string]bool{"": true, "5": true, "12": true, "IcyKnoll": false, "5a": false, "shell": false} {
+		if got := defaultTabLabel(label); got != want {
+			t.Errorf("defaultTabLabel(%q) = %v, want %v", label, got, want)
+		}
 	}
 }
 

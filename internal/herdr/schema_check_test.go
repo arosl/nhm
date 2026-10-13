@@ -26,6 +26,7 @@ var paramTypes = map[string]any{
 	"popup.close":               nil,
 	"workspace.create":          WorkspaceCreateParams{},
 	"tab.create":                TabCreateParams{},
+	"tab.get":                   tabParams{},
 	"tab.rename":                tabRenameParams{},
 	"agent.get":                 targetParams{},
 	"agent.read":                AgentReadParams{},

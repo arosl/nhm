@@ -193,6 +193,11 @@ type paneRenameParams struct {
 	Label  *string `json:"label"`
 }
 
+// tabParams is herdr's TabTarget.
+type tabParams struct {
+	TabID string `json:"tab_id"`
+}
+
 type tabRenameParams struct {
 	TabID string `json:"tab_id"`
 	Label string `json:"label"`

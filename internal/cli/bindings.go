@@ -237,7 +237,9 @@ const adoptUsage = `Usage: nhm adopt <MailName> [--pane ID] [--handoff-from BIND
 Bind an existing Agent Mail identity to the agent in a pane, by hand. The
 pane is --pane or the calling pane. --handoff-from gives the pane's agent
 the identity of that binding (for example a session casr converted) and
-bumps its generation. Runs only when nhm owns this herdr instance.
+bumps its generation. As spawn does, it labels the pane "<MailName>
+<model>" and, when the pane is alone in its tab, the tab "<MailName>".
+Runs only when nhm owns this herdr instance.
 `
 
 func runAdopt(args []string, stdout, stderr io.Writer) int {
