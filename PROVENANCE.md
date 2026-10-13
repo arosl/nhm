@@ -118,6 +118,8 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/tui/components/spring_manager_test.go` | `internal/tui/components/spring_manager_test.go` | provenance header |
 | `internal/ui/tui/components/state_test.go` | `internal/tui/components/state_test.go` | provenance header |
 | `internal/ui/tui/components/statusbar_test.go` | `internal/tui/components/statusbar_test.go` | provenance header |
+| `internal/ui/palette/LICENSE` | `LICENSE` | none |
+| `internal/ui/palette/catalog.go` | `internal/config/config.go` (in part) | provenance header; only the `PaletteCmd` and `PaletteState` types, without TOML tags, and `PaletteCmd.Source`; the commands come from nhm's palette catalogs (`templates.ReadCatalog`) in the fzf palette's order, not from ntm's config |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
