@@ -41,6 +41,9 @@ expect 8 [ cancel ]
 key tab enter
 expect 10 IcyKnoll: sent: esc
 key esc
+note after the interrupt herdr's own detection of the fake agent can read "unknown" for a while, and a send to it is refused (seen in CI): report it idle, as its hooks would
+run herdr pane report-agent --source e2e --agent claude --state idle w1:p1 >/dev/null
+check herdr agent get w1:p1 | jq -e '.result.agent.agent_status == "idle"'
 note space s: the composer for the mark; ctrl+s sends through the core
 key space s
 expect 5 Compose
