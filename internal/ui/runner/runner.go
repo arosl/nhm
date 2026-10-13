@@ -324,8 +324,15 @@ func List(dir string, limit int) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An id starts with its creation time in milliseconds
+	// (store.NewOperationID), so the newest jobs sort last by name: List
+	// reads from there, and no more jobs than it lists.
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	var out []Entry
 	for _, p := range names {
+		if len(out) == limit {
+			break
+		}
 		data, err := os.ReadFile(p)
 		if err != nil {
 			continue

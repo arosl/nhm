@@ -174,8 +174,14 @@ func TestClaimFinishReadList(t *testing.T) {
 	if !list[2].Claimed || list[2].Result == nil || list[2].Result.Code != CodeRefused {
 		t.Fatalf("ended = %+v", list[2])
 	}
-	if short, _ := List(dir, 1); len(short) != 1 {
-		t.Fatalf("limit 1 = %d", len(short))
+	// List reads the newest jobs by name, no more than its limit (the
+	// review's L3): with limit 1, the newest job comes back, also beside
+	// an old file it cannot read.
+	if err := os.WriteFile(filepath.Join(dir, "op-1000000000000-old.job.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if short, _ := List(dir, 1); len(short) != 1 || short[0].Job.ID != jobs[2].ID {
+		t.Fatalf("limit 1 = %+v", short)
 	}
 	if _, err := Load(filepath.Join(dir, "other.job.json")); err == nil {
 		t.Fatal("a missing job loaded")
