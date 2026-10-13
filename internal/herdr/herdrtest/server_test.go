@@ -167,3 +167,54 @@ func TestSubscriptionReceivesEvents(t *testing.T) {
 		t.Fatalf("Emit after drop wrote to %d", n)
 	}
 }
+
+// agent.start and agent.rename follow herdr's name rules before their
+// handlers: a name outside [a-z][a-z0-9_-]{0,31} is invalid_agent_name,
+// and a name that another pane's agent holds in the test's agent.list is
+// agent_name_taken; its own name, a clear and a free suffix pass
+// (nhm-4xt).
+func TestAgentNameRules(t *testing.T) {
+	s := New(t)
+	handled := 0
+	s.Handle("agent.start", func(Request) (any, *Error) {
+		handled++
+		return map[string]any{"type": "agent_started"}, nil
+	})
+	s.Handle("agent.rename", func(Request) (any, *Error) {
+		handled++
+		return map[string]any{"type": "agent_info", "agent": map[string]any{}}, nil
+	})
+	start := func(name, pane string) string {
+		return `{"id":"s","method":"agent.start","params":{"name":` + name + `,"kind":"claude","pane_id":"` + pane + `"}}`
+	}
+	rename := func(target, name string) string {
+		return `{"id":"r","method":"agent.rename","params":{"target":"` + target + `","name":` + name + `}}`
+	}
+	expect := func(line, code string) {
+		t.Helper()
+		before := handled
+		rep, _, _ := call(t, s, line)
+		switch {
+		case code == "" && (rep.Error != nil || handled != before+1):
+			t.Errorf("%s = %+v, handled %d", line, rep.Error, handled-before)
+		case code != "" && (rep.Error == nil || rep.Error.Code != code || handled != before):
+			t.Errorf("%s = %+v, handled %d; want %s before the handler", line, rep.Error, handled-before, code)
+		}
+	}
+	expect(start(`"IcyKnoll"`, "w1:p1"), "invalid_agent_name")
+	expect(start(`"2icy"`, "w1:p1"), "invalid_agent_name")
+	expect(rename("w1:p1", `"icy knoll"`), "invalid_agent_name")
+	expect(start(`"`+strings.Repeat("a", 33)+`"`, "w1:p1"), "invalid_agent_name")
+	// Without an agent.list, the stub knows no live names.
+	expect(start(`"icyknoll"`, "w1:p2"), "")
+	expect(rename("w1:p1", `null`), "")
+
+	s.Handle("agent.list", func(Request) (any, *Error) {
+		return map[string]any{"type": "agent_list", "agents": []any{map[string]any{"name": "icyknoll", "pane_id": "w1:p1"}}}, nil
+	})
+	expect(start(`"icyknoll"`, "w1:p2"), "agent_name_taken")
+	expect(rename("w1:p2", `"icyknoll"`), "agent_name_taken")
+	expect(rename("w1:p1", `"icyknoll"`), "")
+	expect(rename("icyknoll", `"icyknoll"`), "")
+	expect(start(`"icyknoll-2"`, "w1:p2"), "")
+}

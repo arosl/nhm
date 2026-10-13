@@ -14,6 +14,11 @@
 // error.code "stub_unhandled", except ping, which answers pong. A handler
 // result whose "type" is not a result type of the pinned schema fails the
 // test, so the stub cannot drift from herdr.
+//
+// agent.start and agent.rename follow herdr's name rules before their
+// handler runs: a name herdr refuses is "invalid_agent_name", and a name
+// that another pane's agent holds in the test's agent.list is
+// "agent_name_taken".
 package herdrtest
 
 import (
@@ -23,6 +28,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -62,6 +68,78 @@ type Server struct {
 	conns    map[net.Conn]bool // every open connection, for cleanup
 	closed   bool
 	wg       sync.WaitGroup
+}
+
+// agentName is herdr's rule for an agent name (valid_agent_name in
+// src/app/agents.rs, herdr 0.9.3).
+var agentName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// checkName applies herdr's name rules to agent.start and agent.rename,
+// before their handler. A rename's target is a pane id or a name. A
+// null or empty name clears, and no rule applies.
+func (s *Server) checkName(req Request) *Error {
+	if req.Method != "agent.start" && req.Method != "agent.rename" {
+		return nil
+	}
+	var p struct {
+		Name   *string `json:"name"`
+		PaneID string  `json:"pane_id"`
+		Target string  `json:"target"`
+	}
+	if json.Unmarshal(req.Params, &p) != nil || p.Name == nil || *p.Name == "" {
+		return nil
+	}
+	if !agentName.MatchString(*p.Name) {
+		return &Error{Code: "invalid_agent_name", Message: fmt.Sprintf("invalid agent name %q: use [a-z][a-z0-9_-]{0,31}", *p.Name)}
+	}
+	names := s.liveNames()
+	pane := p.PaneID
+	if req.Method == "agent.rename" {
+		pane = p.Target
+		if held, ok := names[p.Target]; ok {
+			pane = held
+		}
+	}
+	if held, ok := names[*p.Name]; ok && held != pane {
+		return &Error{Code: "agent_name_taken", Message: fmt.Sprintf("agent name %q is already in use", *p.Name)}
+	}
+	return nil
+}
+
+// liveNames are the agent names the test's agent.list gives, name ->
+// pane: herdr's list is its truth. Without an agent.list handler the stub
+// knows no names, and no name is taken.
+func (s *Server) liveNames() map[string]string {
+	s.mu.Lock()
+	list := s.handlers["agent.list"]
+	s.mu.Unlock()
+	names := map[string]string{}
+	if list == nil {
+		return names
+	}
+	result, herr := list(Request{Method: "agent.list", Params: json.RawMessage(`{}`)})
+	if herr != nil {
+		return names
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return names
+	}
+	var out struct {
+		Agents []struct {
+			Name   string `json:"name"`
+			PaneID string `json:"pane_id"`
+		} `json:"agents"`
+	}
+	if json.Unmarshal(data, &out) != nil {
+		return names
+	}
+	for _, a := range out.Agents {
+		if a.Name != "" {
+			names[a.Name] = a.PaneID
+		}
+	}
+	return names
 }
 
 // writeTimeout bounds a write to a client that does not read.
@@ -216,6 +294,10 @@ func (s *Server) handle(c net.Conn) {
 	s.mu.Unlock()
 
 	if e := s.validate(req); e != nil {
+		s.reply(c, req.ID, nil, e)
+		return
+	}
+	if e := s.checkName(req); e != nil {
 		s.reply(c, req.ID, nil, e)
 		return
 	}
