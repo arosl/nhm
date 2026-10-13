@@ -216,6 +216,27 @@ type ZoomResult struct {
 	FocusedPaneID string `json:"focused_pane_id"`
 }
 
+// PluginInfo is one installed plugin, as plugin.list gives it: the fields
+// nhm reads.
+type PluginInfo struct {
+	PluginID        string       `json:"plugin_id"`
+	Name            string       `json:"name"`
+	Version         string       `json:"version"`
+	Enabled         bool         `json:"enabled"`
+	MinHerdrVersion string       `json:"min_herdr_version"`
+	PluginRoot      string       `json:"plugin_root"`
+	Panes           []PluginSpec `json:"panes"`
+}
+
+// PluginSpec is one pane a plugin's manifest declares (herdr's
+// PluginManifestPane).
+type PluginSpec struct {
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Placement string   `json:"placement"`
+	Command   []string `json:"command"`
+}
+
 // PaneMoveResult is pane.move's answer, without the layouts: the pane
 // where it is now (a move to another workspace gives it a new id), and
 // where it was.

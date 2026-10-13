@@ -73,6 +73,9 @@ func runUI(args []string, stdout, stderr io.Writer) int {
 		return holdOnFailure(runBoardBody(stderr), stderr)
 	case "menu-popup":
 		return holdOnFailure(runMenuBody(stderr), stderr)
+	case "fit-probe":
+		// nhm doctor --herdr-fit's probe (fitprobe.go).
+		return runFitProbe(stderr)
 	default:
 		fmt.Fprint(stderr, uiUsage)
 		return exitRefused

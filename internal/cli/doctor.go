@@ -21,6 +21,7 @@ import (
 )
 
 const doctorUsage = `Usage: nhm doctor [--socket PATH] [--no-mail] [--json]
+       nhm doctor --herdr-fit [--placements] [--socket PATH] [--json]
 
 Check what nhm needs: the herdr server and its protocol, the enrollment of
 this server, the state database, the owner switch, Agent Mail, and the
@@ -28,6 +29,15 @@ directory of Agent Mail's identity files, the kinds (built-in and from
 nhm's config), and, when nhm owns the server,
 the maintenance runner (nhm maintain). Each check says ok, warn or
 fail, and what to do. Exits 1 when a check fails.
+
+--herdr-fit checks that the running herdr still fits nhm's interactive
+surfaces (the X0 fit test): its protocol and version, nhm's plugin, and a
+throwaway popup that runs a small program and closes. That popup is its
+only effect on the server; when a popup is open already, it skips it. Run
+it again after a herdr upgrade. --placements also opens the program as a
+tab, a split and an overlay in a throwaway workspace, sends keys to each,
+and reads the kill guard's fact: for the sandbox and CI, because the
+clients of a live server see those panes.
 `
 
 // Check results.
@@ -51,14 +61,28 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, doctorUsage) }
 	socket := fs.String("socket", "", "herdr API socket")
 	noMail := fs.Bool("no-mail", false, "skip the Agent Mail check")
+	fit := fs.Bool("herdr-fit", false, "check that the running herdr fits nhm's interactive surfaces")
+	placements := fs.Bool("placements", false, "with --herdr-fit: also open a tab, a split and an overlay (sandbox, CI)")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args)
-	if err != nil || len(pos) > 0 {
+	if err != nil || len(pos) > 0 || *placements && !*fit || *fit && *noMail {
+		if err == nil {
+			fmt.Fprint(stderr, doctorUsage)
+		}
 		return exitRefused
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	budget := 20 * time.Second
+	if *fit {
+		budget = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	checks := doctorChecks(ctx, *socket, !*noMail)
+	var checks []doctorCheck
+	if *fit {
+		checks = herdrFitChecks(ctx, *socket, *placements)
+	} else {
+		checks = doctorChecks(ctx, *socket, !*noMail)
+	}
 	failed := 0
 	for _, c := range checks {
 		if c.Result == checkFail {

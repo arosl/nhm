@@ -37,6 +37,10 @@ type paneMoveResult struct {
 	MoveResult PaneMoveResult `json:"move_result"`
 }
 
+type pluginListResult struct {
+	Plugins []PluginInfo `json:"plugins"`
+}
+
 type processInfoResult struct {
 	ProcessInfo ProcessInfo `json:"process_info"`
 }
@@ -186,6 +190,18 @@ func (c *Client) PaneMove(ctx context.Context, p PaneMoveParams) (PaneMoveResult
 	var r paneMoveResult
 	err := c.call(ctx, "pane.move", p, &r, 0)
 	return r.MoveResult, err
+}
+
+// PaneSendKeys sends keys to any pane, an agent's or a plugin's.
+func (c *Client) PaneSendKeys(ctx context.Context, paneID string, keys ...string) error {
+	return c.call(ctx, "pane.send_keys", paneSendKeysParams{PaneID: paneID, Keys: keys}, nil, 0)
+}
+
+// PluginList lists the installed plugins; pluginID "" lists them all.
+func (c *Client) PluginList(ctx context.Context, pluginID string) ([]PluginInfo, error) {
+	var r pluginListResult
+	err := c.call(ctx, "plugin.list", pluginListParams{PluginID: pluginID}, &r, 0)
+	return r.Plugins, err
 }
 
 // PaneZoom zooms a pane; mode is "toggle", "on" or "off".

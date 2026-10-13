@@ -88,6 +88,18 @@ type PaneMoveDestination struct {
 	Label       string `json:"label,omitempty"`
 }
 
+// paneSendKeysParams are pane.send_keys's parameters: keys in herdr's
+// names ("esc", "ctrl+c", "a").
+type paneSendKeysParams struct {
+	PaneID string   `json:"pane_id"`
+	Keys   []string `json:"keys"`
+}
+
+// pluginListParams are plugin.list's parameters; "" lists every plugin.
+type pluginListParams struct {
+	PluginID string `json:"plugin_id,omitempty"`
+}
+
 // NewTabIn is the destination "a new tab of workspace W", with herdr's
 // default label.
 func NewTabIn(workspaceID string) PaneMoveDestination {

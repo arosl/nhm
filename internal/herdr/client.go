@@ -69,12 +69,15 @@ var methodResults = map[string][]string{
 	"pane.report_metadata":      {"ok"},
 	"pane.close":                {"ok"},
 	"workspace.close":           {"ok"},
-	// Observed in the sandbox on herdr 0.9.3 (nhm-p1o, nhm move).
-	"pane.move": {"pane_move"},
+	// Observed in the sandbox on herdr 0.9.3 (nhm-p1o, nhm move; nhm-qbi.11,
+	// nhm doctor --herdr-fit).
+	"pane.move":      {"pane_move"},
+	"popup.close":    {"ok"},
+	"pane.send_keys": {"ok"},
+	"plugin.list":    {"plugin_list"},
 	// From the pinned schema's response results, not yet observed
 	// (acfs-9hkh.70; the rehearsal, acfs-9hkh.31, runs it against herdr).
 	"workspace.focus":      {"workspace_info", "ok"},
-	"popup.close":          {"ok"},
 	"events.subscribe":     {"subscription_started"},
 	"events.wait":          {"wait_matched"},
 	"pane.wait_for_output": {"output_matched"},
