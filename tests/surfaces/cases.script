@@ -6,8 +6,8 @@
 # refused by the core, and nothing reaches the agent; the agent picked
 # after the hand-off is interrupted. tests/surfaces_e2e.sh runs it.
 sleep 2
-note the fake agent has no hooks: a watcher reports its turn 2 s after the prompt is in its log, then touches cases.reported
-run (for _ in $(seq 150); do grep -q CASES-SEND "$HERDR_WORK/fake.log" && break; sleep 0.1; done; sleep 2; r() { herdr pane report-agent --source e2e --agent claude --state "$1" w1:p1; }; r working; sleep 1; r idle; herdr pane release-agent --source e2e --agent claude w1:p1; touch "$HERDR_WORK/cases.reported") </dev/null >/dev/null 2>&1 &
+note the fake agent has no hooks: a watcher reports its turn once the prompt is in its log and the script has made cases.closed (after the popup closed), then touches cases.reported
+run (for _ in $(seq 150); do grep -q CASES-SEND "$HERDR_WORK/fake.log" && break; sleep 0.1; done; for _ in $(seq 150); do test -e "$HERDR_WORK/cases.closed" && break; sleep 0.1; done; r() { herdr pane report-agent --source e2e --agent claude --state "$1" w1:p1; }; r working; sleep 1; r idle; herdr pane release-agent --source e2e --agent claude w1:p1; touch "$HERDR_WORK/cases.reported") </dev/null >/dev/null 2>&1 &
 note prefix+m, s: pick IcyKnoll, compose, then ctrl+s twice in one write
 key ctrl+b m
 expect 8 diagnostics ›
@@ -19,11 +19,11 @@ expect 5 Compose
 send CASES-SEND once
 send \x13\x13
 expect 5 sending…
-note esc twice: the popup closes while the send waits for the agent's turn
+note esc twice: the popup closes while the send waits for the agent's turn, which the watcher reports only after this
 key esc esc
 refute 1 nhm  workspace proj
-check test ! -e "$HERDR_WORK/cases.reported"
-note the watcher reports; recent operations shows the send's result, and the agent got the text once
+run touch "$HERDR_WORK/cases.closed"
+note the watcher reports; recent operations shows the send "submitted", so it ended after the popup closed, and the agent got the text once
 run for _ in $(seq 100); do test -e "$HERDR_WORK/cases.reported" && break; sleep 0.1; done
 key ctrl+b m
 expect 8 diagnostics ›

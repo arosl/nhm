@@ -35,8 +35,13 @@ herdr_private_guard() {
 
 herdr_private_stop() {
   if [[ -n "$HERDR_SERVER" ]]; then
-    "$HERDR_WORK/bin/herdr" server stop >/dev/null 2>&1 || true
+    timeout 10 "$HERDR_WORK/bin/herdr" server stop >/dev/null 2>&1 || true
+    # A server that does not stop gets SIGKILL after 10 s. The watchdog is
+    # killed once wait returns, so it never signals a pid used again.
+    (sleep 10 && kill -9 "$HERDR_SERVER" 2>/dev/null) &
+    local dog=$!
     wait "$HERDR_SERVER" 2>/dev/null || true
+    kill "$dog" 2>/dev/null || true
     HERDR_SERVER=""
   fi
   # go build makes its module cache in the private HOME read-only.

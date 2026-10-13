@@ -11,11 +11,6 @@
 # reports for it once the prompt is in its log (working, then idle, then
 # it releases the pane); the receipt is then "submitted".
 sleep 2
-note dismiss herdr's first-run welcome (continue) and settings screen (esc)
-key enter
-sleep 1.5
-key esc
-sleep 1.5
 note a catalog in the user's config: a plain prompt and one with {{thread}}; a label with a colour code
 run printf '## Smoke\n### ping | Ping \033[31mred\033[0m label\nPALETTE-PING from the palette.\n### fix | Fix the thread\nFix {{thread}} now: PALETTE-FIX.\n### bye | Say bye\nPALETTE-BYE from a closed popup.\n' >"$XDG_CONFIG_HOME/nhm/command_palette.md"
 note prefix+a: nhm bind's key opens the Go palette in a popup

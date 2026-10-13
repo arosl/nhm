@@ -17,7 +17,8 @@ SCRIPT is a text file, one action per line:
                        character
   paste FILE           FILE's content wrapped in bracketed paste
   resize COLS ROWS     set the pty size (the kernel sends SIGWINCH)
-  run SHELLCMD         run a shell command (its output to stderr), wait
+  run SHELLCMD         run a shell command (its output to stderr), wait;
+                       PTY_CLIENT_PID is the attached client's pid
   check SHELLCMD       run a shell command; it passes when it exits 0
   expect SECONDS TEXT  within SECONDS the screen shows TEXT
   refute SECONDS TEXT  after SECONDS the screen does not show TEXT
@@ -76,8 +77,39 @@ class Screen:
         self.clear()
 
     def clear(self):
-        self.grid = [[" "] * self.cols for _ in range(self.rows)]
+        self.grid = [self.blank() for _ in range(self.rows)]
         self.row = self.col = 0
+        # The scroll region (DECSTBM) and the saved cursor.
+        self.top, self.bot = 0, self.rows - 1
+        self.saved = (0, 0)
+
+    def blank(self):
+        return [" "] * self.cols
+
+    def scroll_up(self, n):
+        """The region's lines move up n; blank lines come in at its bottom."""
+        for _ in range(min(n, self.bot - self.top + 1)):
+            del self.grid[self.top]
+            self.grid.insert(self.bot, self.blank())
+
+    def scroll_down(self, n):
+        """The region's lines move down n; blank lines come in at its top."""
+        for _ in range(min(n, self.bot - self.top + 1)):
+            del self.grid[self.bot]
+            self.grid.insert(self.top, self.blank())
+
+    def linefeed(self):
+        # At the region's bottom a line feed scrolls the region.
+        if self.row == self.bot:
+            self.scroll_up(1)
+        else:
+            self.row = min(self.rows - 1, self.row + 1)
+
+    def reverse_index(self):
+        if self.row == self.top:
+            self.scroll_down(1)
+        else:
+            self.row = max(0, self.row - 1)
 
     def text(self):
         return "\n".join("".join(r).rstrip() for r in self.grid)
@@ -94,18 +126,51 @@ class Screen:
 
     def csi(self, seq):
         final, body = seq[-1], seq[:-1]
-        private = body.startswith("?")
-        nums = [int(p) if p.isdigit() else 0 for p in body.lstrip("?").split(";")] if body.lstrip("?") else []
+        private = body[:1] in ("?", ">", "<", "=")
+        params = body[1:] if private else body
+        nums = [int(p) if p.isdigit() else 0 for p in params.split(";")] if params else []
 
         def n(i, d=1):
             return nums[i] if len(nums) > i and nums[i] else d
 
         if private:
-            if final in "hl" and any(m in (47, 1047, 1049) for m in nums):
+            if body.startswith("?") and final in "hl" and any(m in (47, 1047, 1049) for m in nums):
                 self.clear()
             return
+        line = self.grid[self.row] if 0 <= self.row < self.rows else None
         if final in "Hf":
-            self.row, self.col = n(0) - 1, n(1) - 1
+            self.row, self.col = min(self.rows - 1, n(0) - 1), min(self.cols - 1, n(1) - 1)
+        elif final == "r":
+            top, bot = n(0) - 1, min(self.rows, n(1, self.rows)) - 1
+            self.top, self.bot = (top, bot) if top < bot else (0, self.rows - 1)
+            self.row = self.col = 0
+        elif final == "S":
+            self.scroll_up(n(0))
+        elif final == "T" and len(nums) <= 1:
+            self.scroll_down(n(0))
+        elif final == "L" and self.top <= self.row <= self.bot:
+            for _ in range(min(n(0), self.bot - self.row + 1)):
+                del self.grid[self.bot]
+                self.grid.insert(self.row, self.blank())
+        elif final == "M" and self.top <= self.row <= self.bot:
+            for _ in range(min(n(0), self.bot - self.row + 1)):
+                del self.grid[self.row]
+                self.grid.insert(self.bot, self.blank())
+        elif final == "P" and line is not None:
+            k = max(0, min(n(0), self.cols - self.col))
+            del line[self.col:self.col + k]
+            line.extend([" "] * k)
+        elif final == "@" and line is not None:
+            k = max(0, min(n(0), self.cols - self.col))
+            line[self.col:self.col] = [" "] * k
+            del line[self.cols:]
+        elif final == "s":
+            self.saved = (self.row, self.col)
+        elif final == "u":
+            self.row, self.col = self.saved
+        elif final in "EF":
+            step = n(0) if final == "E" else -n(0)
+            self.row, self.col = max(0, min(self.rows - 1, self.row + step)), 0
         elif final == "A":
             self.row = max(0, self.row - n(0))
         elif final == "B":
@@ -115,13 +180,13 @@ class Screen:
         elif final == "D":
             self.col = max(0, self.col - n(0))
         elif final == "G":
-            self.col = n(0) - 1
+            self.col = min(self.cols - 1, n(0) - 1)
         elif final == "d":
-            self.row = n(0) - 1
+            self.row = min(self.rows - 1, n(0) - 1)
         elif final == "J":
             mode = nums[0] if nums else 0
             if mode in (2, 3):
-                self.grid = [[" "] * self.cols for _ in range(self.rows)]
+                self.grid = [self.blank() for _ in range(self.rows)]
             elif mode == 0:
                 self.erase(self.row, self.col, self.cols)
                 for r in range(self.row + 1, self.rows):
@@ -148,8 +213,8 @@ class Screen:
                     self.state = "esc"
                 elif ch == "\r":
                     self.col = 0
-                elif ch == "\n":
-                    self.row = min(self.rows - 1, self.row + 1)
+                elif ch in "\n\x0b\x0c":
+                    self.linefeed()
                 elif ch == "\b":
                     self.col = max(0, self.col - 1)
                 elif ch == "\t":
@@ -157,11 +222,30 @@ class Screen:
                 elif ch >= " " and ch != "\x7f":
                     self.put(ch)
             elif self.state == "esc":
+                self.state = "text"
                 if ch == "[":
                     self.state, self.buf = "csi", ""
                 elif ch in "]PX^_":
                     self.state = "string"
-                else:
+                elif " " <= ch <= "/":
+                    # An intermediate byte (ESC ( B selects a charset):
+                    # the sequence ends with its final byte.
+                    self.state = "esc-int"
+                elif ch == "7":
+                    self.saved = (self.row, self.col)
+                elif ch == "8":
+                    self.row, self.col = self.saved
+                elif ch == "D":
+                    self.linefeed()
+                elif ch == "E":
+                    self.col = 0
+                    self.linefeed()
+                elif ch == "M":
+                    self.reverse_index()
+                elif ch == "c":
+                    self.clear()
+            elif self.state == "esc-int":
+                if not " " <= ch <= "/":
                     self.state = "text"
             elif self.state == "csi":
                 self.buf += ch
@@ -215,6 +299,9 @@ def main():
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(cmd[0], cmd)
+    # A run or check that ends the client kills this pid, never a pattern
+    # that could match another herdr client.
+    os.environ["PTY_CLIENT_PID"] = str(pid)
     setsize(fd, cols, rows)
     screen = Screen(cols, rows)
     out = open(rawlog, "ab")
