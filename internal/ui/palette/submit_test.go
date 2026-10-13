@@ -16,6 +16,7 @@ import (
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/store/history"
+	"github.com/arosl/nhm/internal/ui"
 )
 
 func u64(v uint64) *uint64 { return &v }
@@ -130,7 +131,8 @@ func receiptFor(t *testing.T, res send.Result, bindingID string) send.Receipt {
 }
 
 func TestBuildRequestFreezesTheTargets(t *testing.T) {
-	ts := Targets{{BindingID: "b1", Generation: 3, PaneID: "w1:p1"}, {BindingID: "b2", Generation: 1, PaneID: "w1:p2"}}
+	ts := Targets{{Target: ui.Target{BindingID: "b1", Generation: 3, PaneID: "w1:p1"}},
+		{Target: ui.Target{BindingID: "b2", Generation: 1, PaneID: "w1:p2"}}}
 	base := baseRequest()
 	base.WhenAny, base.Force, base.DryRun, base.OperationID = true, true, true, "op-x"
 	base.Selector = send.Selector{All: true, Kinds: []string{"claude"}}
@@ -159,7 +161,7 @@ func TestBuildRequestFreezesTheTargets(t *testing.T) {
 }
 
 func TestBuildRequestRefusals(t *testing.T) {
-	ts := Targets{{BindingID: "b1", PaneID: "w1:p1"}}
+	ts := Targets{{Target: ui.Target{BindingID: "b1", Generation: 1, PaneID: "w1:p1"}}}
 	if _, err := BuildRequest(baseRequest(), Payload{Text: "hi"}, nil, ""); !errors.Is(err, ErrNoTargets) {
 		t.Fatalf("no targets: %v", err)
 	}
@@ -190,7 +192,7 @@ func TestBodiesAreTemplateBodies(t *testing.T) {
 	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("file = %v %v", st, err)
 	}
-	req, err := BuildRequest(baseRequest(), p, Targets{icy.Target(), blue.Target()}, path)
+	req, err := BuildRequest(baseRequest(), p, Targets{icy.Frozen(), blue.Frozen()}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +212,7 @@ func TestBodiesAreTemplateBodies(t *testing.T) {
 	// the error names the prompt by its key.
 	p.Vars, p.Rev = nil, 8
 	path, _ = bodies.Path(p)
-	req, _ = BuildRequest(baseRequest(), p, Targets{icy.Target()}, path)
+	req, _ = BuildRequest(baseRequest(), p, Targets{icy.Frozen()}, path)
 	_, err = send.Send(context.Background(), w.env, req)
 	if err == nil || !strings.Contains(err.Error(), `"hello"`) || !strings.Contains(err.Error(), "thread") {
 		t.Fatalf("missing variable: %v", err)
@@ -234,7 +236,7 @@ func TestPaletteSendThroughTheCore(t *testing.T) {
 	busy := w.bind(t, "RedFox", "w1:p2", "claude", herdr.StatusWorking)
 	blue := w.bind(t, "BlueLake", "w1:p3", "codex", herdr.StatusIdle)
 	moved := w.bind(t, "GreenOwl", "w1:p4", "codex", herdr.StatusIdle)
-	ts := Targets{icy.Target(), busy.Target(), blue.Target(), moved.Target()}
+	ts := Targets{icy.Frozen(), busy.Frozen(), blue.Frozen(), moved.Frozen()}
 	req, err := BuildRequest(baseRequest(), Payload{Text: "hello"}, ts, "")
 	if err != nil {
 		t.Fatal(err)

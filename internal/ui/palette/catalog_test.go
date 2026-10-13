@@ -96,3 +96,16 @@ func TestLoadCommandsFirstKeyWins(t *testing.T) {
 		t.Fatalf("fix = %+v", cmds[2])
 	}
 }
+
+// A catalog's terminal controls are neither shown nor sent.
+func TestLoadCommandsCleansTerminalControls(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.md")
+	writeFile(t, path, "## Cat\x1b[31m\n### k | La\x1b]0;x\x07bel\nLine one\x1b[2J\n\tLine two\x07\n")
+	cmds, errs := LoadCommands([]string{path})
+	if len(errs) != 0 || len(cmds) != 1 {
+		t.Fatalf("= %+v %v", cmds, errs)
+	}
+	if c := cmds[0]; c.Label != "Label" || c.Category != "Cat" || c.Prompt != "Line one\n\tLine two" {
+		t.Fatalf("command = %q %q %q", c.Label, c.Category, c.Prompt)
+	}
+}

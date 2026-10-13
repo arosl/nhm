@@ -2,7 +2,8 @@
 // at commit 9d5ed977: the PaletteCmd and PaletteState types; see LICENSE in
 // this directory and PROVENANCE.md. Local changes: PaletteCmd.Source; no
 // TOML tags; the commands come from nhm's palette catalogs
-// (templates.ReadCatalog) in the fzf palette's order, not from ntm's config.
+// (templates.ReadCatalog) in the fzf palette's order, not from ntm's config,
+// without terminal controls.
 
 package palette
 
@@ -90,7 +91,8 @@ func CatalogPaths(getenv func(string) string, dir, root, file string) []string {
 
 // LoadCommands reads the catalogs in order; a key that an earlier file
 // gave is skipped. A file that does not read is an error in errs, and
-// the other files still load.
+// the other files still load. Labels, categories and prompts lose their
+// terminal controls.
 func LoadCommands(paths []string) (cmds []PaletteCmd, errs []error) {
 	seen := map[string]bool{}
 	for _, p := range paths {
@@ -108,7 +110,10 @@ func LoadCommands(paths []string) (cmds []PaletteCmd, errs []error) {
 			if label == "" {
 				label = e.Key
 			}
-			cmds = append(cmds, PaletteCmd{Key: e.Key, Label: label, Prompt: e.Body, Category: e.Category, Source: p})
+			// A catalog's terminal controls are neither shown nor typed into
+			// an agent.
+			cmds = append(cmds, PaletteCmd{Key: e.Key, Label: clean(label), Prompt: clean(e.Body), Category: clean(e.Category),
+				Source: p})
 		}
 	}
 	return cmds, errs

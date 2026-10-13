@@ -18,29 +18,32 @@ import (
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/store/history"
+	"github.com/arosl/nhm/internal/ui"
 )
 
-// Target is a frozen identity (plan-v4 section 4): the binding and the
-// generation the palette saw when the target was picked, and what it
-// shows of them.
-type Target struct {
-	BindingID  string `json:"binding_id"`
-	Generation int64  `json:"generation"`
-	PaneID     string `json:"pane_id"`
-	MailName   string `json:"mail_name"`
-	Kind       string `json:"kind"`
+// FrozenTarget is a frozen identity (plan-v4 section 4): the ui.Target
+// of the binding at the generation the palette saw when the target was
+// picked, and the Agent Mail name it shows.
+type FrozenTarget struct {
+	ui.Target
+	MailName string `json:"mail_name"`
 }
 
 // Targets is a frozen target set, in the order it was picked.
-type Targets []Target
+type Targets []FrozenTarget
+
+// UI is the set as ui.Targets.
+func (ts Targets) UI() []ui.Target {
+	out := make([]ui.Target, len(ts))
+	for i, t := range ts {
+		out[i] = t.Target
+	}
+	return out
+}
 
 // Expect is the send's expected generation per binding.
 func (ts Targets) Expect() map[string]int64 {
-	out := make(map[string]int64, len(ts))
-	for _, t := range ts {
-		out[t.BindingID] = t.Generation
-	}
-	return out
+	return ui.Expect(ts.UI())
 }
 
 // PaneIDs are the targets' panes, for the send's selector.

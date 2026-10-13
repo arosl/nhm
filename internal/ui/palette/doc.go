@@ -16,6 +16,10 @@
 // The palette never sends on its own. ntm's sendWith typed into tmux and
 // quit; here a submission is one call of nhm's send operation, which the
 // caller hands in (Sender), made off bubbletea's update loop, with the
-// targets frozen as {binding, generation} (Submitter, BuildRequest). Its
-// receipts are shown, not a quit.
+// targets frozen as {binding, generation} at the keypress (Submitter,
+// BuildRequest). Its receipts are shown on a result screen, not a quit.
+//
+// The palette's editor is also the Composer, the component the menu and
+// the board embed to write a message: the same editor, keys, empty-draft
+// rule and memory preview.
 package palette
