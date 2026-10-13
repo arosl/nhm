@@ -62,9 +62,10 @@ type ReapItem struct {
 	Generation int64         `json:"generation"`
 	PaneID     string        `json:"pane_id,omitempty"`
 	IdleFor    time.Duration `json:"idle_ns"`
-	// Action: retired, would_retire, kept, refused, or failed: the retire
-	// failed after its claim, so some of its effects may have happened;
-	// its record (Retire.OperationID) says how far it got.
+	// Action: retired, would_retire, kept, refused; failed: the retire
+	// failed after its claim and its checks, so the pane may be closed,
+	// and its record (Retire.OperationID) says how far it got; skipped: a
+	// stopped sweep did not reach it.
 	Action string        `json:"action"`
 	Reason string        `json:"reason,omitempty"`
 	Retire *RetireResult `json:"retire,omitempty"`
@@ -150,33 +151,51 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 	}
 	idlePath := filepath.Join(env.InstanceDir, IdleFile)
 	idle := readIdle(idlePath)
+	// The record's writes outlive a cancelled caller: a record left open
+	// would read as still running.
+	rctx := context.WithoutCancel(ctx)
+	names := map[string]string{}
+	for _, b := range list {
+		names[b.ID] = b.MailName
+	}
+	for _, item := range gone {
+		names[item.BindingID] = item.MailName
+	}
 	// add keeps an agent's outcome, and records it in a recorded sweep.
+	reached := map[string]bool{}
 	add := func(item ReapItem) error {
 		items = append(items, item)
+		reached[item.BindingID] = true
 		if !record {
 			return nil
 		}
-		return reapReceipt(ctx, env, req.OperationID, index[item.BindingID], item)
+		return reapReceipt(rctx, env, req.OperationID, index[item.BindingID], item)
 	}
 	if record {
-		names := map[string]string{}
-		for _, b := range list {
-			names[b.ID] = b.MailName
-		}
-		for _, item := range gone {
-			names[item.BindingID] = item.MailName
-		}
-		if err := claimReap(ctx, env, req, names); err != nil {
+		if err := claimReap(rctx, env, req, names); err != nil {
 			return nil, fmt.Errorf("reap: record the operation: %w", err)
 		}
 	}
-	// stop ends a sweep that cannot go on: a recorded sweep's receipts say
-	// how far it got, and the idle file drops the agents it retired.
+	// stop ends a sweep that cannot go on. Each reviewed agent it did not
+	// reach is "skipped", so every receipt ends final; the record ends
+	// "stopped", and the idle file drops the agents the sweep retired.
 	stop := func(err error) ([]ReapItem, error) {
+		for _, t := range req.Only {
+			if reached[t.BindingID] {
+				continue
+			}
+			item := ReapItem{MailName: names[t.BindingID], BindingID: t.BindingID, Generation: t.Generation,
+				Action: "skipped", Reason: "not tried: the sweep stopped first"}
+			items = append(items, item)
+			if record {
+				_ = reapReceipt(rctx, env, req.OperationID, index[t.BindingID], item)
+			}
+		}
 		if record {
-			_ = env.DB.SetOperationStatus(ctx, req.OperationID, ReapStopped, true, env.now())
+			_ = env.DB.SetOperationStatus(rctx, req.OperationID, ReapStopped, true, env.now())
 		}
 		_ = writeIdle(idlePath, idle)
+		sort.SliceStable(items, func(i, j int) bool { return items[i].MailName < items[j].MailName })
 		return items, err
 	}
 	for _, item := range gone {
@@ -269,10 +288,15 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 		r := rr
 		item.Retire = &r
 		switch {
+		case err != nil && rr.Done:
+			// The retire is done; only its record's last write failed.
+			item.Action, item.Reason = "retired", "its record: "+err.Error()
+			delete(idle, b.ID)
 		case errors.Is(err, ErrRefused):
 			item.Action, item.Reason = "refused", strings.Join(rr.Refusals, "; ")
 		case err != nil && rr.OperationID != "":
-			// It failed after its claim: some effects may have happened.
+			// It failed after its claim and its checks: the pane may be
+			// closed.
 			item.Action, item.Reason = "failed", err.Error()
 		case err != nil:
 			item.Action, item.Reason = "refused", err.Error()
@@ -302,7 +326,7 @@ func Reap(ctx context.Context, env Env, mail MailState, req ReapRequest) ([]Reap
 	// does.
 	var doneErr error
 	if record {
-		if err := env.DB.SetOperationStatus(ctx, req.OperationID, ReapDone, true, env.now()); err != nil {
+		if err := env.DB.SetOperationStatus(rctx, req.OperationID, ReapDone, true, env.now()); err != nil {
 			doneErr = fmt.Errorf("reap: the sweep is done, but its record is not: %w", err)
 		}
 	}
@@ -457,7 +481,9 @@ const VerbReap = "reap_set"
 
 // Reap operation statuses. A sweep that stops while "dispatching" died
 // partway: its receipts say how far it got. A receipt's status is its
-// agent's action: retired, refused or kept, and pending until then.
+// agent's action: retired, refused, kept, failed (the retire failed after
+// its claim and its checks), or skipped (a stopped sweep did not reach
+// it), and pending until then.
 const (
 	ReapDispatching = "dispatching"
 	ReapDone        = "done"
@@ -635,13 +661,16 @@ func KillWith(ctx context.Context, env Env, req KillRequest) (KillResult, error)
 	if !req.Yes {
 		return res, fmt.Errorf("%w: kill closes the workspace and retires its agents: give --yes", ErrRefused)
 	}
-	opID, err := claimKill(ctx, env, req, list)
+	// The record's writes outlive a cancelled caller: a record left open
+	// would read as still running.
+	rctx := context.WithoutCancel(ctx)
+	opID, err := claimKill(rctx, env, req, list)
 	res.OperationID = opID
 	if err != nil {
 		return res, fmt.Errorf("kill: record the operation: %w", err)
 	}
 	stop := func(err error) (KillResult, error) {
-		_ = env.DB.SetOperationStatus(ctx, opID, KillStopped, true, env.now())
+		_ = env.DB.SetOperationStatus(rctx, opID, KillStopped, true, env.now())
 		return res, err
 	}
 	res.Agents = res.Agents[:0]
@@ -658,7 +687,7 @@ func KillWith(ctx context.Context, env Env, req KillRequest) (KillResult, error)
 		case err != nil:
 			status = KillFailed
 		}
-		if werr := killReceipt(ctx, env, opID, i, status, r, err); werr != nil && err == nil {
+		if werr := killReceipt(rctx, env, opID, i, status, r, err); werr != nil && err == nil {
 			err = fmt.Errorf("record the outcome: %w", werr)
 		}
 		if err != nil {
@@ -676,7 +705,7 @@ func KillWith(ctx context.Context, env Env, req KillRequest) (KillResult, error)
 	}
 	// Closing may end the process that runs the kill (a UI in the
 	// workspace): the record says "closing" until the close returns.
-	if err := env.DB.SetOperationStatus(ctx, opID, KillClosing, false, env.now()); err != nil {
+	if err := env.DB.SetOperationStatus(rctx, opID, KillClosing, false, env.now()); err != nil {
 		return stop(fmt.Errorf("kill: record the close: %w", err))
 	}
 	// herdr may have closed the workspace with its last pane.
@@ -684,7 +713,7 @@ func KillWith(ctx context.Context, env Env, req KillRequest) (KillResult, error)
 		return stop(fmt.Errorf("close workspace %s: %w", workspaceID, err))
 	}
 	res.Closed = true
-	if err := env.DB.SetOperationStatus(ctx, opID, KillClosed, true, env.now()); err != nil {
+	if err := env.DB.SetOperationStatus(rctx, opID, KillClosed, true, env.now()); err != nil {
 		return res, fmt.Errorf("kill: the workspace is closed, but its record is not: %w", err)
 	}
 	return res, nil

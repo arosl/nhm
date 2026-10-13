@@ -137,7 +137,9 @@ func parseOnly(s string) ([]lifecycle.ReapTarget, error) {
 
 // runReap is reap's review (ParamDryRun: the dry run) and reap (exactly
 // the reviewed set of ParamOnly, by binding and generation). Each item's
-// status is reap's action: would_retire, retired, kept or refused.
+// status is reap's action: would_retire, retired, kept, refused, failed
+// (the retire failed after its checks: the pane may be closed) or skipped
+// (the sweep stopped before it).
 func runReap(ctx context.Context, core Core, req Request) (Result, error) {
 	idle := DefaultIdle
 	if s := req.Params[ParamIdle]; s != "" {

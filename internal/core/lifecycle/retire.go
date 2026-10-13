@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -184,6 +185,11 @@ func Retire(ctx context.Context, env Env, req RetireRequest) (RetireResult, erro
 			return res, err
 		} else if ok {
 			res.OperationID = op.ID
+			// Only a retire's own record is its outcome: an id another verb
+			// holds is taken, and nothing ran under it.
+			if verb := cmp.Or(req.Reason, "retire"); op.Verb != verb {
+				return res, fmt.Errorf("%w: operation %s is a %s, not a %s: the id is taken; give a new one", ErrRefused, op.ID, op.Verb, verb)
+			}
 			res.Done = op.Status == "done"
 			return res, replayed(op)
 		}
@@ -235,7 +241,13 @@ func Retire(ctx context.Context, env Env, req RetireRequest) (RetireResult, erro
 	}
 	res.OperationID = claim.Operation.ID
 	if err := execute(ctx, env, req, plan, &res); err != nil {
-		_ = env.DB.SetOperationStatus(ctx, res.OperationID, "failed", true, env.now())
+		// A refusal of execute's own (before any effect) is recorded as
+		// one; anything else may have closed the pane.
+		status := "failed"
+		if errors.Is(err, ErrRefused) {
+			status = "refused"
+		}
+		_ = env.DB.SetOperationStatus(ctx, res.OperationID, status, true, env.now())
 		return res, err
 	}
 	res.Done = true
@@ -541,7 +553,10 @@ func execute(ctx context.Context, env Env, req RetireRequest, plan retirePlan, r
 			return fmt.Errorf("revalidate %s: %w", b.PaneID, err)
 		}
 		if unsettled[a.AgentStatus] || (a.Agent != "" && a.Agent != b.Kind) {
-			return fmt.Errorf("%s changed since the checks (now %s %s); nothing closed", b.MailName, a.Agent, a.AgentStatus)
+			// Nothing happened yet: a refusal, as the checks' own.
+			why := fmt.Sprintf("%s changed since the checks (now %s %s); nothing closed", b.MailName, a.Agent, a.AgentStatus)
+			res.Refusals = append(res.Refusals, why)
+			return fmt.Errorf("%w: %s", ErrRefused, why)
 		}
 		if err := env.Herdr.PaneClose(ctx, b.PaneID); err != nil && herdr.ErrorCode(err) != herdr.CodePaneNotFound {
 			return fmt.Errorf("close pane %s: %w", b.PaneID, err)

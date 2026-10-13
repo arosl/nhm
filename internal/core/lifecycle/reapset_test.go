@@ -195,13 +195,100 @@ func TestReapRecordStopsAtAFailedRetire(t *testing.T) {
 	if status[byPane[closed[0]]] != "retired" || status[byPane[closed[1]]] != "failed" {
 		t.Fatalf("receipts = %v (closed %v)", status, closed)
 	}
-	pending := 0
+	// The agent the sweep did not reach is skipped: every receipt ends
+	// final, and the items name it too.
+	skipped := 0
 	for _, s := range status {
-		if s == "pending" {
-			pending++
+		if s == "skipped" {
+			skipped++
 		}
 	}
-	if pending != 1 {
-		t.Fatalf("receipts = %v: want one pending", status)
+	if skipped != 1 || len(items) != 3 {
+		t.Fatalf("receipts = %v, items = %+v: want one skipped", status, items)
+	}
+}
+
+// wakeHerdr wakes an agent between retire's checks and its close: the
+// second agent.get of that pane says it works.
+type wakeHerdr struct {
+	*fakeHerdr
+	pane  string
+	reads int
+}
+
+func (h *wakeHerdr) AgentGet(ctx context.Context, pane string) (herdr.AgentInfo, error) {
+	a, err := h.fakeHerdr.AgentGet(ctx, pane)
+	if pane == h.pane {
+		if h.reads++; h.reads == 2 {
+			a.AgentStatus = herdr.StatusWorking
+		}
+	}
+	return a, err
+}
+
+// An agent that wakes between retire's checks and its close is refused,
+// with nothing closed, and the sweep goes on to the others (the re-check's
+// A: it stopped the sweep as "failed").
+func TestReapGoesOnPastAnAgentThatWoke(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	for i, name := range []string{"IcyKnoll", "BlueLake", "RedStone"} {
+		w.bind(t, name, "w1:p"+string(rune('1'+i)), herdr.StatusIdle)
+	}
+	req := ReapRequest{Idle: 10 * time.Minute, WorkspaceID: "w1", DryRun: true}
+	if _, err := Reap(ctx, w.env, nil, req); err != nil {
+		t.Fatal(err)
+	}
+	w.clock = w.clock.Add(11 * time.Minute)
+	review, err := Reap(ctx, w.env, nil, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var only []ReapTarget
+	blue := ""
+	for _, it := range review {
+		only = append(only, ReapTarget{BindingID: it.BindingID, Generation: it.Generation})
+		if it.MailName == "BlueLake" {
+			blue = it.BindingID
+		}
+	}
+	w.env.Herdr = &wakeHerdr{fakeHerdr: w.h, pane: "w1:p2"}
+	req.DryRun, req.Only, req.OperationID = false, only, "op-reap-w"
+	items, err := Reap(ctx, w.env, nil, req)
+	if err != nil {
+		t.Fatalf("a sweep past an agent that woke = %v", err)
+	}
+	got := map[string]ReapItem{}
+	for _, it := range items {
+		got[it.MailName] = it
+	}
+	if b := got["BlueLake"]; b.Action != "refused" || !strings.Contains(b.Reason, "changed since the checks") ||
+		got["IcyKnoll"].Action != "retired" || got["RedStone"].Action != "retired" {
+		t.Fatalf("items = %+v", items)
+	}
+	op, err := ReadOperation(ctx, w.env.DB, "op-reap-w")
+	if err != nil || op.Status != ReapDone {
+		t.Fatalf("record = %+v %v", op, err)
+	}
+	if child, err := ReadOperation(ctx, w.env.DB, got["BlueLake"].Retire.OperationID); err != nil || child.Status != "refused" {
+		t.Fatalf("BlueLake's retire record = %+v %v", child, err)
+	}
+	if b, err := w.env.Bindings.Get(ctx, blue); err != nil || b.Status != bindings.Active {
+		t.Fatalf("BlueLake = %+v %v", b, err)
+	}
+}
+
+// A retry under an id that another verb holds is refused: it is not that
+// operation's outcome (the re-check's low 2).
+func TestRetireRefusesAnIDOfAnotherVerb(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
+	if _, err := w.env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: "op-x", Verb: "send"}, w.clock); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", OperationID: "op-x"})
+	if !errors.Is(err, ErrRefused) || res.Done || !strings.Contains(err.Error(), "the id is taken") {
+		t.Fatalf("retire under a send's id = %+v %v", res, err)
 	}
 }
