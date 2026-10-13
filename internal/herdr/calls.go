@@ -134,7 +134,8 @@ func (c *Client) AgentRead(ctx context.Context, p AgentReadParams) (PaneRead, er
 	return r.Read, err
 }
 
-// AgentSendKeys sends key names ("Escape", "C-c", "Enter") to an agent.
+// AgentSendKeys sends key names in herdr's spelling ("esc", "ctrl+c",
+// "enter") to an agent; herdr refuses C-a … C-z, but for C-c (nhm-1b2).
 func (c *Client) AgentSendKeys(ctx context.Context, target string, keys ...string) error {
 	return c.call(ctx, "agent.send_keys", sendKeysParams{Target: target, Keys: keys}, nil, 0)
 }
