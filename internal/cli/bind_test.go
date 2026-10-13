@@ -525,3 +525,28 @@ func TestBindKeepsTheOptOut(t *testing.T) {
 		}
 	}
 }
+
+// The swarm host after v0.1.6 (nhm-4mx): herdr's config holds ACFS's
+// empty unbound block, which acfs palette unbind left when nhm took the
+// keys, and nhm's bound block. That is no opt-out: --show says bound, and
+// a [keys] change binds.
+func TestBindBesideACFSsUnboundBlock(t *testing.T) {
+	fakeHerdr(t)
+	ownedInstance(t)
+	acfs := "# >>> acfs palette >>> unbound by `acfs palette unbind`; `acfs palette bind` binds it again\n# <<< acfs palette <<<\n"
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte(acfs+"\n"+ui.Block(ui.Keys)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := runVerb(runBind, "--config", cfg, "--show"); code != exitOK || strings.Contains(out, "opted out") ||
+		!strings.Contains(out, "nhm's keys: bound") {
+		t.Errorf("--show = %d %q", code, out)
+	}
+	nhmKeys(t, "palette = \"ctrl+alt+p\"\n")
+	if code, _, errOut := runVerb(runBind, "--config", cfg, "--no-reload"); code != exitOK {
+		t.Fatalf("bind after a [keys] change = %d %s", code, errOut)
+	}
+	if data, _ := os.ReadFile(cfg); !strings.Contains(string(data), `key = "ctrl+alt+p"`) || strings.Contains(string(data), "acfs palette") {
+		t.Errorf("the bound file = %q", data)
+	}
+}

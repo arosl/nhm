@@ -237,9 +237,24 @@ func TestOptOut(t *testing.T) {
 	if forced, err := BindKeys(acfsOff, Keys, true); err != nil || OptOutBy(forced) != "" || strings.Contains(forced, "acfs palette") {
 		t.Fatalf("Bind --force over ACFS's unbound block = %q %v", forced, err)
 	}
-	// nhm's opt-out keeps ACFS's block, as Unbind does.
-	if kept, err := OptOut(acfsOff); err != nil || !strings.HasPrefix(kept, acfsOff) {
-		t.Errorf("OptOut dropped ACFS's block: %q %v", kept, err)
+	// nhm's opt-out keeps ACFS's block, as Unbind does, and it is the
+	// opt-out that counts then.
+	kept, err := OptOut(acfsOff)
+	if err != nil || !strings.HasPrefix(kept, acfsOff) || OptOutBy(kept) != "nhm bind --unbind" {
+		t.Errorf("OptOut dropped ACFS's block: %q %v (%q)", kept, err, OptOutBy(kept))
+	}
+	// ACFS's unbound block beside nhm's bound keys is no opt-out: acfs
+	// palette unbind left it when nhm took the keys (nhm-4mx). A bind
+	// rewrites the keys and drops ACFS's block.
+	both := acfsOff + "\n" + Block(Keys)
+	if by := OptOutBy(both); by != "" {
+		t.Fatalf("ACFS's unbound block beside nhm's keys: OptOutBy = %q", by)
+	}
+	moved := slices.Clone(Keys)
+	moved[0].Key = "ctrl+alt+p"
+	rebound, err := BindKeys(both, moved, false)
+	if err != nil || strings.Contains(rebound, "acfs palette") || !strings.Contains(rebound, `key = "ctrl+alt+p"`) {
+		t.Fatalf("Bind beside ACFS's unbound block = %q %v", rebound, err)
 	}
 	// A marker inside a multi-line string is text.
 	for _, quote := range []string{`"""`, `'''`} {

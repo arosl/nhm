@@ -301,11 +301,14 @@ func OptOut(config string) (string, error) {
 }
 
 // OptOutBy names the command that recorded an opt-out in the config:
-// "nhm bind --unbind" for nhm's opt-out block, "acfs palette unbind" for
-// ACFS's unbound palette block, "" for none. A marker counts only at the
-// top level, never inside a multi-line string.
+// "nhm bind --unbind" for nhm's opt-out block; "acfs palette unbind" for
+// ACFS's unbound palette block, but only while nhm's keys are not bound
+// (nhm-4mx; ACFS's rule since 80873333: acfs palette unbind runs when nhm
+// takes the keys, and leaves that block beside nhm's); "" for none. A
+// marker counts only at the top level, never inside a multi-line string.
 func OptOutBy(config string) string {
 	open := ""
+	nhmBound, acfsOff := false, false
 	for _, line := range strings.Split(config, "\n") {
 		inString := open != ""
 		open = multiline(open, line)
@@ -315,9 +318,14 @@ func OptOutBy(config string) string {
 		switch t := strings.TrimSpace(line); {
 		case strings.HasPrefix(t, BlockBegin+optOutTag):
 			return "nhm bind --unbind"
+		case isMarker(t, BlockBegin):
+			nhmBound = true
 		case strings.HasPrefix(t, acfsBlockBegin+optOutTag):
-			return "acfs palette unbind"
+			acfsOff = true
 		}
+	}
+	if acfsOff && !nhmBound {
+		return "acfs palette unbind"
 	}
 	return ""
 }
