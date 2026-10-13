@@ -25,7 +25,8 @@ const NTMCommit = "9d5ed97796e37fa7b7c89bc3ba4087c144f0102c"
 const usage = `nhm: the herdr wrapper of the ACFS flywheel (what ntm is to tmux).
 
 Usage:
-  nhm version [--json]   print the version
+  nhm version [--short] [--json]
+                         print the version
   nhm spawn <session> [--cc=N[:MODEL]] [--cod=N] … [--prompt T] [--dry-run] [--json]
                          start agents: identity, pane, binding, kickoff
   nhm add <session> …    the same, into an existing workspace
@@ -109,7 +110,8 @@ Usage:
                          the agents a usage limit stopped
   nhm palette | board | menu
                          the prompt palette, the agent board, the nhm menu
-  nhm dashboard          ntm's name for nhm board
+  nhm dashboard | dash | d
+                         ntm's names for nhm board
   nhm bind [--unbind | --force | --show | --print-client] [--dry-run]
                          herdr keys from [keys] in nhm's config (default prefix+a
                          palette, prefix+d board, prefix+m menu); --unbind opts out
@@ -207,9 +209,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runLimits(args[1:], stdout, stderr)
 	case "palette":
 		return runPalette(args[1:], stdout, stderr)
-	case "board", "dashboard":
-		// dashboard is ntm's name for the board (the operator's F.7
-		// ruling, nhm-k9d).
+	case "board", "dashboard", "dash", "d":
+		// dashboard, with ntm's short names dash and d, is ntm's name for
+		// the board (the operator's F.7 ruling, nhm-k9d).
 		return runBoard(args[1:], stdout, stderr)
 	case "menu":
 		return runMenu(args[1:], stdout, stderr)
@@ -249,11 +251,13 @@ type VersionInfo struct {
 }
 
 func runVersion(args []string, stdout, stderr io.Writer) int {
-	asJSON := false
+	asJSON, short := false, false
 	for _, a := range args {
 		switch a {
 		case "--json":
 			asJSON = true
+		case "--short", "-s":
+			short = true
 		default:
 			fmt.Fprintf(stderr, "nhm version: unknown flag %q\n", a)
 			return 2
@@ -272,6 +276,11 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "nhm version: %v\n", err)
 			return 1
 		}
+		return 0
+	}
+	if short {
+		// ntm's --short: the version alone (--json wins over it, as in ntm).
+		fmt.Fprintln(stdout, info.Version)
 		return 0
 	}
 	// ntm's headline, "ntm version <v>": ACFS's export-config.sh reads

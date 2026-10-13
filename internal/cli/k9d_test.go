@@ -24,6 +24,15 @@ func TestVersionHasNTMsHeadline(t *testing.T) {
 	if code, out, _ := run("--version"); code != 0 || !strings.HasPrefix(out, "nhm version "+Version+"\n") {
 		t.Errorf("--version = %d %q", code, out)
 	}
+	// ntm's --short, -s: the version alone; --json wins over it.
+	for _, flag := range []string{"--short", "-s"} {
+		if code, out, errOut := run("version", flag); code != 0 || out != Version+"\n" || errOut != "" {
+			t.Errorf("version %s = %d %q %q", flag, code, out, errOut)
+		}
+	}
+	if code, out, _ := run("version", "--short", "--json"); code != 0 || !strings.HasPrefix(out, "{") {
+		t.Errorf("version --short --json = %d %q", code, out)
+	}
 }
 
 // nhm dashboard and nhm logs are ntm's names for nhm board and nhm read:
@@ -36,6 +45,8 @@ func TestDashboardAndLogsAreAliases(t *testing.T) {
 		calls       [][]string
 	}{
 		{"dashboard", "board", [][]string{{"--help"}, {"session"}}},
+		{"dash", "board", [][]string{{"--help"}, {"session"}}},
+		{"d", "board", [][]string{{"--help"}, {"session"}}},
 		{"logs", "read", [][]string{{"--help"}, {}, {"one", "two", "three"}}},
 	} {
 		for _, args := range c.calls {
