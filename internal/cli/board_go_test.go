@@ -14,6 +14,7 @@ import (
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/ui"
+	"github.com/arosl/nhm/internal/ui/runner"
 )
 
 // boardHerdr serves workspace w1 and the panes the plugin opens, each
@@ -137,6 +138,40 @@ func TestGoBoardOpensThenFocuses(t *testing.T) {
 		if !strings.Contains(string(r.Params), `"w1:t9"`) {
 			t.Fatalf("tab.focus = %+v", tabs)
 		}
+	}
+}
+
+// The real board's config hands its guard the runner's Ended for this
+// instance: a request held for a job is released once the job has a
+// result (QuietSpring's re-check of 1ce695a, LOW 3).
+func TestGoBoardConfigReleasesEndedJobs(t *testing.T) {
+	s, _ := cliInstance(t)
+	boardHerdr(t, s)
+	ie, err := openInstance(s.SocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ie.db.Close() }()
+	cfg := goBoardConfig(context.Background(), ie, ui.Context{SocketPath: s.SocketPath, WorkspaceID: "w1"}, nil, nil, nil)
+	if cfg.OperationEnded == nil || cfg.NewOperationID == nil {
+		t.Fatal("the board's guard has no ids or no release")
+	}
+	id, err := cfg.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OperationEnded(id) {
+		t.Fatalf("%s ended before its job ran", id)
+	}
+	dir := runner.JobDir(ie.inst.Dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runner.ResultPath(dir, id), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OperationEnded(id) {
+		t.Fatalf("%s did not end with its result written", id)
 	}
 }
 

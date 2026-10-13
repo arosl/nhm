@@ -32,6 +32,8 @@ type fakeHerdr struct {
 	tabErr     error
 	// onOpen runs as the pane opens (a board that starts at once).
 	onOpen func(paneID string, p herdr.PluginPaneOpenParams)
+	// onTabFocus runs as herdr brings a tab in front.
+	onTabFocus func()
 }
 
 func newFake(workspaces ...string) *fakeHerdr {
@@ -93,10 +95,14 @@ func (f *fakeHerdr) PluginPaneFocus(_ context.Context, pane string) error {
 
 func (f *fakeHerdr) TabFocus(_ context.Context, tab string) (herdr.TabInfo, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.tabs = append(f.tabs, tab)
-	if f.tabErr != nil {
-		return herdr.TabInfo{}, f.tabErr
+	err, hook := f.tabErr, f.onTabFocus
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err != nil {
+		return herdr.TabInfo{}, err
 	}
 	return herdr.TabInfo{TabID: tab, Focused: true}, nil
 }
@@ -187,6 +193,42 @@ func TestRestoredShellIsNotTheBoard(t *testing.T) {
 	}
 	if len(h.focused) != 0 {
 		t.Fatalf("focused %v", h.focused)
+	}
+}
+
+// The tab comes in front after the workspace lock: a board that registers
+// while herdr does it is not kept waiting (a slow tab.focus would make it
+// give up on the lock). Each of Open's three paths.
+func TestTabFocusRunsAfterTheLock(t *testing.T) {
+	env, c := testEnv(t)
+	env.LockWait = 200 * time.Millisecond
+	h := newFake("w1")
+	ctx := context.Background()
+	var lockErrs []error
+	h.onTabFocus = func() {
+		lockErrs = append(lockErrs, env.locked(ctx, "w1", func() error { return nil }))
+	}
+	res, err := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"}) // opened
+	if err != nil || res.Action != Opened {
+		t.Fatalf("Open = %+v, %v", res, err)
+	}
+	c.add(time.Second)
+	if again, err := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"}); err != nil || again.Action != Awaiting {
+		t.Fatalf("Open while starting = %+v, %v", again, err)
+	}
+	if _, err := Register(ctx, env, h, "w1", res.Token, Self{PID: h.shell(res.PaneID)}); err != nil {
+		t.Fatal(err)
+	}
+	if third, err := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"}); err != nil || third.Action != Focused {
+		t.Fatalf("Open of the live board = %+v, %v", third, err)
+	}
+	if len(lockErrs) != 3 {
+		t.Fatalf("%d tab.focus calls", len(lockErrs))
+	}
+	for i, err := range lockErrs {
+		if err != nil {
+			t.Errorf("tab.focus %d ran under the workspace lock: %v", i, err)
+		}
 	}
 }
 

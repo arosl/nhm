@@ -404,9 +404,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.waitChanged()
 	case zoomMsg:
-		if msg.err != nil {
+		var unshown *actions.ZoomUnshown
+		switch {
+		case errors.As(msg.err, &unshown):
+			// The pane is zoomed; only its tab did not come in front.
+			m.say(true, "zoomed "+msg.name+", but herdr did not bring its tab in front: "+unshown.Reason)
+		case msg.err != nil:
 			m.say(true, "zoom "+msg.name+": "+msg.err.Error())
-		} else {
+		default:
 			m.say(false, "zoomed "+msg.name)
 		}
 		return m, nil

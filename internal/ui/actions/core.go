@@ -62,7 +62,8 @@ type Core struct {
 	// Zoom focuses the target's workspace and zooms its pane (nhm zoom).
 	// A bound target is found by its binding, and refused when the
 	// binding is at another generation: the agent picked is gone. It
-	// changes no agent. It returns the pane it zoomed.
+	// changes no agent. It returns the pane it zoomed. A *ZoomUnshown
+	// error means the pane is zoomed, but its tab did not come in front.
 	Zoom func(ctx context.Context, t ui.Target) (string, error)
 	// Focus focuses a workspace (nhm attach); it changes no agent.
 	Focus func(ctx context.Context, workspaceID string) error
@@ -70,6 +71,18 @@ type Core struct {
 	// stop): its results stay, and no agent retires. A dry run only reads
 	// the run (the review).
 	EnsembleStop func(ctx context.Context, run string, dryRun bool, opID string) (ensemble.Run, error)
+}
+
+// ZoomUnshown is Core.Zoom's error when the pane is zoomed but herdr did
+// not bring the pane's tab in front, so an attached client may still
+// show another tab. The zoom worked: a surface reports it with a warning.
+type ZoomUnshown struct {
+	PaneID string
+	Reason string
+}
+
+func (e *ZoomUnshown) Error() string {
+	return "zoomed " + e.PaneID + ", but herdr did not bring its tab in front: " + e.Reason
 }
 
 // SpawnRequest is a spawn or an add as the spawn wizard collects it. The

@@ -138,8 +138,11 @@ func TestZoomAndFocus(t *testing.T) {
 	core := Core{
 		Zoom: func(_ context.Context, tg ui.Target) (string, error) {
 			zoomed = append(zoomed, tg)
-			if tg.Generation == 9 {
+			switch tg.Generation {
+			case 9:
 				return "", errors.New("the agent you picked is gone")
+			case 7:
+				return "w1:p1", &ZoomUnshown{PaneID: "w1:p1", Reason: "pane w1:p1 is gone"}
 			}
 			return "w1:p1", nil
 		},
@@ -155,6 +158,14 @@ func TestZoomAndFocus(t *testing.T) {
 	gone.Generation = 9
 	if res, err := zoom.Do(context.Background(), core, Request{Context: ctxKill, Targets: []ui.Target{gone}}); err == nil || res.Status != "refused" {
 		t.Fatalf("zoom of a gone agent = %+v %v", res, err)
+	}
+	// The pane is zoomed but its tab did not come in front: zoomed, with
+	// a warning, never refused.
+	unshown := b1
+	unshown.Generation = 7
+	if res, err := zoom.Do(context.Background(), core, Request{Context: ctxKill, Targets: []ui.Target{unshown}}); err != nil ||
+		res.Status != "zoomed" || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "did not bring its tab in front") {
+		t.Fatalf("zoom with its tab not in front = %+v %v", res, err)
 	}
 	focus := mustAction(t, "workspace.attach")
 	if _, err := focus.Do(context.Background(), core, Request{Context: ctxKill}); err == nil {

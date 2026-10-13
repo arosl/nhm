@@ -287,6 +287,9 @@ type OpenResult struct {
 // herdr cannot say whether the board is live, it refuses.
 func Open(ctx context.Context, env Env, h Opener, req OpenRequest) (OpenResult, error) {
 	var res OpenResult
+	// The board's pane and tab to bring in front, after the lock: a slow
+	// tab.focus must not keep a starting board from registering.
+	var showPane, showTab string
 	err := env.locked(ctx, req.WorkspaceID, func() error {
 		old, err := env.read(req.WorkspaceID)
 		if err != nil {
@@ -302,20 +305,18 @@ func Open(ctx context.Context, env Env, h Opener, req OpenRequest) (OpenResult, 
 				if err := h.PluginPaneFocus(ctx, old.PaneID); err != nil {
 					return fmt.Errorf("uilaunch: focus the board: %w", err)
 				}
-				res = OpenResult{Action: Focused, PaneID: old.PaneID, Token: old.Token, Unshown: show(ctx, h, old.PaneID, "")}
+				res, showPane = OpenResult{Action: Focused, PaneID: old.PaneID, Token: old.Token}, old.PaneID
 				return nil
 			case Starting:
 				// herdr's own answer named the pane: it is this launch's,
 				// so it can be focused before the board registers.
-				var unshown string
 				if old.PaneID != "" {
 					if err := h.PluginPaneFocus(ctx, old.PaneID); err != nil {
 						return fmt.Errorf("uilaunch: focus the starting board: %w", err)
 					}
-					unshown = show(ctx, h, old.PaneID, "")
 				}
 				at := old.OpenedAt
-				res = OpenResult{Action: Awaiting, PaneID: old.PaneID, Token: old.Token, OpenedAt: &at, Unshown: unshown}
+				res, showPane = OpenResult{Action: Awaiting, PaneID: old.PaneID, Token: old.Token, OpenedAt: &at}, old.PaneID
 				return nil
 			}
 			res.Dropped = st.Reason
@@ -359,9 +360,12 @@ func Open(ctx context.Context, env Env, h Opener, req OpenRequest) (OpenResult, 
 			return err
 		}
 		res.Action, res.PaneID, res.Token = Opened, l.PaneID, token
-		res.Unshown = show(ctx, h, l.PaneID, pane.Pane.TabID)
+		showPane, showTab = l.PaneID, pane.Pane.TabID
 		return nil
 	})
+	if err == nil && showPane != "" {
+		res.Unshown = show(ctx, h, showPane, showTab)
+	}
 	return res, err
 }
 

@@ -303,6 +303,16 @@ func TestZoom(t *testing.T) {
 	if len(got) != 1 || got[0] != "w1/w1:p2" || !strings.Contains(plain(m), "zoomed BlueLake") {
 		t.Fatalf("zoomed %v\n%s", got, plain(m))
 	}
+	// The pane is zoomed, but its tab did not come in front: the board
+	// says so, and does not call it a failed zoom.
+	unshown := newModel(t, Config{Zoom: func(_ context.Context, ws, pane string) error {
+		return &actions.ZoomUnshown{PaneID: pane, Reason: "no such tab"}
+	}})
+	unshown.Update(press(unshown, "enter")())
+	if v := plain(unshown); !strings.Contains(v, "zoomed IcyKnoll, but herdr did not bring its tab in front: no such tab") ||
+		strings.Contains(v, "zoom IcyKnoll:") {
+		t.Fatalf("a zoom without its tab:\n%s", v)
+	}
 
 	off := newModel(t, Config{})
 	if cmd := press(off, "enter"); cmd != nil {

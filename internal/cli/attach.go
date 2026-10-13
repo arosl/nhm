@@ -13,6 +13,7 @@ import (
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
+	"github.com/arosl/nhm/internal/ui/actions"
 )
 
 const attachUsage = `Usage: nhm attach [session] [--socket PATH] [--json]
@@ -116,7 +117,12 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
 	}
 	z, err := zoomPane(ctx, ie.herdr, ws, res.PaneID)
-	if err != nil {
+	var unshown *actions.ZoomUnshown
+	switch {
+	case errors.As(err, &unshown):
+		// The pane is zoomed; only its tab did not come in front.
+		env.Warnings = append(env.Warnings, unshown.Error())
+	case err != nil:
 		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 	}
 	res.Zoomed = z.Zoomed
@@ -131,7 +137,9 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 }
 
 // zoomPane focuses workspace ws, zooms pane on, and brings the pane's tab
-// in front: nhm zoom, the menu's zoom and the board's.
+// in front: nhm zoom, the menu's zoom and the board's. When only the tab
+// fails, the error is an *actions.ZoomUnshown: the pane is zoomed, and the
+// caller warns.
 func zoomPane(ctx context.Context, h *herdr.Client, ws, pane string) (herdr.ZoomResult, error) {
 	if err := h.WorkspaceFocus(ctx, ws); err != nil {
 		return herdr.ZoomResult{}, err
@@ -140,7 +148,10 @@ func zoomPane(ctx context.Context, h *herdr.Client, ws, pane string) (herdr.Zoom
 	if err != nil {
 		return z, err
 	}
-	return z, frontTab(ctx, h, pane)
+	if err := frontTab(ctx, h, pane); err != nil {
+		return z, &actions.ZoomUnshown{PaneID: pane, Reason: err.Error()}
+	}
+	return z, nil
 }
 
 // frontTab brings pane's tab in front of herdr's attached clients. herdr

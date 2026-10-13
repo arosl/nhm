@@ -161,7 +161,9 @@ func uiZoom(ctx context.Context, ie *instanceEnv, t ui.Target) (string, error) {
 		return "", fmt.Errorf("pane %q is gone", pane)
 	}
 	if _, err := zoomPane(ctx, ie.herdr, ws, pane); err != nil {
-		return "", err
+		// An *actions.ZoomUnshown: the pane is zoomed, and the action
+		// warns that its tab did not come in front.
+		return pane, err
 	}
 	return pane, nil
 }

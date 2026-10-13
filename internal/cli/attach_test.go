@@ -140,6 +140,30 @@ func TestZoomResolvesSlotNameKindAndPaneID(t *testing.T) {
 	}
 }
 
+// The pane is zoomed but herdr does not bring its tab in front: nhm zoom
+// succeeds with a warning, never fails a zoom that worked.
+func TestZoomWarnsWhenItsTabStaysBehind(t *testing.T) {
+	s, calls := zoomServer(t)
+	s.Handle("tab.focus", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return nil, &herdrtest.Error{Code: "tab_not_found", Message: "no such tab"}
+	})
+	code, out, errOut := runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath, "--json")
+	env := decodeEnvelope(t, out)
+	res, _ := env["result"].(map[string]any)
+	warnings, _ := env["warnings"].([]any)
+	if code != exitOK || res["zoomed"] != true || len(warnings) != 1 ||
+		!strings.Contains(warnings[0].(string), "zoomed w1:p2, but herdr did not bring its tab in front") {
+		t.Fatalf("zoom = %d %s %s", code, out, errOut)
+	}
+	if got := calls(); strings.Join(got, ";") != "workspace.focus w1;pane.zoom w1:p2 on" {
+		t.Fatalf("calls = %v", got)
+	}
+	code, out, errOut = runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath)
+	if code != exitOK || !strings.Contains(out, "zoomed BlueLake") || !strings.Contains(errOut, "warning: zoomed w1:p2, but herdr did not") {
+		t.Fatalf("zoom = %d %q %q", code, out, errOut)
+	}
+}
+
 func TestRunDispatchesAttachAndZoom(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

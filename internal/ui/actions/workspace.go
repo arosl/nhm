@@ -227,7 +227,13 @@ func runWake(ctx context.Context, core Core, req Request) (Result, error) {
 func runZoom(ctx context.Context, core Core, req Request) (Result, error) {
 	t := req.Targets[0]
 	pane, err := core.Zoom(ctx, t)
-	if err != nil {
+	var unshown *ZoomUnshown
+	switch {
+	case errors.As(err, &unshown):
+		// The pane is zoomed; only its tab did not come in front.
+		return Result{Status: "zoomed", Targets: []TargetResult{{Target: t, Name: unshown.PaneID, Status: "zoomed"}},
+			Lines: []string{"zoomed " + unshown.PaneID}, Warnings: []string{unshown.Error()}}, nil
+	case err != nil:
 		return Result{Status: "refused", Targets: []TargetResult{{Target: t, Status: "refused", Reason: err.Error()}}}, err
 	}
 	return Result{Status: "zoomed", Targets: []TargetResult{{Target: t, Name: pane, Status: "zoomed"}},

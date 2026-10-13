@@ -169,6 +169,38 @@ func runGoBoard(stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm board: %v; the board takes no actions\n", launchErr)
 		bin = board.Unwatched(launchErr)
 	}
+	m, err := dashboard.New(goBoardConfig(ctx, ie, c, b, bin, inbox))
+	if err != nil {
+		fmt.Fprintf(stderr, "nhm board: %v\n", err)
+		return exitError
+	}
+	// herdr's events only mark the agent state for a refresh.
+	events := make(chan struct{}, 1)
+	go watchEvents(ctx, ie.herdr, events)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-events:
+				b.Invalidate()
+			}
+		}
+	}()
+	theme.ApplyLipGlossDefaults(theme.Current())
+	if _, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run(); err != nil &&
+		!errors.Is(err, tea.ErrProgramKilled) {
+		fmt.Fprintf(stderr, "nhm board: %v\n", err)
+		return exitError
+	}
+	return exitOK
+}
+
+// goBoardConfig is the Go board's dashboard config on instance ie, for
+// context c: the table's core as runner jobs, the guard's operation ids
+// and its release of ended jobs, and the seams of the board's keys.
+func goBoardConfig(ctx context.Context, ie *instanceEnv, c ui.Context, b *board.Board, bin *board.Binary,
+	inbox func(context.Context, string, string) ([]agentmail.Message, error)) dashboard.Config {
 	h := ie.herdr
 	// The action menu runs the table's actions on the core: a mutation is
 	// a runner job under the guard's operation id, so it outlives the board.
@@ -182,7 +214,7 @@ func runGoBoard(stderr io.Writer) int {
 		memory = palette.NewSubmitter(core.Send, paletteReader(ie.db, jobs), paletteMemory(base.ProjectRoot),
 			func() (string, error) { return store.NewOperationID(time.Now()) })
 	}
-	m, err := dashboard.New(dashboard.Config{Board: b, Context: c, Binary: bin, Inbox: inbox, Memory: memory,
+	return dashboard.Config{Board: b, Context: c, Binary: bin, Inbox: inbox, Memory: memory,
 		Core:           core,
 		NewOperationID: func() (string, error) { return store.NewOperationID(time.Now()) },
 		// The board keeps one guard for its life: a request held for a
@@ -204,29 +236,5 @@ func runGoBoard(stderr io.Writer) int {
 		Zoom: func(ctx context.Context, ws, pane string) error {
 			_, err := zoomPane(ctx, h, ws, pane)
 			return err
-		}})
-	if err != nil {
-		fmt.Fprintf(stderr, "nhm board: %v\n", err)
-		return exitError
-	}
-	// herdr's events only mark the agent state for a refresh.
-	events := make(chan struct{}, 1)
-	go watchEvents(ctx, h, events)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-events:
-				b.Invalidate()
-			}
-		}
-	}()
-	theme.ApplyLipGlossDefaults(theme.Current())
-	if _, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run(); err != nil &&
-		!errors.Is(err, tea.ErrProgramKilled) {
-		fmt.Fprintf(stderr, "nhm board: %v\n", err)
-		return exitError
-	}
-	return exitOK
+		}}
 }
