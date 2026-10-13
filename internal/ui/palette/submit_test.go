@@ -171,26 +171,6 @@ func TestBuildRequestRefusals(t *testing.T) {
 	}
 }
 
-func TestReviewKeyBindsRevisionVariablesAndTargets(t *testing.T) {
-	a := Targets{{BindingID: "b1", Generation: 1}, {BindingID: "b2", Generation: 2}}
-	b := Targets{{BindingID: "b2", Generation: 2}, {BindingID: "b1", Generation: 1}}
-	p := Payload{Rev: 4, Vars: map[string]string{"thread": "x"}}
-	k := ReviewKey(p, a)
-	if k != ReviewKey(p, b) {
-		t.Fatal("the order of the targets changes the key")
-	}
-	for name, other := range map[string]string{
-		"revision":   ReviewKey(Payload{Rev: 5, Vars: p.Vars}, a),
-		"variables":  ReviewKey(Payload{Rev: 4, Vars: map[string]string{"thread": "y"}}, a),
-		"generation": ReviewKey(p, Targets{{BindingID: "b1", Generation: 2}, {BindingID: "b2", Generation: 2}}),
-		"target set": ReviewKey(p, a[:1]),
-	} {
-		if other == k {
-			t.Errorf("a change of %s keeps the key", name)
-		}
-	}
-}
-
 // A draft sent as a template: its placeholders are filled per target,
 // and a draft that starts with "---" is text, not front matter.
 func TestBodiesAreTemplateBodies(t *testing.T) {
@@ -244,9 +224,9 @@ func TestBodiesAreTemplateBodies(t *testing.T) {
 	}
 }
 
-// The palette's request through the core: the dry run sends nothing; the
-// send reaches only the frozen targets, refuses a busy one, and never
-// swaps in the agent that took a target's place.
+// The palette's request through the core: the send reaches only the
+// targets frozen at the keypress, refuses a busy one, and never swaps in
+// the agent that took a target's place.
 func TestPaletteSendThroughTheCore(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -260,8 +240,8 @@ func TestPaletteSendThroughTheCore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// After the review: BlueLake is recycled in place (a new generation),
-	// GreenOwl hands its pane to a new identity.
+	// After the keypress: BlueLake is recycled in place (a new
+	// generation), GreenOwl hands its pane to a new identity.
 	if _, err := w.env.Bindings.Occupy(ctx, blue.BindingID, blue.Generation, bindings.Occupant{WorkspaceID: "w1",
 		TabID: "w1:t1", PaneID: "w1:p3", HerdrAlias: "bluelake", Kind: "codex"}); err != nil {
 		t.Fatal(err)
@@ -273,22 +253,7 @@ func TestPaletteSendThroughTheCore(t *testing.T) {
 	other := w.bind(t, "Bystander", "w1:p5", "claude", herdr.StatusIdle)
 
 	sub := NewSubmitter(w.sender(), func(ctx context.Context, id string) (send.Result, error) { return send.Stored(ctx, w.db, id) },
-		func() (string, error) { return store.NewOperationID(time.Now()) })
-	_, cmd := sub.Preview(req, "k")
-	pm := cmd().(PreviewMsg)
-	if pm.Err != nil || pm.Key != "k" || !pm.Result.DryRun || pm.Result.OperationID != "" {
-		t.Fatalf("preview = %+v", pm)
-	}
-	if rc := receiptFor(t, pm.Result, icy.BindingID); rc.Status != "would_send" {
-		t.Fatalf("preview of the ready target = %+v", rc)
-	}
-	if rc := receiptFor(t, pm.Result, busy.BindingID); rc.Status != send.StatusRefused || rc.Result.Gate != send.GateBusy {
-		t.Fatalf("preview of the busy target = %+v", rc)
-	}
-	if len(w.fake.sent()) != 0 {
-		t.Fatal("the preview prompted")
-	}
-
+		nil, func() (string, error) { return store.NewOperationID(time.Now()) })
 	_, opID, cmd, err := sub.Submit(req)
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +304,7 @@ func TestSubmitRunsEvenIfTheProgramQuits(t *testing.T) {
 		calls++
 		mu.Unlock()
 		return send.Result{OperationID: req.OperationID}, nil
-	}, nil, func() (string, error) { return "op-1", nil })
+	}, nil, nil, func() (string, error) { return "op-1", nil })
 	_, opID, _, err := sub.Submit(send.Request{Message: "x"})
 	if err != nil || opID != "op-1" {
 		t.Fatalf("submit = %q %v", opID, err)
@@ -376,31 +341,44 @@ func TestSubmitterRequestsAndOutcomes(t *testing.T) {
 		}
 		return send.Result{OperationID: req.OperationID}, nil
 	}
+	var queries []string
+	memory := func(_ context.Context, text string) (Memory, error) {
+		mu.Lock()
+		queries = append(queries, text)
+		mu.Unlock()
+		if text == "fails" {
+			return Memory{}, errors.New("cm: not installed")
+		}
+		return Memory{Query: text, Block: "[memory]"}, nil
+	}
 	sub := NewSubmitter(func(_ context.Context, req send.Request) (send.Result, error) {
 		mu.Lock()
 		got = append(got, req)
 		mu.Unlock()
 		return result(req)
-	}, nil, func() (string, error) { return store.NewOperationID(time.Now()) })
+	}, nil, memory, func() (string, error) { return store.NewOperationID(time.Now()) })
 
-	s1, c1 := sub.Preview(send.Request{Message: "ok", OperationID: "stale"}, "k1")
-	s2, c2 := sub.Preview(send.Request{Message: "ok"}, "k2")
+	s1, c1 := sub.Memory("first draft", 3)
+	s2, c2 := sub.Memory("fails", 4)
 	if s2 <= s1 {
 		t.Fatalf("sequence %d then %d", s1, s2)
 	}
-	// Answers can come in any order; each carries its request.
-	if m := c2().(PreviewMsg); m.Seq != s2 || m.Key != "k2" {
+	// Answers can come in any order; each carries its request and the
+	// draft revision it was made for.
+	if m := c2().(MemoryMsg); m.Seq != s2 || m.Rev != 4 || m.Err == nil {
 		t.Fatalf("second preview = %+v", m)
 	}
-	if m := c1().(PreviewMsg); m.Seq != s1 || m.Key != "k1" {
+	if m := c1().(MemoryMsg); m.Seq != s1 || m.Rev != 3 || m.Err != nil || m.Memory.Query != "first draft" || m.Memory.Block != "[memory]" {
 		t.Fatalf("first preview = %+v", m)
 	}
-	for _, r := range got[:2] {
-		if !r.DryRun || r.OperationID != "" {
-			t.Fatalf("a preview is a dry run with no operation id: %+v", r)
-		}
+	if len(got) != 0 || len(queries) != 2 {
+		t.Fatalf("a memory preview sends nothing: sends %d, queries %v", len(got), queries)
 	}
-	if m := sub.Reconcile("op-1")().(ReconcileMsg); m.Err == nil {
+	none := NewSubmitter(nil, nil, nil, nil)
+	if _, cmd := none.Memory("x", 1); cmd().(MemoryMsg).Err == nil {
+		t.Fatal("memory with no retrieval")
+	}
+	if m := none.Reconcile("op-1")().(ReconcileMsg); m.Err == nil {
 		t.Fatal("reconcile with no reader")
 	}
 
@@ -420,7 +398,7 @@ func TestSubmitterRequestsAndOutcomes(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for _, r := range got[2:] {
+	for _, r := range got {
 		if r.DryRun || !strings.HasPrefix(r.OperationID, "op-") {
 			t.Fatalf("a submission is real and has its id: %+v", r)
 		}

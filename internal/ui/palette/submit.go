@@ -2,15 +2,12 @@ package palette
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,12 +15,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/store/history"
 )
 
 // Target is a frozen identity (plan-v4 section 4): the binding and the
-// generation the palette saw, and what it shows of them.
+// generation the palette saw when the target was picked, and what it
+// shows of them.
 type Target struct {
 	BindingID  string `json:"binding_id"`
 	Generation int64  `json:"generation"`
@@ -34,16 +33,6 @@ type Target struct {
 
 // Targets is a frozen target set, in the order it was picked.
 type Targets []Target
-
-// Key identifies the set by its bindings and generations, in any order.
-func (ts Targets) Key() string {
-	parts := make([]string, len(ts))
-	for i, t := range ts {
-		parts[i] = t.BindingID + "@" + strconv.FormatInt(t.Generation, 10)
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, ",")
-}
 
 // Expect is the send's expected generation per binding.
 func (ts Targets) Expect() map[string]int64 {
@@ -63,20 +52,6 @@ func (ts Targets) PaneIDs() []string {
 		}
 	}
 	return out
-}
-
-// ReviewKey identifies what a review was made for: the payload's
-// revision and variables, and the target set. A preview whose key is
-// not the current one is stale.
-func ReviewKey(p Payload, ts Targets) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "rev %d\n", p.Rev)
-	keys := slices.Sorted(maps.Keys(p.Vars))
-	for _, k := range keys {
-		fmt.Fprintf(h, "var %q=%q\n", k, p.Vars[k])
-	}
-	fmt.Fprintf(h, "targets %s\n", ts.Key())
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // Errors of a submission.
@@ -157,20 +132,36 @@ type Sender func(ctx context.Context, req send.Request) (send.Result, error)
 // Reader reads what the core recorded for an operation (send.Stored).
 type Reader func(ctx context.Context, opID string) (send.Result, error)
 
+// Memory is what CM and CASS would put before a draft: the block, its
+// items and each source's report, as `nhm memory` shows it for the
+// draft's text. It depends on the text only; a real send also leaves
+// out what a target's context already got.
+type Memory struct {
+	Query string
+	Block string
+	Items []enrich.Item
+	CM    enrich.Report
+	CASS  enrich.Report
+}
+
+// MemoryFunc retrieves the memory for a draft's text, with the modes
+// and budgets a send would use. The caller wires it.
+type MemoryFunc func(ctx context.Context, text string) (Memory, error)
+
 // Deadlines of the async calls. A submission is not cancelled when the
 // popup closes; its deadline only bounds a hung call.
 const (
-	PreviewTimeout = 30 * time.Second
-	SubmitTimeout  = 2 * time.Minute
-	ReadTimeout    = 10 * time.Second
+	MemoryTimeout = 30 * time.Second
+	SubmitTimeout = 2 * time.Minute
+	ReadTimeout   = 10 * time.Second
 )
 
-// PreviewMsg is a dry run's answer. Seq is the request's number; Key is
-// the ReviewKey it was made for.
-type PreviewMsg struct {
+// MemoryMsg is a memory preview's answer for draft revision Rev. Seq is
+// the request's number.
+type MemoryMsg struct {
 	Seq    uint64
-	Key    string
-	Result send.Result
+	Rev    uint64
+	Memory Memory
 	Err    error
 }
 
@@ -222,15 +213,17 @@ func (m SubmitMsg) Outcome() Outcome {
 	return Unknown
 }
 
-// Submitter runs dry runs and submissions off bubbletea's update loop.
-// Each answer carries the number of its request, so the model drops the
-// stale ones. One submission runs at a time, and Wait lets the process
-// finish it before it exits: closing the popup does not cancel a send.
+// Submitter runs memory previews and submissions off bubbletea's update
+// loop. Each answer carries the number of its request (and a preview
+// its draft revision), so the model drops the stale ones. One
+// submission runs at a time, and Wait lets the process finish it before
+// it exits: closing the popup does not cancel a send.
 type Submitter struct {
-	send Sender
-	read Reader
-	// NewOperationID makes the id a submission is claimed under, so a
-	// lost answer can be read back by id.
+	send   Sender
+	read   Reader
+	memory MemoryFunc
+	// newOpID makes the id a submission is claimed under, so a lost
+	// answer can be read back by id.
 	newOpID func() (string, error)
 
 	mu       sync.Mutex
@@ -239,9 +232,10 @@ type Submitter struct {
 	wg       sync.WaitGroup
 }
 
-// NewSubmitter returns a Submitter over the caller's send and read.
-func NewSubmitter(s Sender, r Reader, newOpID func() (string, error)) *Submitter {
-	return &Submitter{send: s, read: r, newOpID: newOpID}
+// NewSubmitter returns a Submitter over the caller's send, read and
+// memory retrieval.
+func NewSubmitter(s Sender, r Reader, m MemoryFunc, newOpID func() (string, error)) *Submitter {
+	return &Submitter{send: s, read: r, memory: m, newOpID: newOpID}
 }
 
 func (s *Submitter) next() uint64 {
@@ -251,16 +245,17 @@ func (s *Submitter) next() uint64 {
 	return s.seq
 }
 
-// Preview starts a dry run of req: the same request with nothing
-// claimed or sent. key is the ReviewKey it is made for.
-func (s *Submitter) Preview(req send.Request, key string) (uint64, tea.Cmd) {
+// Memory starts a memory preview of text, made for draft revision rev.
+func (s *Submitter) Memory(text string, rev uint64) (uint64, tea.Cmd) {
 	seq := s.next()
-	req.DryRun, req.OperationID = true, ""
 	return seq, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), PreviewTimeout)
+		if s.memory == nil {
+			return MemoryMsg{Seq: seq, Rev: rev, Err: errors.New("palette: no memory retrieval")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), MemoryTimeout)
 		defer cancel()
-		res, _, err := call(ctx, s.send, req)
-		return PreviewMsg{Seq: seq, Key: key, Result: res, Err: err}
+		m, err := s.memory(ctx, text)
+		return MemoryMsg{Seq: seq, Rev: rev, Memory: m, Err: err}
 	}
 }
 
