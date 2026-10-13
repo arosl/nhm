@@ -18,6 +18,10 @@ import (
 	"github.com/arosl/nhm/internal/robot"
 )
 
+// healthLines is how many visible lines --robot-health reads of each agent
+// that is not working, as nhm limits does.
+const healthLines = 15
+
 // Robot exit codes, ntm's: 0 success, 1 error, 2 unavailable.
 const (
 	robotOK          = 0
@@ -47,6 +51,10 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		// recommendations. nhm answers the session form only.
 		return robotFail(stdout, robot.ErrCodeNotImplemented, "--robot-health without a session is not in this nhm",
 			"use --robot-health=SESSION for each agent's health; nhm health covers the runtime", "json", robotUnavailable, now)
+	}
+	if slices.Contains(args, "--robot-health=") {
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, "--robot-health requires a session name or no value for project health",
+			"Use --robot-health for project health or --robot-health=SESSION for session health", "json", robotError, now)
 	}
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -123,7 +131,23 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	case *activity != "":
 		return robotWrite(stdout, snapshot.ActivityFor(one, *ws, *format, now), robotOK)
 	case *health != "":
-		return robotWrite(stdout, snapshot.HealthFor(one, *ws, *format, now), robotOK)
+		// As ntm, read the screens now: each agent that is not working,
+		// its visible lines, for nhm's limit recogniser (nhm-8l6).
+		reads, errs := map[string]herdr.PaneRead{}, map[string]error{}
+		for _, a := range one.Agents {
+			if a.WorkspaceID != ws.ID || a.State == herdr.StatusWorking {
+				continue
+			}
+			n := healthLines
+			read, err := r.herdr.AgentRead(ctx, herdr.AgentReadParams{Target: a.PaneID, Source: herdr.ReadVisible, Lines: &n})
+			if err != nil {
+				errs[a.PaneID] = err
+				continue
+			}
+			read.Text = stripControl(read.Text)
+			reads[a.PaneID] = read
+		}
+		return robotWrite(stdout, snapshot.HealthFor(one, *ws, reads, errs, *format, now), robotOK)
 	}
 	reads, errs := map[string]herdr.PaneRead{}, map[string]error{}
 	for _, a := range one.Agents {

@@ -243,6 +243,9 @@ type Model struct {
 	herdrOK bool
 	// boards are nhm's live boards by pane id: no agent rows.
 	boards map[string]bool
+	// panes are herdr's live panes by id: an absent binding whose pane
+	// is not among them was closed, not left by its agent.
+	panes map[string]bool
 	// peers are the active bindings of every project, by workspace, for
 	// the mixed-workspace check: a build for one project still sees the
 	// other projects beside its agents (nhm-8ze).
@@ -558,6 +561,10 @@ func (m *Model) stage(name string, now func() time.Time, d time.Duration, ctx co
 
 // join puts herdr's agents and nhm's bindings together.
 func (m *Model) join(snap herdr.SessionSnapshot, all []bindings.Binding, opts Options) {
+	m.panes = map[string]bool{}
+	for _, p := range snap.Panes {
+		m.panes[p.PaneID] = true
+	}
 	byPane := map[string]bindings.Binding{}
 	for _, b := range all {
 		switch b.Status {

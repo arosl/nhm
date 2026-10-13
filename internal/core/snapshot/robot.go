@@ -1,14 +1,18 @@
 // Partly derived from ntm (github.com/Dicklesworthstone/ntm)
 // internal/robot/robot.go at commit 9d5ed977 (statusOverall,
-// statusHealthScore and the summary counting); see LICENSE in this
-// directory and PROVENANCE.md. Local changes: they read nhm's model and
-// its attention severities instead of ntm's alert and state stores.
+// statusHealthScore and the summary counting) and internal/robot/health.go
+// (calculateHealthState's order and GetSessionHealth's summary switch, in
+// HealthFor); see LICENSE in this directory and PROVENANCE.md. Local
+// changes: they read nhm's model and its attention severities instead of
+// ntm's alert and state stores; HealthFor reads herdr's states and nhm's
+// limit recogniser instead of ntm's screen checks.
 
 package snapshot
 
 import (
 	"math"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +20,7 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
+	"github.com/arosl/nhm/internal/integrations/quota"
 	"github.com/arosl/nhm/internal/robot"
 )
 
@@ -298,19 +303,72 @@ func ActivityFor(m *Model, ws Workspace, format string, now time.Time) robot.Act
 }
 
 // HealthFor projects one workspace onto ntm's --robot-health=SESSION
-// (nhm-hir), with ntm's order: unhealthy, blocked, rate_limited,
-// degraded, healthy. A bound agent gone from its pane is unhealthy (ntm's
-// crash, counted as a restart); herdr's blocked is ntm's interactive
-// gate; a limit line nhm limits saw is a rate limit; herdr's unknown is
-// degraded, as nhm cannot observe the agent. herdr gives no time of last
-// output, so idle_since_seconds stays 0.
-func HealthFor(m *Model, ws Workspace, format string, now time.Time) robot.SessionHealthOutput {
+// (nhm-hir, nhm-8l6), with ntm's order: unhealthy, blocked, rate_limited,
+// degraded, healthy. reads are this call's screen reads of the agents
+// that are not working, by herdr pane id; errs are the reads that failed.
+// A bound agent gone from a pane that is still open is unhealthy (ntm's
+// crash, counted as a restart); a closed pane is left out, as tmux no
+// longer lists it for ntm. herdr's blocked is ntm's interactive gate. A
+// limit line that nhm's recogniser finds on the screen is a rate limit, as
+// ntm's screen check is; a working agent has not hit one. herdr's unknown
+// is ntm's unclassified pane: healthy, at confidence 0.5. herdr gives no
+// time of last output, so idle_since_seconds stays 0. The rows come in
+// pane order.
+func HealthFor(m *Model, ws Workspace, reads map[string]herdr.PaneRead, errs map[string]error, format string, now time.Time) robot.SessionHealthOutput {
 	out := robot.SessionHealthOutput{RobotResponse: robot.NewResponse(true, format, now), Session: sessionName(ws),
 		CheckedAt: now.UTC(), Agents: []robot.SessionAgentHealth{}}
-	add := func(h robot.SessionAgentHealth) {
-		out.Agents = append(out.Agents, h)
+	type row struct {
+		slot string
+		h    robot.SessionAgentHealth
+	}
+	var rows []row
+	for _, a := range m.Agents {
+		if a.WorkspaceID != ws.ID {
+			continue
+		}
+		_, _, conf := Activity(a.State)
+		known := a.State == herdr.StatusIdle || a.State == herdr.StatusDone || a.State == herdr.StatusWorking || a.State == herdr.StatusBlocked
+		if !known {
+			conf = 0.5
+		}
+		h := robot.SessionAgentHealth{Pane: paneIdx(a.Slot), PaneTarget: paneTarget(a.Slot, a.PaneID), AgentType: NTMType(a.Kind),
+			Health: robot.HealthHealthy, Confidence: conf, NHM: agentExtras(a)}
+		x, _ := h.NHM.(map[string]any)
+		limit := ""
+		if r, ok := reads[a.PaneID]; ok && a.State != herdr.StatusWorking {
+			limit = quota.FindLimit(a.Kind, r.Text)
+		}
+		if err := errs[a.PaneID]; err != nil && x != nil {
+			// As ntm when a check could not run: less confidence.
+			x["read_error"] = err.Error()
+			h.Confidence *= 0.8
+		}
+		switch {
+		case a.State == herdr.StatusBlocked:
+			h.Health, h.LastError = robot.HealthBlocked, "the agent waits for a person (herdr: blocked)"
+		case limit != "":
+			// As ntm: a count and the wait, no last_error.
+			h.Health, h.RateLimitCount = robot.HealthRateLimited, 1
+			h.BackoffRemaining = backoff(m, a.Kind, now)
+			if x != nil {
+				x["limit"] = limit
+			}
+		}
+		rows = append(rows, row{a.Slot, h})
+	}
+	for _, b := range m.Absent {
+		if b.WorkspaceID != ws.ID || !m.panes[b.PaneID] {
+			continue
+		}
+		rows = append(rows, row{b.Slot, robot.SessionAgentHealth{Pane: paneIdx(b.Slot), PaneTarget: paneTarget(b.Slot, b.PaneID),
+			AgentType: NTMType(b.Kind), Health: robot.HealthUnhealthy, Restarts: 1, LastError: "the agent is gone from its pane",
+			Confidence: 1, NHM: map[string]any{"binding_id": b.ID, "mail_name": b.MailName, "pane_id": b.PaneID}}})
+	}
+	slices.SortStableFunc(rows, func(p, q row) int { return compareSlots(p.slot, q.slot) })
+	for _, r := range rows {
+		out.Agents = append(out.Agents, r.h)
 		out.Summary.Total++
-		switch h.Health {
+		switch r.h.Health {
 		case robot.HealthHealthy:
 			out.Summary.Healthy++
 		case robot.HealthDegraded:
@@ -323,37 +381,25 @@ func HealthFor(m *Model, ws Workspace, format string, now time.Time) robot.Sessi
 			out.Summary.RateLimited++
 		}
 	}
-	for _, a := range m.Agents {
-		if a.WorkspaceID != ws.ID {
-			continue
-		}
-		_, _, conf := Activity(a.State)
-		h := robot.SessionAgentHealth{Pane: paneIdx(a.Slot), PaneTarget: paneTarget(a.Slot, a.PaneID), AgentType: NTMType(a.Kind),
-			Health: robot.HealthHealthy, Confidence: conf, NHM: agentExtras(a)}
-		switch {
-		case a.State == herdr.StatusBlocked:
-			h.Health, h.LastError = robot.HealthBlocked, "the agent waits for a person (herdr: blocked)"
-		case a.Limit != "":
-			// As ntm: a count and the wait, no last_error.
-			h.Health, h.RateLimitCount = robot.HealthRateLimited, 1
-			h.BackoffRemaining = backoff(m, a.Kind, now)
-			if x, ok := h.NHM.(map[string]any); ok {
-				x["limit"] = a.Limit
-			}
-		case a.State != herdr.StatusIdle && a.State != herdr.StatusDone && a.State != herdr.StatusWorking:
-			h.Health = robot.HealthDegraded
-		}
-		add(h)
-	}
-	for _, b := range m.Absent {
-		if b.WorkspaceID != ws.ID {
-			continue
-		}
-		add(robot.SessionAgentHealth{Pane: paneIdx(b.Slot), PaneTarget: paneTarget(b.Slot, b.PaneID), AgentType: NTMType(b.Kind),
-			Health: robot.HealthUnhealthy, Restarts: 1, LastError: "the agent is gone from its pane",
-			NHM: map[string]any{"binding_id": b.ID, "mail_name": b.MailName, "pane_id": b.PaneID}})
-	}
 	return out
+}
+
+// compareSlots orders "N.M" slots by tab, then pane; a row without a slot
+// comes last.
+func compareSlots(a, b string) int {
+	sa, ea := bindings.ParseSlot(a)
+	sb, eb := bindings.ParseSlot(b)
+	switch {
+	case ea != nil && eb != nil:
+		return 0
+	case ea != nil:
+		return 1
+	case eb != nil:
+		return -1
+	case sa.Tab != sb.Tab:
+		return sa.Tab - sb.Tab
+	}
+	return sa.Pane - sb.Pane
 }
 
 // backoff is the seconds until the kind's quota pool resets: the latest
