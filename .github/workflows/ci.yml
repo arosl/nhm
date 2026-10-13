@@ -53,9 +53,10 @@ jobs:
           bash tests/install_test.sh
 
   herdr-fit:
-    # nhm doctor --herdr-fit --placements against a private, headless herdr
-    # server of the pinned release (its SHA256 is checked): the X0 fit test
-    # that nhm's interactive surfaces rely on (nhm-qbi.11).
+    # A private, headless herdr server of the pinned release (its SHA256 is
+    # checked): nhm doctor --herdr-fit --placements, the X0 fit test that
+    # nhm's interactive surfaces rely on, then the surfaces themselves
+    # through an attached client in a pty (nhm-qbi.11).
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -64,3 +65,5 @@ jobs:
           go-version-file: go.mod
       - name: nhm doctor --herdr-fit
         run: bash tests/herdr_fit_test.sh
+      - name: the Go surfaces in herdr
+        run: bash tests/surfaces_e2e.sh

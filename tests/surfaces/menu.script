@@ -1,0 +1,62 @@
+# The Go menu through an attached herdr client (nhm-qbi.11): prefix+m
+# from nhm bind, the diagnostics and views rows, a small client, and keys
+# typed into a popup. tests/surfaces_e2e.sh runs it.
+sleep 2
+note dismiss herdr's first-run welcome (continue) and settings screen (esc)
+key enter
+sleep 1.5
+key esc
+sleep 1.5
+note prefix+m: nhm bind's key opens the Go menu in a popup
+key ctrl+b m
+expect 8 diagnostics ›
+expect 2 views ›
+expect 2 workspace proj
+note x diagnostics, v version
+key x
+expect 3 › diagnostics
+key v
+expect 8 herdr protocol 22
+note esc back, d doctor
+key esc
+key d
+expect 15 ok   herdr
+key esc esc
+note v views, s status: the adopted agent is there
+key v
+expect 3 › views
+key s
+expect 10 SESSION
+expect 2 IcyKnoll
+key esc esc
+note the agent prints a line with a colour and a title sequence
+run printf 'ack HOSTILE-MARK \033[31mred\033[0m \033]0;pwned\007end\n' >>"$FAKE_CONTROL"
+note g agent, r read, the picker, enter: the read view follows IcyKnoll
+key g
+expect 3 › agent
+key r
+expect 5 IcyKnoll
+key enter
+expect 8 read IcyKnoll
+expect 8 following
+expect 8 HOSTILE-MARK red end
+refute 1 [31m
+key p
+expect 3 paused
+key esc esc
+note a small client: 40x12; the menu keeps its cursor row in sight
+resize 40 12
+key x
+expect 5 ▶
+key esc
+note esc at the top closes the menu; the popup is free again
+key esc
+sleep 1.5
+resize 120 40
+run : >"$HERDR_WORK/popup-keys.jsonl"; herdr plugin pane open --plugin nhm --entrypoint fit --env "NHM_FIT_OUT=$HERDR_WORK/popup-keys.jsonl" --env NHM_FIT_NONCE=keys | grep -q '"type":"ok"' && echo "the fit popup opened (no ui_busy)" >&2
+note keys typed in the client reach the popup
+expect 5 nhm doctor --herdr-fit
+key a esc space q
+sleep 1
+refute 2 nhm doctor --herdr-fit
+check test "$(grep -c '"event":"key"' "$HERDR_WORK/popup-keys.jsonl")" = 4 && grep -q '"reason":"q"' "$HERDR_WORK/popup-keys.jsonl"
