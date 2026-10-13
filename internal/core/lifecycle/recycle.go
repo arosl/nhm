@@ -147,14 +147,23 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	if b.Status != bindings.Active {
 		return fail(StageCheck, fmt.Errorf("%s is %s", b.MailName, b.Status))
 	}
+	// An agent that already exited leaves its pane at the shell: recycle
+	// skips the stop and starts the successor there (nhm-lsa). A pane that
+	// is gone, or that runs another program, is refused.
 	agent, err := env.Herdr.AgentGet(ctx, b.PaneID)
-	if err != nil {
+	exited := false
+	switch {
+	case noAgent(err):
+		if why := notAtShell(ctx, env, b.PaneID); why != "" {
+			return fail(StageCheck, fmt.Errorf("herdr: %w, and %s", err, why))
+		}
+		exited = true
+		res.Warnings = append(res.Warnings, b.MailName+" had already exited; recycle starts its successor without a stop")
+	case err != nil:
 		return fail(StageCheck, fmt.Errorf("herdr: %w", err))
-	}
-	if agent.AgentStatus != herdr.StatusIdle && agent.AgentStatus != herdr.StatusDone {
+	case agent.AgentStatus != herdr.StatusIdle && agent.AgentStatus != herdr.StatusDone:
 		return fail(StageCheck, fmt.Errorf("%s is %s; an agent is recycled only between turns (interrupt it first)", b.MailName, agent.AgentStatus))
-	}
-	if agent.Agent != "" && agent.Agent != b.Kind {
+	case agent.Agent != "" && agent.Agent != b.Kind:
 		return fail(StageCheck, fmt.Errorf("pane %s holds a %s agent; the binding is %s", b.PaneID, agent.Agent, b.Kind))
 	}
 	// The agent's beads as they are after the wait, read at most once:
@@ -214,14 +223,16 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	}
 
 	// Stop the old agent, then wait for the shell prompt and the cleared
-	// alias.
+	// alias. An agent that already exited needs no stop.
 	res.Stage = StageStop
-	if _, err := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: b.PaneID, Text: a.ExitCommand}); err != nil &&
-		herdr.ErrorCode(err) != herdr.CodeAgentPromptStalled {
-		return fail(StageStop, fmt.Errorf("typing %s: %w", a.ExitCommand, err))
-	}
-	if !waitExit(ctx, env, b) {
-		return fail(StageStop, fmt.Errorf("%s did not exit within %s; nothing started, the pane is as it was", b.MailName, stopWait))
+	if !exited {
+		if _, err := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: b.PaneID, Text: a.ExitCommand}); err != nil &&
+			herdr.ErrorCode(err) != herdr.CodeAgentPromptStalled {
+			return fail(StageStop, fmt.Errorf("typing %s: %w", a.ExitCommand, err))
+		}
+		if !waitExit(ctx, env, b) {
+			return fail(StageStop, fmt.Errorf("%s did not exit within %s; nothing started, the pane is as it was", b.MailName, stopWait))
+		}
 	}
 	// Providers write the last turn on exit: the final copy, indexed.
 	if original != "" {
@@ -300,11 +311,8 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 func waitExit(ctx context.Context, env Env, b bindings.Binding) bool {
 	deadline := env.now().Add(stopWait)
 	for env.now().Before(deadline) {
-		info, err := env.Herdr.PaneProcessInfo(ctx, b.PaneID)
-		shell := err == nil && info.ShellPID != nil && info.ForegroundProcessGroupID != nil && *info.ShellPID == *info.ForegroundProcessGroupID
-		_, aerr := env.Herdr.AgentGet(ctx, b.PaneID)
-		gone := herdr.ErrorCode(aerr) == herdr.CodeAgentNotFound || herdr.ErrorCode(aerr) == herdr.CodeAgentNotRunning
-		if shell && gone {
+		shell := notAtShell(ctx, env, b.PaneID) == ""
+		if _, aerr := env.Herdr.AgentGet(ctx, b.PaneID); shell && noAgent(aerr) {
 			return true
 		}
 		if ctx.Err() != nil {
@@ -313,6 +321,29 @@ func waitExit(ctx context.Context, env Env, b bindings.Binding) bool {
 		env.sleep(ctx, 250*time.Millisecond)
 	}
 	return false
+}
+
+// noAgent reports herdr's answer that a pane holds no agent: none is
+// found, or it no longer runs.
+func noAgent(err error) bool {
+	code := herdr.ErrorCode(err)
+	return code == herdr.CodeAgentNotFound || code == herdr.CodeAgentNotRunning
+}
+
+// notAtShell says why a pane is not at its shell: it is gone, herdr
+// cannot read it, or another program holds its foreground. "" when the
+// pane's shell holds the foreground.
+func notAtShell(ctx context.Context, env Env, pane string) string {
+	info, err := env.Herdr.PaneProcessInfo(ctx, pane)
+	switch {
+	case herdr.ErrorCode(err) == herdr.CodePaneNotFound:
+		return "pane " + pane + " is gone"
+	case err != nil:
+		return "pane " + pane + " cannot be read: " + err.Error()
+	case info.ShellPID == nil || info.ForegroundProcessGroupID == nil || *info.ShellPID != *info.ForegroundProcessGroupID:
+		return "another program holds the foreground of pane " + pane
+	}
+	return ""
 }
 
 // CheckRecycle runs recycle's checks that need neither the agent's turn
@@ -351,7 +382,8 @@ func assignedReader(ctx context.Context, env Env, b bindings.Binding) func() ([]
 }
 
 // waitTurn waits up to req.WaitTurn for the agent to end its turn: idle
-// or done. 0 does not wait.
+// or done. 0 does not wait. An agent that already exited has no turn to
+// wait for; the check under the lock decides about its pane.
 func waitTurn(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) error {
 	if req.WaitTurn <= 0 {
 		return nil
@@ -360,6 +392,8 @@ func waitTurn(ctx context.Context, env Env, req RecycleRequest, b bindings.Bindi
 	info, err := env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: b.PaneID,
 		Until: []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone}, TimeoutMS: &ms})
 	switch {
+	case noAgent(err):
+		return nil
 	case err != nil:
 		return fmt.Errorf("%s did not end its turn within %s: %w", b.MailName, req.WaitTurn, err)
 	case info.AgentStatus != herdr.StatusIdle && info.AgentStatus != herdr.StatusDone:

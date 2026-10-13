@@ -211,7 +211,9 @@ session, cm context; the output names the bead), stop the
 old agent with its kind's exit command, start the successor in the same
 pane, bump the binding's generation, and send the kickoff with the
 handoff. Sends and wakes skip the agent while it recycles. On a failure
-it reports the stage and starts nothing twice.
+it reports the stage and starts nothing twice. An agent that already
+exited, with its pane back at the shell, gets its successor there
+without a stop; when its pane is gone, recycle refuses.
 
 A kickoff template's bead_* placeholders come from --bead, as with nhm
 send, else from the agent's bead in progress (the one the handoff
