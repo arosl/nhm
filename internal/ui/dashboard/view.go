@@ -47,6 +47,8 @@ func (m *Model) View() string {
 		if m.form != nil {
 			modal = m.box(m.form.Action().Label, m.form.View(min(w-10, 96)), w)
 		}
+	case viewSend:
+		modal = m.box("send", m.sendView(w), w)
 	default:
 		return main
 	}

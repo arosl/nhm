@@ -28,6 +28,7 @@ import (
 	"github.com/arosl/nhm/internal/ui/board"
 	"github.com/arosl/nhm/internal/ui/dashboard/panels"
 	"github.com/arosl/nhm/internal/ui/forms"
+	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/tui/agent"
 	"github.com/arosl/nhm/internal/ui/tui/components"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
@@ -77,6 +78,7 @@ const (
 	viewActions
 	viewForm
 	viewRead
+	viewSend
 )
 
 // tickEvery is how often the program lets the feeds start the reads that
@@ -130,6 +132,7 @@ type Model struct {
 	historyAt        time.Time
 
 	read readState
+	send sendState
 }
 
 // inboxState is the inbox view's request and its answer.
@@ -183,8 +186,10 @@ func New(cfg Config) (*Model, error) {
 		m.guard = actions.NewGuard(cfg.NewOperationID)
 	}
 	for _, a := range actions.Space() {
-		// The forms need the guard; the read view is the board's own.
-		if a.ID == readActionID && cfg.Read != nil || m.guard != nil && a.Visible() && forms.IsAgentAction(a.ID) {
+		// The forms and the send need the guard; the read view is the
+		// board's own.
+		if a.ID == readActionID && cfg.Read != nil ||
+			m.guard != nil && a.Visible() && (forms.IsAgentAction(a.ID) || a.ID == sendActionID) {
 			m.menu = append(m.menu, a)
 		}
 	}
@@ -328,7 +333,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layoutChanged()
+		if m.view == viewSend {
+			return m, m.sendUpdate(msg)
+		}
 		return m, nil
+	case sentMsg, palette.ComposedMsg, palette.ComposeCanceledMsg:
+		return m, m.sendUpdate(msg)
 	case tickMsg:
 		now := time.Time(msg)
 		m.b.Tick(now)
@@ -372,6 +382,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
+	if m.view == viewSend {
+		// The composer's own messages (its cursor, its memory preview).
+		return m, m.sendUpdate(msg)
+	}
 	return m, nil
 }
 
@@ -389,6 +403,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.view {
 	case viewRead:
 		return m, m.readKey(msg)
+	case viewSend:
+		return m, m.sendUpdate(msg)
 	case viewForm:
 		cmd := m.form.Update(msg)
 		m.track(m.form)
@@ -408,8 +424,11 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if msg.String() != a.Board.Space {
 				continue
 			}
-			if a.ID == readActionID {
+			switch a.ID {
+			case readActionID:
 				return m, m.openRead()
+			case sendActionID:
+				return m, m.openSend(a)
 			}
 			return m, m.openForm(a)
 		}

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
@@ -24,6 +25,7 @@ import (
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/board"
+	"github.com/arosl/nhm/internal/ui/palette"
 )
 
 var t0 = time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC)
@@ -640,6 +642,76 @@ func TestReadView(t *testing.T) {
 	press(m, "x", "j", "x", "space", "r")
 	if m.view != viewMain || !strings.Contains(plain(m), "read takes one agent") {
 		t.Fatalf("two marks:\n%s", plain(m))
+	}
+}
+
+// sendCore is a core that sends, and records what it was asked.
+type sendCore struct {
+	mu   sync.Mutex
+	reqs []send.Request
+}
+
+func (c *sendCore) core() actions.Core {
+	return actions.Core{
+		SendBase: func(context.Context) (send.Request, error) { return send.Request{Session: "w1"}, nil },
+		Send: func(_ context.Context, req send.Request) (send.Result, error) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.reqs = append(c.reqs, req)
+			res := send.Result{OperationID: req.OperationID}
+			for id := range req.Expect {
+				res.Targets = append(res.Targets, send.Receipt{BindingID: id, MailName: "Name-" + id, Status: send.StatusSubmitted})
+			}
+			return res, nil
+		},
+	}
+}
+
+// space s composes in the palette's editor and sends the text once to
+// the frozen targets, by pane and expected generation; an empty draft is
+// refused by the editor and sends nothing.
+func TestSendFromTheBoard(t *testing.T) {
+	sc := &sendCore{}
+	m := newModel(t, Config{Core: sc.core(), NewOperationID: opIDs()})
+	press(m, "x", "j", "x", "space", "s")
+	if m.view != viewSend || !strings.Contains(plain(m), "to IcyKnoll, BlueLake") {
+		t.Fatalf("composer:\n%s", plain(m))
+	}
+	ctrlS := tea.KeyMsg{Type: tea.KeyCtrlS}
+	if _, cmd := m.Update(ctrlS); cmd != nil {
+		// The editor answers an empty draft with a notice, no message.
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(palette.ComposedMsg); ok {
+				t.Fatal("an empty draft was composed")
+			}
+		}
+	}
+	press(m, "h", "e", "l", "l", "o")
+	_, cmd := m.Update(ctrlS)
+	if cmd == nil {
+		t.Fatal("ctrl+s composed nothing")
+	}
+	_, submit := m.Update(cmd())
+	if submit == nil || !m.send.running {
+		t.Fatalf("not submitted:\n%s", plain(m))
+	}
+	m.Update(submit())
+	if len(sc.reqs) != 1 {
+		t.Fatalf("%d sends", len(sc.reqs))
+	}
+	req := sc.reqs[0]
+	if req.Message != "hello" || req.OperationID != "op-1" || len(req.Expect) != 2 || len(req.Selector.Panes) != 2 {
+		t.Fatalf("send request = %+v", req)
+	}
+	if v := plain(m); !strings.Contains(v, "submitted (op-1)") || !strings.Contains(v, "Name-") {
+		t.Fatalf("result:\n%s", v)
+	}
+	if r, ok := m.b.Results.Get("op-1"); !ok || r.Outcome != "submitted" {
+		t.Fatalf("board result = %+v", r)
+	}
+	press(m, "enter")
+	if m.view != viewMain || len(sc.reqs) != 1 {
+		t.Fatalf("view %d, %d sends", m.view, len(sc.reqs))
 	}
 }
 
