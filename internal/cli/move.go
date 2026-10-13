@@ -91,6 +91,15 @@ func runMove(args []string, stdout, stderr io.Writer) int {
 			return fmt.Errorf("%w: %w", errMoveRefused, err)
 		}
 		b, err := movable(ctx, ie, pos[0], *workspace, &res)
+		if err == nil {
+			// Before the move, as add and adopt: the workspace may hold
+			// other projects' agents only (nhm-8ze).
+			if others, oerr := bindings.NewStore(ie.db).OtherProjectsIn(ctx, res.ToWorkspace, b.MailProjectKey); oerr != nil {
+				warnings = append(warnings, "the workspace's projects: "+oerr.Error())
+			} else if others != nil {
+				warnings = append(warnings, bindings.MixedWorkspaceWarning(res.ToWorkspace, b.MailProjectKey, others))
+			}
+		}
 		if err != nil || *dryRun {
 			return err
 		}
