@@ -106,6 +106,9 @@ func (r *Request) Validate() error {
 	if r.Session == "" {
 		return fmt.Errorf("name the session (a workspace label)")
 	}
+	if r.Safety && r.Add {
+		return fmt.Errorf("--spawn-safety refuses an existing session, and nhm add needs one")
+	}
 	if r.Effort != "" && !kinds.EffortPattern.MatchString(r.Effort) {
 		return fmt.Errorf("--effort %q is not a plain word (low, medium, high, xhigh, max)", r.Effort)
 	}

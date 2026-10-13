@@ -408,6 +408,17 @@ const codeAgentPaneBusy = "agent_pane_busy"
 func createPane(ctx context.Context, env Env, req Request, res *Result, t *Target, paneEnv map[string]string) error {
 	switch {
 	case res.WorkspaceID == "":
+		// A session may have appeared since the check at the start: look
+		// again just before it is made, as ntm does (internal/robot/
+		// spawn.go:1130-1148). herdr allows two workspaces of one label.
+		if req.Safety {
+			if ws, err := findWorkspace(ctx, env.Herdr, req.Session); err != nil {
+				return err
+			} else if ws != "" {
+				return fmt.Errorf("%w: session '%s' appeared while the spawn ran (--spawn-safety mode prevents reuse; use 'nhm kill %s' first)",
+					ErrSessionExists, req.Session, req.Session)
+			}
+		}
 		c, err := env.Herdr.WorkspaceCreate(ctx, herdr.WorkspaceCreateParams{Cwd: req.ProjectRoot, Label: req.Session,
 			Env: paneEnv, Focus: ptr(false)})
 		if err != nil {
@@ -759,11 +770,16 @@ func plan(ctx context.Context, env Env, workspaceID string, req Request) ([]Targ
 // fingerprint is the claimed request: the caller's input, not the names
 // Agent Mail will give.
 func fingerprint(req Request) map[string]any {
-	return map[string]any{"session": req.Session, "add": req.Add, "project": req.ProjectRoot, "agents": req.Agents, "effort": req.Effort,
+	fp := map[string]any{"session": req.Session, "add": req.Add, "project": req.ProjectRoot, "agents": req.Agents, "effort": req.Effort,
 		"label": req.Label, "group": req.Group, "per_tab": req.PerTab, "prompt": req.Prompt, "no_kickoff": req.NoKickoff,
 		"assign": req.Assign, "stagger": req.StaggerMode, "delay_ms": req.StaggerDelay.Milliseconds(),
 		"force": req.Force, "allow_unguarded": req.AllowUnguarded, "require_observations": req.RequireObservations,
 		paneEnvKey: true}
+	// Only when set, so every fingerprint stored before stays the same.
+	if req.Safety {
+		fp["safety"] = true
+	}
+	return fp
 }
 
 // writeTarget stores a target's progress as the operation's receipt row.

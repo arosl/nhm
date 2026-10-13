@@ -195,7 +195,8 @@ func TestRobotSpawnRefusesWithoutObservations(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	project := t.TempDir()
-	out, code := robotJSON(t, "--robot-spawn=swarm", "--spawn-dir="+project, "--spawn-cc=1", "--spawn-no-user",
+	// A new session: --spawn-safety refuses the existing swarm (nhm-lrx).
+	out, code := robotJSON(t, "--robot-spawn=fresh", "--spawn-dir="+project, "--spawn-cc=1", "--spawn-no-user",
 		"--spawn-safety", "--spawn-wait", "--timeout=60s", "--robot-format=json", "--dry-run", "--socket="+s.SocketPath)
 	ad, _ := out["admission"].(map[string]any)
 	if code != 1 || out["success"] != false || out["error_code"] != "ADMISSION_REFUSED" || ad["decision"] != "refuse" ||

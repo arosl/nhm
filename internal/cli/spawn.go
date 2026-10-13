@@ -644,8 +644,8 @@ func printSpawn(w io.Writer, res spawn.Result) {
 type robotSpawnFlags struct {
 	session, dir, format, prompt, opID, socket *string
 	counts                                     map[string]*int
-	readyTimeout                               *time.Duration
-	dryRun, assign                             *bool
+	readyTimeout, timeout                      *time.Duration
+	dryRun, assign, safety                     *bool
 	assignFlags                                robotAssignFlags
 }
 
@@ -657,10 +657,12 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	f.dir = fs.String("spawn-dir", "", "")
 	f.format = fs.String("robot-format", "auto", "")
 	fs.Bool("spawn-no-user", false, "")
-	fs.Bool("spawn-safety", false, "")
+	f.safety = fs.Bool("spawn-safety", false, "")
+	// nhm always waits for the agents to be ready, as ntm does with
+	// --spawn-wait.
 	fs.Bool("spawn-wait", false, "")
 	f.readyTimeout = fs.Duration("ready-timeout", 60*time.Second, "")
-	fs.Duration("timeout", 60*time.Second, "")
+	f.timeout = fs.Duration("timeout", 60*time.Second, "")
 	f.dryRun = fs.Bool("dry-run", false, "")
 	f.assign = fs.Bool("spawn-assign-work", false, "")
 	f.assignFlags = addRobotAssignFlags(fs)
@@ -675,6 +677,18 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 		}
 	}
 	return f
+}
+
+// robotReadyWait is a robot spawn's ready wait: --ready-timeout when
+// given, else --timeout when given, as ntm takes it
+// (resolveRobotSpawnTimeout), else --ready-timeout's 60 s. fs is parsed.
+func robotReadyWait(fs *flag.FlagSet, rf robotSpawnFlags) time.Duration {
+	given := map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { given[fl.Name] = true })
+	if !given["ready-timeout"] && given["timeout"] {
+		return *rf.timeout
+	}
+	return *rf.readyTimeout
 }
 
 // hasRobotSpawn reports a --robot-spawn flag in args.
@@ -696,7 +710,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	rf := addRobotSpawnFlags(fs)
-	session, dir, format, counts, readyTimeout := rf.session, rf.dir, rf.format, rf.counts, rf.readyTimeout
+	session, dir, format, counts := rf.session, rf.dir, rf.format, rf.counts
 	dryRun, assign, prompt, opID, socket := rf.dryRun, rf.assign, rf.prompt, rf.opID, rf.socket
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		msg := "unexpected arguments"
@@ -717,7 +731,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	// sends each agent its work, with --spawn-prompt ahead of it, so the
 	// spawn itself sends nothing.
 	req := spawn.Request{Session: *session, Prompt: *prompt, NoKickoff: *prompt == "",
-		ReadyTimeout: *readyTimeout, RequireObservations: true, DryRun: *dryRun, OperationID: *opID}
+		ReadyTimeout: robotReadyWait(fs, rf), RequireObservations: true, DryRun: *dryRun, OperationID: *opID, Safety: *rf.safety}
 	if *assign {
 		req.Prompt, req.NoKickoff = "", true
 	}
@@ -752,6 +766,12 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	out := spawn.SpawnOutput(res, err, *format, now)
 	if errors.Is(err, core.ErrNotOwner) {
 		out.ErrorCode = robot.ErrCodeNotOwner
+	}
+	if errors.Is(err, spawn.ErrSessionExists) {
+		// ntm's answer (internal/robot/spawn.go:242-243): INVALID_FLAG,
+		// its sentence without nhm's sentinel, and its hint.
+		out.ErrorCode, out.Hint = robot.ErrCodeInvalidFlag, "Choose a new session name or disable --spawn-safety"
+		out.Error = strings.TrimPrefix(err.Error(), spawn.ErrSessionExists.Error()+": ")
 	}
 	if *assign && !*dryRun && out.Success {
 		robotAssignPhase(ctx, ie, res, scope, plan, *prompt, &out)
