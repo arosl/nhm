@@ -103,6 +103,16 @@ func (c *Client) TabRename(ctx context.Context, tabID, label string) (TabInfo, e
 	return r.Tab, err
 }
 
+// TabFocus makes a tab the focused one, and an attached client shows it.
+// herdr 0.9.3's client does not follow the focus that plugin.pane.open,
+// plugin.pane.focus or pane.zoom move to another tab (seen in the
+// sandbox, nhm-qbi.5); it follows this.
+func (c *Client) TabFocus(ctx context.Context, tabID string) (TabInfo, error) {
+	var r tabResult
+	err := c.call(ctx, "tab.focus", tabParams{TabID: tabID}, &r, 0)
+	return r.Tab, err
+}
+
 // AgentList lists the live agents.
 func (c *Client) AgentList(ctx context.Context) ([]AgentInfo, error) {
 	var r agentListResult

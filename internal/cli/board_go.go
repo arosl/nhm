@@ -85,6 +85,9 @@ func openGoBoard(stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm ui board: a board is starting in this workspace (opened %s ago); if it has not started after %s, prefix+d opens a new one\n",
 			time.Since(*res.OpenedAt).Round(time.Second), uilaunch.StartGrace)
 	}
+	if res.Unshown != "" {
+		fmt.Fprintf(stderr, "nhm ui board: the board is in pane %s, but herdr did not bring its tab in front: %s\n", res.PaneID, res.Unshown)
+	}
 	return exitOK
 }
 
@@ -199,8 +202,10 @@ func runGoBoard(stderr io.Writer) int {
 			if err := h.WorkspaceFocus(ctx, ws); err != nil {
 				return err
 			}
-			_, err := h.PaneZoom(ctx, pane, "on")
-			return err
+			if _, err := h.PaneZoom(ctx, pane, "on"); err != nil {
+				return err
+			}
+			return frontTab(ctx, h, pane)
 		}})
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm board: %v\n", err)
@@ -226,4 +231,21 @@ func runGoBoard(stderr io.Writer) int {
 		return exitError
 	}
 	return exitOK
+}
+
+// frontTab brings pane's tab in front of herdr's attached clients. herdr
+// 0.9.3's client follows tab.focus, but not the focus that pane.zoom
+// moves to another tab (seen in the sandbox, nhm-qbi.5).
+func frontTab(ctx context.Context, h *herdr.Client, pane string) error {
+	snap, err := h.Snapshot(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range snap.Panes {
+		if p.PaneID == pane {
+			_, err := h.TabFocus(ctx, p.TabID)
+			return err
+		}
+	}
+	return fmt.Errorf("pane %s is gone", pane)
 }

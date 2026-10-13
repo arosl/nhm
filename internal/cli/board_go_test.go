@@ -48,6 +48,14 @@ func boardHerdr(t *testing.T, s *herdrtest.Server) {
 	s.Handle("plugin.pane.focus", func(herdrtest.Request) (any, *herdrtest.Error) {
 		return map[string]any{"type": "plugin_pane_focused"}, nil
 	})
+	s.Handle("tab.focus", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			TabID string `json:"tab_id"`
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": p.TabID, "workspace_id": "w1", "number": 9,
+			"label": "9", "focused": true, "pane_count": 1, "agent_status": "unknown"}}, nil
+	})
 }
 
 func requests(s *herdrtest.Server, method string) []herdrtest.Request {
@@ -118,6 +126,38 @@ func TestGoBoardOpensThenFocuses(t *testing.T) {
 	focus := requests(s, "plugin.pane.focus")
 	if len(focus) != 2 || !strings.Contains(string(focus[0].Params), `"w1:p9"`) || !strings.Contains(string(focus[1].Params), `"w1:p9"`) {
 		t.Fatalf("focus = %+v", focus)
+	}
+	// Each of the three brings the board's tab in front of the attached
+	// clients, which do not follow the plugin pane's focus.
+	tabs := requests(s, "tab.focus")
+	if len(tabs) != 3 {
+		t.Fatalf("tab.focus = %+v", tabs)
+	}
+	for _, r := range tabs {
+		if !strings.Contains(string(r.Params), `"w1:t9"`) {
+			t.Fatalf("tab.focus = %+v", tabs)
+		}
+	}
+}
+
+// The board's zoom brings the zoomed pane's tab in front; a pane that
+// herdr no longer lists is an error.
+func TestFrontTabFocusesThePanesTab(t *testing.T) {
+	s, _ := cliInstance(t)
+	boardHerdr(t, s)
+	h := herdr.New(s.SocketPath)
+	ctx := context.Background()
+	if err := frontTab(ctx, h, "w1:p9"); err == nil || !strings.Contains(err.Error(), "w1:p9 is gone") {
+		t.Fatalf("frontTab before the pane = %v", err)
+	}
+	if _, err := h.PluginPaneOpen(ctx, herdr.PluginPaneOpenParams{PluginID: "nhm", Entrypoint: "board", Placement: "tab"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := frontTab(ctx, h, "w1:p9"); err != nil {
+		t.Fatal(err)
+	}
+	if tabs := requests(s, "tab.focus"); len(tabs) != 1 || !strings.Contains(string(tabs[0].Params), `"w1:t9"`) {
+		t.Fatalf("tab.focus = %+v", tabs)
 	}
 }
 

@@ -1,0 +1,118 @@
+# The Go board through an attached herdr client (nhm-qbi.5, for the
+# surfaces step of nhm-qbi.11): prefix+d opens the board in a tab of its
+# own and the client shows it, and prefix+d again focuses that tab; a
+# mark and the space actions on it (interrupt, send); i peeks at the
+# inbox and marks nothing read; ctrl+w opens the spawn wizard; z zooms the
+# agent, and the client shows its tab; a board in a second workspace, and
+# the menu kills that workspace, with the kill in recent operations; last,
+# the client disconnects, and the board lives on. tests/surfaces_e2e.sh
+# runs it, with tests/fake_agentmail.py as Agent Mail.
+#
+# herdr confirms a prompt when the agent reports that it works. The fake
+# agent has no hooks, so a watcher reports for it once the prompt is in
+# its log (working, then idle, then it releases the pane), as in
+# palette.script; the send's result is then "submitted".
+sleep 2
+note a wide client: the attention and history panels show beside the table
+resize 180 48
+note prefix+d: the board opens in a tab of its own and registers
+key ctrl+b d
+expect 10 nhm board · workspace proj (w1) · 1 agents
+expect 5 IcyKnoll
+expect 5 Attention
+check jq -e '.state == "registered" and .pid > 0' $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json
+run jq -r '"\(.pane_id) \(.pid)"' $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json >"$HERDR_WORK/board-w1.first"
+note tab 1 in front, then prefix+d again: the same board, no second tab
+run herdr tab focus w1:t1 >/dev/null
+refute 1.5 nhm board · workspace proj
+key ctrl+b d
+expect 5 nhm board · workspace proj (w1)
+check test "$(herdr pane list | jq '[.result.panes[] | select(.label == "Agents")] | length')" = 1
+check test "$(jq -r '"\(.pane_id) \(.pid)"' $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json)" = "$(cat "$HERDR_WORK/board-w1.first")"
+note x marks IcyKnoll; space x interrupts the mark, after a review
+key x
+expect 3 1 marked
+run grep -c '"data":"escape"' "$HERDR_WORK/fake.log" >"$HERDR_WORK/esc.before"
+key space
+expect 3 Actions for 1 marked agents
+key x
+expect 8 [ cancel ]
+key tab enter
+expect 10 IcyKnoll: sent: esc
+key esc
+note space s: the composer for the mark; ctrl+s sends through the core
+key space s
+expect 5 Compose
+expect 3 to IcyKnoll
+send SURFACE-SEND hello
+run (for _ in $(seq 150); do grep -q SURFACE-SEND "$HERDR_WORK/fake.log" && break; sleep 0.1; done; r() { herdr pane report-agent --source e2e --agent claude --state "$1" w1:p1; }; r working; sleep 1; r idle; herdr pane release-agent --source e2e --agent claude w1:p1) </dev/null >/dev/null 2>&1 &
+key ctrl+s
+expect 30 any key closes
+expect 2 IcyKnoll: submitted
+check grep -q '"event":"submit","data":"SURFACE-SEND hello"' "$HERDR_WORK/fake.log"
+note the interrupt's esc reached the agent: the fake agent logs a bare Escape when the next byte comes (an ESC may start a sequence), here the send's
+check test "$(grep -c '"data":"escape"' "$HERDR_WORK/fake.log")" -gt "$(cat "$HERDR_WORK/esc.before")"
+key esc
+note esc on the board clears the mark
+key esc
+refute 1 1 marked
+note i: a peek at IcyKnoll's inbox; a second peek still finds the mail unread
+expect 20 ✉ 1
+key i
+expect 5 Inbox of IcyKnoll (a peek: nothing is marked read)
+expect 5 SURFACE-MAIL please review the board
+key esc
+refute 1 SURFACE-MAIL
+key i
+expect 5 SURFACE-MAIL please review the board
+key esc
+expect 3 ✉ 1
+check grep -q '"tool": "fetch_inbox"' "$HERDR_WORK/agentmail.jsonl" && ! grep '"tool": "fetch_inbox"' "$HERDR_WORK/agentmail.jsonl" | grep -qv '"mark_read": false' && ! grep -q -e '"tool": "mark_message_read"' -e '"tool": "acknowledge_message"' "$HERDR_WORK/agentmail.jsonl"
+note ctrl+w: ntm's spawn wizard for this workspace; esc cancels it
+key ctrl+w
+expect 5 Spawn Wizard
+key esc
+refute 2 Spawn Wizard
+expect 3 nhm board · workspace proj (w1)
+note z zooms IcyKnoll: its tab comes in front; prefix+d brings the board back
+key z
+refute 5 nhm board · workspace proj
+check herdr pane get w1:p1 | jq -e '.result.pane.focused'
+key ctrl+b d
+expect 5 nhm board · workspace proj (w1)
+run herdr pane zoom w1:p1 --off >/dev/null
+note a second workspace with its own board; the menu kills that workspace
+run herdr workspace create --label boardkill --cwd "$HOME" --focus >/dev/null
+key ctrl+b d
+expect 10 nhm board · workspace boardkill (w2)
+check jq -e '.state == "registered"' $XDG_STATE_HOME/nhm/inst-*/ui/board-w2.json
+key ctrl+b m
+expect 8 workspace ›
+key w
+expect 3 › workspace
+key k
+expect 10 Type the workspace's label, "boardkill", and press enter to kill it.
+send boardkill
+key enter
+sleep 3
+check ! herdr workspace list | grep -q '"boardkill"'
+check test ! -e $XDG_STATE_HOME/nhm/inst-*/ui/board-w2.json
+note recent operations shows the kill
+key ctrl+b m
+expect 8 workspace proj
+key o
+expect 5 recent operations
+expect 5 kill_workspace closed
+key esc esc
+note last, the client disconnects: the board in w1 lives on, the same pane and pid
+run pkill -f -x herdr
+sleep 2
+check herdr workspace list >/dev/null
+check test "$(jq -r '"\(.pane_id) \(.pid)"' $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json)" = "$(cat "$HERDR_WORK/board-w1.first")"
+check kill -0 "$(jq -r .pid $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json)"
+check herdr pane read "$(jq -r .pane_id $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json)" --source visible | grep -q 'nhm board · workspace proj'
+note q ends the board and its record, so the next script finds w1 as it began
+run herdr pane send-keys "$(jq -r .pane_id $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json)" q >/dev/null
+sleep 2
+check test ! -e $XDG_STATE_HOME/nhm/inst-*/ui/board-w1.json
+check test "$(herdr pane list | jq '[.result.panes[] | select(.label == "Agents")] | length')" = 0

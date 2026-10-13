@@ -28,6 +28,7 @@ var paramTypes = map[string]any{
 	"tab.create":                TabCreateParams{},
 	"tab.get":                   tabParams{},
 	"tab.rename":                tabRenameParams{},
+	"tab.focus":                 tabParams{},
 	"agent.get":                 targetParams{},
 	"agent.read":                AgentReadParams{},
 	"agent.send_keys":           sendKeysParams{},

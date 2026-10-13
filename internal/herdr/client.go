@@ -75,6 +75,8 @@ var methodResults = map[string][]string{
 	"popup.close":    {"ok"},
 	"pane.send_keys": {"ok"},
 	"plugin.list":    {"plugin_list"},
+	// nhm-qbi.5: the board's tab brought in front of an attached client.
+	"tab.focus": {"tab_info"},
 	// From the pinned schema's response results, not yet observed
 	// (acfs-9hkh.70; the rehearsal, acfs-9hkh.31, runs it against herdr).
 	"workspace.focus":      {"workspace_info", "ok"},

@@ -8,7 +8,8 @@
 //  1. Open (the prefix+d action) verifies the record. A live board is
 //     focused. A launch that has not registered yet, within StartGrace,
 //     is not opened twice. Anything else is dropped, and Open records a
-//     new token ("opening") before it asks herdr for the tab.
+//     new token ("opening") before it asks herdr for the tab. The board's
+//     tab then comes in front of herdr's attached clients.
 //  2. Register (the board, at its start) finds the record by its token
 //     and adds its process identity: pid, the pid's start time, its pane.
 //  3. Verify says a record is live only when its pane is in the workspace
@@ -104,6 +105,7 @@ type Opener interface {
 	Herdr
 	PluginPaneOpen(ctx context.Context, p herdr.PluginPaneOpenParams) (*herdr.PluginPane, error)
 	PluginPaneFocus(ctx context.Context, paneID string) error
+	TabFocus(ctx context.Context, tabID string) (herdr.TabInfo, error)
 }
 
 // Env is an instance and its herdr server.
@@ -275,6 +277,9 @@ type OpenResult struct {
 	StalePane string `json:"stale_pane,omitempty"`
 	// OpenedAt is when the launch that is starting was opened (Awaiting).
 	OpenedAt *time.Time `json:"opened_at,omitempty"`
+	// Unshown says why herdr did not bring the board's tab in front of
+	// its attached clients. The board is open or focused all the same.
+	Unshown string `json:"unshown,omitempty"`
 }
 
 // Open focuses the workspace's live board, or opens a new board tab. It
@@ -297,18 +302,20 @@ func Open(ctx context.Context, env Env, h Opener, req OpenRequest) (OpenResult, 
 				if err := h.PluginPaneFocus(ctx, old.PaneID); err != nil {
 					return fmt.Errorf("uilaunch: focus the board: %w", err)
 				}
-				res = OpenResult{Action: Focused, PaneID: old.PaneID, Token: old.Token}
+				res = OpenResult{Action: Focused, PaneID: old.PaneID, Token: old.Token, Unshown: show(ctx, h, old.PaneID, "")}
 				return nil
 			case Starting:
 				// herdr's own answer named the pane: it is this launch's,
 				// so it can be focused before the board registers.
+				var unshown string
 				if old.PaneID != "" {
 					if err := h.PluginPaneFocus(ctx, old.PaneID); err != nil {
 						return fmt.Errorf("uilaunch: focus the starting board: %w", err)
 					}
+					unshown = show(ctx, h, old.PaneID, "")
 				}
 				at := old.OpenedAt
-				res = OpenResult{Action: Awaiting, PaneID: old.PaneID, Token: old.Token, OpenedAt: &at}
+				res = OpenResult{Action: Awaiting, PaneID: old.PaneID, Token: old.Token, OpenedAt: &at, Unshown: unshown}
 				return nil
 			}
 			res.Dropped = st.Reason
@@ -352,9 +359,37 @@ func Open(ctx context.Context, env Env, h Opener, req OpenRequest) (OpenResult, 
 			return err
 		}
 		res.Action, res.PaneID, res.Token = Opened, l.PaneID, token
+		res.Unshown = show(ctx, h, l.PaneID, pane.Pane.TabID)
 		return nil
 	})
 	return res, err
+}
+
+// show brings the board's tab in front of herdr's attached clients:
+// herdr 0.9.3's client follows tab.focus, but not the focus that
+// plugin.pane.open and plugin.pane.focus move (seen in the sandbox,
+// nhm-qbi.5). tabID "" looks the pane's tab up. It returns why it could
+// not, or "".
+func show(ctx context.Context, h Opener, paneID, tabID string) string {
+	if tabID == "" {
+		snap, err := h.Snapshot(ctx)
+		if err != nil {
+			return err.Error()
+		}
+		for _, p := range snap.Panes {
+			if p.PaneID == paneID {
+				tabID = p.TabID
+				break
+			}
+		}
+		if tabID == "" {
+			return "herdr lists no tab for pane " + paneID
+		}
+	}
+	if _, err := h.TabFocus(ctx, tabID); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func paneOpen(ctx context.Context, h Herdr, paneID string) bool {

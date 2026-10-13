@@ -26,8 +26,10 @@ type fakeHerdr struct {
 	next       int
 	opened     []herdr.PluginPaneOpenParams
 	focused    []string
+	tabs       []string // tab.focus calls
 	openErr    error
 	snapErr    error
+	tabErr     error
 	// onOpen runs as the pane opens (a board that starts at once).
 	onOpen func(paneID string, p herdr.PluginPaneOpenParams)
 }
@@ -47,7 +49,7 @@ func (f *fakeHerdr) Snapshot(context.Context) (herdr.SessionSnapshot, error) {
 		s.Workspaces = append(s.Workspaces, herdr.WorkspaceInfo{WorkspaceID: w})
 	}
 	for p, w := range f.panes {
-		s.Panes = append(s.Panes, herdr.PaneInfo{PaneID: p, WorkspaceID: w})
+		s.Panes = append(s.Panes, herdr.PaneInfo{PaneID: p, WorkspaceID: w, TabID: "t-" + p})
 	}
 	return s, nil
 }
@@ -79,7 +81,7 @@ func (f *fakeHerdr) PluginPaneOpen(_ context.Context, p herdr.PluginPaneOpenPara
 	if onOpen != nil {
 		onOpen(id, p)
 	}
-	return &herdr.PluginPane{PluginID: p.PluginID, Entrypoint: p.Entrypoint, Pane: herdr.PaneInfo{PaneID: id, WorkspaceID: p.WorkspaceID}}, nil
+	return &herdr.PluginPane{PluginID: p.PluginID, Entrypoint: p.Entrypoint, Pane: herdr.PaneInfo{PaneID: id, WorkspaceID: p.WorkspaceID, TabID: "t-" + id}}, nil
 }
 
 func (f *fakeHerdr) PluginPaneFocus(_ context.Context, pane string) error {
@@ -87,6 +89,16 @@ func (f *fakeHerdr) PluginPaneFocus(_ context.Context, pane string) error {
 	defer f.mu.Unlock()
 	f.focused = append(f.focused, pane)
 	return nil
+}
+
+func (f *fakeHerdr) TabFocus(_ context.Context, tab string) (herdr.TabInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tabs = append(f.tabs, tab)
+	if f.tabErr != nil {
+		return herdr.TabInfo{}, f.tabErr
+	}
+	return herdr.TabInfo{TabID: tab, Focused: true}, nil
 }
 
 func (f *fakeHerdr) shell(pane string) int {
@@ -128,6 +140,10 @@ func TestOpenRegisterFocus(t *testing.T) {
 		h.opened[0].Env[TokenEnv] != res.Token || h.opened[0].Env["NHM_CONTEXT"] != "{}" {
 		t.Fatalf("opened = %+v", h.opened)
 	}
+	// The new tab comes in front of the attached clients.
+	if res.Unshown != "" || len(h.tabs) != 1 || h.tabs[0] != "t-"+res.PaneID {
+		t.Fatalf("tab.focus %v, unshown %q", h.tabs, res.Unshown)
+	}
 	l, err := Register(ctx, env, h, "w1", res.Token, Self{PID: h.shell(res.PaneID)})
 	if err != nil || l.State != Registered || l.PaneID != res.PaneID || l.PIDStart == 0 {
 		t.Fatalf("Register = %+v, %v", l, err)
@@ -138,6 +154,9 @@ func TestOpenRegisterFocus(t *testing.T) {
 	}
 	if len(h.opened) != 1 || len(h.focused) != 1 || h.focused[0] != res.PaneID {
 		t.Fatalf("opened %d, focused %v", len(h.opened), h.focused)
+	}
+	if again.Unshown != "" || len(h.tabs) != 2 || h.tabs[1] != "t-"+res.PaneID {
+		t.Fatalf("tab.focus %v, unshown %q", h.tabs, again.Unshown)
 	}
 	if err := Unregister(ctx, env, "w1", res.Token); err != nil {
 		t.Fatal(err)
@@ -168,6 +187,22 @@ func TestRestoredShellIsNotTheBoard(t *testing.T) {
 	}
 	if len(h.focused) != 0 {
 		t.Fatalf("focused %v", h.focused)
+	}
+}
+
+// herdr does not bring the tab in front: the board is open all the same,
+// its record stays, and the result says why.
+func TestUnshownTabStillOpensTheBoard(t *testing.T) {
+	env, _ := testEnv(t)
+	h := newFake("w1")
+	h.tabErr = &herdr.Error{Code: "tab_not_found", Message: "no such tab"}
+	ctx := context.Background()
+	res, err := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"})
+	if err != nil || res.Action != Opened || res.PaneID == "" || !strings.Contains(res.Unshown, "no such tab") {
+		t.Fatalf("Open = %+v, %v", res, err)
+	}
+	if l, err := env.read("w1"); err != nil || l == nil || l.Token != res.Token || l.PaneID != res.PaneID {
+		t.Fatalf("record = %+v, %v", l, err)
 	}
 }
 
@@ -203,6 +238,9 @@ func TestStartingLaunchIsNotOpenedTwice(t *testing.T) {
 	}
 	if len(h.opened) != 1 || len(h.focused) != 1 || h.focused[0] != res.PaneID {
 		t.Fatalf("opened %d, focused %v", len(h.opened), h.focused)
+	}
+	if len(h.tabs) != 2 || h.tabs[1] != "t-"+res.PaneID {
+		t.Fatalf("tab.focus %v", h.tabs)
 	}
 	c.add(StartGrace)
 	third, err := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"})

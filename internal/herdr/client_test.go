@@ -223,6 +223,7 @@ func TestEveryMethodRoundTrips(t *testing.T) {
 		"workspace.create": {"type": "workspace_created", "workspace": map[string]any{"workspace_id": "w2", "number": 2, "label": "x", "focused": true, "pane_count": 1, "tab_count": 1, "active_tab_id": "w2:t1", "agent_status": "unknown"}, "tab": map[string]any{"tab_id": "w2:t1", "workspace_id": "w2", "number": 1, "label": "1", "focused": true, "pane_count": 1, "agent_status": "unknown"}, "root_pane": paneFixture("w2:p1")},
 		"tab.create":       {"type": "tab_created", "tab": map[string]any{"tab_id": "w1:t2", "workspace_id": "w1", "number": 2, "label": "two", "focused": false, "pane_count": 1, "agent_status": "unknown"}, "root_pane": paneFixture("w1:p2")},
 		"tab.rename":       {"type": "tab_info", "tab": map[string]any{"tab_id": "w1:t2", "workspace_id": "w1", "number": 2, "label": "renamed", "focused": false, "pane_count": 1, "agent_status": "unknown"}},
+		"tab.focus":        {"type": "tab_info", "tab": map[string]any{"tab_id": "w1:t2", "workspace_id": "w1", "number": 2, "label": "2", "focused": true, "pane_count": 1, "agent_status": "unknown"}},
 		"agent.list":       {"type": "agent_list", "agents": []any{agentFixture("idle", nil)}},
 		"agent.read":       {"type": "pane_read", "read": readFixture()},
 		"agent.send_keys":  {"type": "ok"},
@@ -272,6 +273,13 @@ func TestEveryMethodRoundTrips(t *testing.T) {
 			return err
 		},
 		"tab.rename": func() error { _, err := c.TabRename(ctx, "w1:t2", "renamed"); return err },
+		"tab.focus": func() error {
+			tb, err := c.TabFocus(ctx, "w1:t2")
+			if err == nil && (tb.TabID != "w1:t2" || !tb.Focused) {
+				return errors.New("tab not decoded")
+			}
+			return err
+		},
 		"agent.list": func() error { _, err := c.AgentList(ctx); return err },
 		"agent.read": func() error {
 			r, err := c.AgentRead(ctx, AgentReadParams{Target: "icyknoll", Source: ReadRecent})
