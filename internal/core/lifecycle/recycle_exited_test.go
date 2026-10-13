@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -30,16 +31,30 @@ func (f *paneGone) PaneProcessInfo(ctx context.Context, pane string) (herdr.Proc
 // (nhm-lsa). A wait for its turn does not time out on the missing agent.
 func TestRecycleStartsTheSuccessorOfAnExitedAgent(t *testing.T) {
 	ctx := context.Background()
-	for name, wait := range map[string]time.Duration{"no wait": 0, "a wait for its turn": time.Minute} {
+	for name, c := range map[string]struct {
+		wait time.Duration
+		jobs []Job
+	}{
+		"no wait":             {0, nil},
+		"a wait for its turn": {time.Minute, nil},
+		// A helper left over after a crash is not the agent.
+		"a leftover helper": {0, []Job{{PID: 4242, State: 'S', Argv: []string{"node", "/opt/mcp/server.js"}}}},
+	} {
 		w := newWorld(t)
 		b := bindIn(t, w, "IcyKnoll", "w1:p1")
 		delete(w.h.agents, "w1:p1")
+		w.env.Jobs = func(shell int) ([]Job, error) {
+			if shell != 100 {
+				t.Errorf("%s: the jobs of shell %d, want the pane's shell 100", name, shell)
+			}
+			return c.jobs, nil
+		}
 		handoffs := 0
 		w.env.Handoff = func(context.Context, bindings.Binding, *Bead, string) Handoff {
 			handoffs++
 			return Handoff{Text: "Handoff: the work so far", Sources: []string{"bead"}, Degraded: []string{}}
 		}
-		res, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "Carry on.", WaitTurn: wait})
+		res, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "Carry on.", WaitTurn: c.wait})
 		if err != nil || res.Stage != StageDone || res.Generation != b.Generation+1 {
 			t.Fatalf("%s: recycle = %+v %v", name, res, err)
 		}
@@ -59,11 +74,16 @@ func TestRecycleStartsTheSuccessorOfAnExitedAgent(t *testing.T) {
 }
 
 // With no agent in the pane, recycle starts a successor only at the
-// pane's shell. A pane that is gone, or one where another program holds
-// the foreground, is refused at the check: nothing is claimed, typed or
-// started.
+// pane's shell, and only when no job of the shell may still be the agent.
+// A pane that is gone, one where another program holds the foreground, a
+// stopped job (ctrl+z), the kind's command in the background, and jobs
+// that cannot be read are refused at the check: nothing is claimed, typed
+// or started (QuietSpring's review of 2c99c7d).
 func TestRecycleRefusesAnExitedAgentAwayFromItsShell(t *testing.T) {
 	ctx := context.Background()
+	jobs := func(js ...Job) func(*world) {
+		return func(w *world) { w.env.Jobs = func(int) ([]Job, error) { return js, nil } }
+	}
 	for name, c := range map[string]struct {
 		setup func(w *world)
 		want  string
@@ -72,10 +92,18 @@ func TestRecycleRefusesAnExitedAgentAwayFromItsShell(t *testing.T) {
 			w.env.Herdr = &paneGone{fakeHerdr: w.h, gone: map[string]bool{"w1:p1": true}}
 		}, "pane w1:p1 is gone"},
 		"another program": {func(w *world) { w.h.jobs = map[string]bool{"w1:p1": true} }, "another program holds the foreground of pane w1:p1"},
+		"a stopped job": {jobs(Job{PID: 4242, State: 'T', Argv: []string{"node", "/opt/claude/cli.js"}}),
+			"a job of the shell remains in pane w1:p1: pid 4242, node (state T)"},
+		"the agent in the background": {jobs(Job{PID: 4243, State: 'S', Argv: []string{"/usr/local/bin/claude", "--resume"}}),
+			"a job of the shell remains in pane w1:p1: pid 4243, claude (state S)"},
+		"the jobs cannot be read": {func(w *world) {
+			w.env.Jobs = func(int) ([]Job, error) { return nil, errors.New("no /proc") }
+		}, "nhm cannot tell whether the agent still runs as a job of the shell in pane w1:p1: no /proc"},
 	} {
 		w := newWorld(t)
 		b := bindIn(t, w, "IcyKnoll", "w1:p1")
 		delete(w.h.agents, "w1:p1")
+		w.env.Jobs = func(int) ([]Job, error) { return nil, nil }
 		c.setup(w)
 		res, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "Carry on."})
 		if err == nil || res.Stage != StageCheck || !strings.Contains(err.Error(), c.want) ||

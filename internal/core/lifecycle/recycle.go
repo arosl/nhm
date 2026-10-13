@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -154,7 +155,13 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	exited := false
 	switch {
 	case noAgent(err):
-		if why := notAtShell(ctx, env, b.PaneID); why != "" {
+		// herdr does not list a stopped (ctrl+z) or background agent
+		// either: a job of the shell that may still be it refuses.
+		shell, why := atShell(ctx, env, b.PaneID)
+		if why == "" {
+			why = jobLeft(env, shell, b.PaneID, a.Name)
+		}
+		if why != "" {
 			return fail(StageCheck, fmt.Errorf("herdr: %w, and %s", err, why))
 		}
 		exited = true
@@ -320,8 +327,8 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 func waitExit(ctx context.Context, env Env, b bindings.Binding) bool {
 	deadline := env.now().Add(stopWait)
 	for env.now().Before(deadline) {
-		shell := notAtShell(ctx, env, b.PaneID) == ""
-		if _, aerr := env.Herdr.AgentGet(ctx, b.PaneID); shell && noAgent(aerr) {
+		_, why := atShell(ctx, env, b.PaneID)
+		if _, aerr := env.Herdr.AgentGet(ctx, b.PaneID); why == "" && noAgent(aerr) {
 			return true
 		}
 		if ctx.Err() != nil {
@@ -339,18 +346,42 @@ func noAgent(err error) bool {
 	return code == herdr.CodeAgentNotFound || code == herdr.CodeAgentNotRunning
 }
 
-// notAtShell says why a pane is not at its shell: it is gone, herdr
-// cannot read it, or another program holds its foreground. "" when the
-// pane's shell holds the foreground.
-func notAtShell(ctx context.Context, env Env, pane string) string {
+// atShell returns the pane's shell when the shell holds the foreground.
+// Otherwise it says why not: the pane is gone, herdr cannot read it, or
+// another program holds its foreground.
+func atShell(ctx context.Context, env Env, pane string) (int, string) {
 	info, err := env.Herdr.PaneProcessInfo(ctx, pane)
 	switch {
 	case herdr.ErrorCode(err) == herdr.CodePaneNotFound:
-		return "pane " + pane + " is gone"
+		return 0, "pane " + pane + " is gone"
 	case err != nil:
-		return "pane " + pane + " cannot be read: " + err.Error()
+		return 0, "pane " + pane + " cannot be read: " + err.Error()
 	case info.ShellPID == nil || info.ForegroundProcessGroupID == nil || *info.ShellPID != *info.ForegroundProcessGroupID:
-		return "another program holds the foreground of pane " + pane
+		return 0, "another program holds the foreground of pane " + pane
+	}
+	return *info.ShellPID, ""
+}
+
+// jobLeft names a job of the pane's shell that may still be the agent: a
+// stopped one (ctrl+z), or one that runs the kind's command (a job in the
+// background). Such an agent still owns its identity, so no successor
+// may start. A leftover helper, such as an MCP server, is no such job.
+// "" when there is none.
+func jobLeft(env Env, shellPID int, pane, command string) string {
+	jobs, err := env.jobs(shellPID)
+	if err != nil {
+		return "nhm cannot tell whether the agent still runs as a job of the shell in pane " + pane + ": " + err.Error()
+	}
+	for _, j := range jobs {
+		if !j.Stopped() && !j.Runs(command) {
+			continue
+		}
+		name := "?"
+		if len(j.Argv) > 0 {
+			name = filepath.Base(j.Argv[0])
+		}
+		return fmt.Sprintf("a job of the shell remains in pane %s: pid %d, %s (state %c); end it, then recycle",
+			pane, j.PID, name, j.State)
 	}
 	return ""
 }

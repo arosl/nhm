@@ -68,8 +68,18 @@ type Env struct {
 	// skips it.
 	Index     func(ctx context.Context, path, project, key string) (string, error)
 	ProcStart func(pid int64) (int64, error)
-	Now       func() time.Time
-	Sleep     func(ctx context.Context, d time.Duration)
+	// Jobs lists the processes of a shell's session (SessionJobs); nil
+	// reads /proc.
+	Jobs  func(shellPID int) ([]Job, error)
+	Now   func() time.Time
+	Sleep func(ctx context.Context, d time.Duration)
+}
+
+func (e Env) jobs(shellPID int) ([]Job, error) {
+	if e.Jobs != nil {
+		return e.Jobs(shellPID)
+	}
+	return SessionJobs(shellPID)
 }
 
 func (e Env) now() time.Time {
