@@ -68,7 +68,7 @@ func (f *WakeForm) Confirm() tea.Cmd {
 		return nil
 	}
 	f.phase, f.request, f.err = Running, nextRequest(), nil
-	return f.run.do(f.request, req)
+	return f.run.submit(f.request, key, req)
 }
 
 // Update takes the action's answer.

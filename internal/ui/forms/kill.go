@@ -154,7 +154,7 @@ func (f *KillForm) Confirm() tea.Cmd {
 	req := withParam(f.request0(), actions.ParamConfirm, strings.TrimSpace(f.typed))
 	req.OperationID = opID
 	f.opID, f.phase, f.request, f.submitted = opID, Running, nextRequest(), true
-	return tea.Batch(f.run.do(f.request, req), f.tick())
+	return tea.Batch(f.run.submit(f.request, f.key, req), f.tick())
 }
 
 func (f *KillForm) tick() tea.Cmd {

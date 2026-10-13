@@ -75,7 +75,7 @@ func (f *ConfirmForm) Confirm() tea.Cmd {
 	req := f.req
 	req.OperationID = opID
 	f.phase, f.request, f.submitted = Running, nextRequest(), true
-	return f.run.do(f.request, req)
+	return f.run.submit(f.request, f.key, req)
 }
 
 // Update takes the action's answers.

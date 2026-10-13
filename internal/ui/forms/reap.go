@@ -118,7 +118,7 @@ func (f *ReapForm) Confirm() tea.Cmd {
 	req := f.request0(f.set)
 	req.OperationID = opID
 	f.phase, f.request, f.submitted = Running, nextRequest(), true
-	return f.run.do(f.request, req)
+	return f.run.submit(f.request, f.key, req)
 }
 
 // Update takes the action's answers.

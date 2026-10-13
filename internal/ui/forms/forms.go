@@ -83,6 +83,21 @@ func (r Runner) do(request uint64, req actions.Request) tea.Cmd {
 // review fixes the operation id of the review of req, the request as it
 // will be submitted (key); a dry run of it runs with ParamDryRun added,
 // under that id.
+// submit runs a submitted request (key is its review key) and ends the
+// guard's hold on it where the answer arrives, also when the form closed
+// meanwhile. A lost answer keeps the hold: that request is never sent
+// again from this surface (Guard.Settle).
+func (r Runner) submit(request uint64, key string, req actions.Request) tea.Cmd {
+	run, guard := r.do(request, req), r.Guard
+	return func() tea.Msg {
+		msg := run()
+		if d, ok := msg.(done); ok {
+			guard.Settle(key, d.err)
+		}
+		return msg
+	}
+}
+
 func (r Runner) review(req actions.Request) (key, opID string, err error) {
 	key = actions.ReviewKey(r.Action.ID, req)
 	opID, err = r.Guard.Review(key)

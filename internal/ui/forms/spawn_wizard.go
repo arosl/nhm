@@ -390,7 +390,7 @@ func (sw *SpawnWizard) submit() tea.Cmd {
 	}
 	req.OperationID = opID
 	sw.step, sw.running, sw.request = SpawnStepResult, true, nextRequest()
-	cmd := sw.run.do(sw.request, req)
+	cmd := sw.run.submit(sw.request, sw.reviewKey, req)
 	return func() tea.Msg {
 		m := cmd().(done)
 		return spawnRan{request: m.request, res: m.res, err: m.err}

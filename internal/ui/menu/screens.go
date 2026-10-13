@@ -412,9 +412,12 @@ func (s *sendScreen) Update(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, false
 		}
 		s.running, s.request = true, nextRequest()
-		a, core, rid := s.a, s.core, s.request
+		a, core, rid, guard := s.a, s.core, s.request, s.guard
 		return func() tea.Msg {
 			res, err := a.Do(context.Background(), core, req)
+			// The hold ends where the answer arrives, also when the screen
+			// closed meanwhile; a lost answer keeps it (Guard.Settle).
+			guard.Settle(key, err)
 			return sendDone{request: rid, res: res, err: err}
 		}, false
 	case sendDone:

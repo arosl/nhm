@@ -153,6 +153,31 @@ func TestReapEditDropsTheReview(t *testing.T) {
 	}
 }
 
+// The confirm's answer ends the guard's hold on its request; a lost
+// answer keeps it, so that request is never sent again (Guard.Settle).
+func TestReapSettlesItsHold(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		held bool
+	}{
+		{"an answer", nil, false},
+		{"a refusal", fmt.Errorf("%w: nhm does not own this server", lifecycle.ErrRefused), false},
+		{"a lost answer", fmt.Errorf("%w: the job's answer did not come in", actions.ErrNoAnswer), true},
+	} {
+		fc := &fakeCore{reapRes: [][]lifecycle.ReapItem{reapReview}}
+		run := newRunner(t, "workspace.reap", fc.core())
+		f := NewReapForm(run, ctxW, time.Minute)
+		f.Update(do(t, f.StartReview()))
+		key := f.key
+		fc.reapErr = c.err
+		f.Update(do(t, f.Confirm()))
+		if _, err := run.Guard.Review(key); errors.Is(err, actions.ErrSubmitted) != c.held {
+			t.Errorf("%s: review after it = %v, want held %v", c.name, err, c.held)
+		}
+	}
+}
+
 func TestReapRefusalsAndFailures(t *testing.T) {
 	fc := &fakeCore{reapRes: [][]lifecycle.ReapItem{reapReview[1:2]}}
 	f := NewReapForm(newRunner(t, "workspace.reap", fc.core()), ctxW, time.Minute)
