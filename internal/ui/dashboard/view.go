@@ -435,8 +435,9 @@ func (m *Model) actionsBody() string {
 	dim := lipgloss.NewStyle().Foreground(m.theme.Overlay)
 	for _, a := range m.menu {
 		line := fmt.Sprintf("%s  %-10s %s", a.Board.Space, a.Label, a.Help)
-		// The read view is the board's own, not a handler of the table.
-		if why := a.Unavailable(m.cfg.Context, m.cfg.Core); why != "" && a.ID != readActionID {
+		// The read view is the board's own, and the palette a surface it
+		// opens: neither is a handler of the table.
+		if why := a.Unavailable(m.cfg.Context, m.cfg.Core); why != "" && a.ID != readActionID && a.ID != paletteActionID {
 			line = dim.Render(line + " — " + why)
 		}
 		lines = append(lines, line)

@@ -14,8 +14,44 @@ import (
 	"github.com/arosl/nhm/internal/ui/palette"
 )
 
-// sendActionID is the table's free-text send (space s).
-const sendActionID = "send"
+// sendActionID is the table's free-text send (space s); paletteActionID
+// is the palette surface (space a).
+const (
+	sendActionID    = "send"
+	paletteActionID = "palette"
+)
+
+// paletteMsg says whether the palette popup opened, for n agents.
+type paletteMsg struct {
+	n   int
+	err error
+}
+
+// openPalette opens the palette popup on the board's frozen selection:
+// the marks, else the cursor's row. The palette sends to exactly those
+// targets at the generations frozen here; it never widens the set.
+func (m *Model) openPalette() tea.Cmd {
+	m.view = viewMain
+	tg := m.b.Sel.Targets()
+	switch {
+	case tg.From == board.FromNone:
+		m.say(true, "no agent: move the cursor to one, or mark some with x")
+		return nil
+	case len(tg.Invalid) > 0:
+		m.say(true, fmt.Sprintf("%d marks no longer name their agent; esc clears the marks", len(tg.Invalid)))
+		return nil
+	}
+	ts := make([]ui.Target, len(tg.Rows))
+	for i, r := range tg.Rows {
+		ts[i] = r.Key
+	}
+	open, c, d := m.cfg.OpenPalette, m.cfg.Context.WithTargets("board", ts), m.cfg.CallTimeout
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		return paletteMsg{n: len(ts), err: open(ctx, c)}
+	}
+}
 
 // sendState is the board's send: the frozen targets, the palette's
 // composer (the one editor, plan-v4 section 5), and the submission.

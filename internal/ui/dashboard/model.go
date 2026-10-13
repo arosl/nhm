@@ -64,6 +64,9 @@ type Config struct {
 	// Submitter); the send itself goes through the action table. nil: no
 	// preview.
 	Memory *palette.Submitter
+	// OpenPalette opens the palette popup on a context that carries the
+	// board's frozen selection (space a); nil leaves space a out.
+	OpenPalette func(ctx context.Context, c ui.Context) error
 	// Now is time.Now in production.
 	Now func() time.Time
 	// CallTimeout bounds each call a key starts (default 5 s).
@@ -191,8 +194,8 @@ func New(cfg Config) (*Model, error) {
 	}
 	for _, a := range actions.Space() {
 		// The forms and the send need the guard; the read view is the
-		// board's own.
-		if a.ID == readActionID && cfg.Read != nil ||
+		// board's own; the palette is a surface the board opens.
+		if a.ID == readActionID && cfg.Read != nil || a.ID == paletteActionID && cfg.OpenPalette != nil ||
 			m.guard != nil && a.Visible() && (forms.IsAgentAction(a.ID) || a.ID == sendActionID) {
 			m.menu = append(m.menu, a)
 		}
@@ -377,6 +380,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.say(false, "zoomed "+msg.name)
 		}
 		return m, nil
+	case paletteMsg:
+		if msg.err != nil {
+			m.say(true, "palette: "+msg.err.Error())
+		} else {
+			m.say(false, fmt.Sprintf("the palette opened for %d agents", msg.n))
+		}
+		return m, nil
 	case inboxMsg:
 		if msg.seq != m.inbox.seq {
 			return m, nil // an answer to an older request
@@ -433,6 +443,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.openRead()
 			case sendActionID:
 				return m, m.openSend(a)
+			case paletteActionID:
+				return m, m.openPalette()
 			}
 			return m, m.openForm(a)
 		}

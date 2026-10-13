@@ -715,6 +715,37 @@ func TestSendFromTheBoard(t *testing.T) {
 	}
 }
 
+// space a opens the palette on exactly the board's frozen selection, an
+// explicit one; with no agent it opens nothing.
+func TestPaletteFromTheBoard(t *testing.T) {
+	var got []ui.Context
+	m := newModel(t, Config{OpenPalette: func(_ context.Context, c ui.Context) error {
+		got = append(got, c)
+		return nil
+	}})
+	press(m, "x", "j", "x")
+	cmd := press(m, "space", "a")
+	if cmd == nil || m.view != viewMain {
+		t.Fatalf("space a started nothing (view %d)", m.view)
+	}
+	m.Update(cmd())
+	if len(got) != 1 {
+		t.Fatalf("%d palettes", len(got))
+	}
+	ts, pick, err := got[0].Selection()
+	if err != nil || pick || len(ts) != 2 || got[0].Origin != "board" || ts[0].Generation < 1 {
+		t.Fatalf("selection %+v, pick %v, err %v, origin %q", ts, pick, err, got[0].Origin)
+	}
+	if !strings.Contains(plain(m), "the palette opened for 2 agents") {
+		t.Fatalf("status:\n%s", plain(m))
+	}
+	m.b.Sel.ClearMarks()
+	m.b.Sel.SetFilter("nobody")
+	if cmd := press(m, "space", "a"); cmd != nil || len(got) != 1 {
+		t.Fatal("the palette opened with no agent")
+	}
+}
+
 // runAll runs a command, batches too, and hands each message back.
 func runAll(m *Model, cmd tea.Cmd) {
 	if cmd == nil {
