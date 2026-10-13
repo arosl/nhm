@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/assignment"
@@ -110,7 +111,21 @@ type CLI struct {
 	// are looked up (so a bad config fails only the verbs that read
 	// beads).
 	LoadBeadDBs func() ([]string, error)
+	// Lists, when set, keeps the br lists one pass reads, so that the
+	// agents of the pass share one read of each database and status
+	// (nhm maintain's recycle on close). Nil reads every time.
+	Lists *BrLists
 }
+
+// BrLists keeps br list answers, by project, database and status, for one
+// pass: it never expires, so each pass takes a new one.
+type BrLists struct {
+	mu   sync.Mutex
+	read map[string][]brIssue
+}
+
+// NewBrLists is an empty BrLists.
+func NewBrLists() *BrLists { return &BrLists{read: map[string][]brIssue{}} }
 
 func run(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
 	return runEnv(ctx, dir, nil, name, args...)
@@ -341,15 +356,29 @@ type brIssue struct {
 // with a "/ntm-<key>" suffix, which br's exact --assignee does not match;
 // nhm-i85). A page that is not the whole list is an error: a bead left out
 // could be work in progress.
-func brList(ctx context.Context, root string, db []string, status, agent string) ([]brIssue, error) {
-	args := append(brRead(db), "list", "--status", status, "--limit", "0", "--json")
-	out, err := run(ctx, root, "br", args...)
-	if err != nil {
-		return nil, err
+func brList(ctx context.Context, lists *BrLists, root string, db []string, status, agent string) ([]brIssue, error) {
+	key := strings.Join(append([]string{root, status}, db...), "\x00")
+	var issues []brIssue
+	var cached bool
+	if lists != nil {
+		lists.mu.Lock()
+		issues, cached = lists.read[key]
+		lists.mu.Unlock()
 	}
-	issues, err := parseBrList(out)
-	if err != nil {
-		return nil, err
+	if !cached {
+		args := append(brRead(db), "list", "--status", status, "--limit", "0", "--json")
+		out, err := run(ctx, root, "br", args...)
+		if err != nil {
+			return nil, err
+		}
+		if issues, err = parseBrList(out); err != nil {
+			return nil, err
+		}
+		if lists != nil {
+			lists.mu.Lock()
+			lists.read[key] = issues
+			lists.mu.Unlock()
+		}
 	}
 	var mine []brIssue
 	for _, is := range issues {
@@ -440,7 +469,7 @@ func (c CLI) Assigned(ctx context.Context, root, agent string) ([]Bead, error) {
 	var beads []Bead
 	seen := map[string]bool{}
 	for _, db := range dbs {
-		found, err := assignedIn(ctx, root, db, agent)
+		found, err := assignedIn(ctx, c.Lists, root, db, agent)
 		if err != nil {
 			return nil, err
 		}
@@ -454,8 +483,8 @@ func (c CLI) Assigned(ctx context.Context, root, agent string) ([]Bead, error) {
 	return beads, nil
 }
 
-func assignedIn(ctx context.Context, root string, db []string, agent string) ([]Bead, error) {
-	issues, err := brList(ctx, root, db, "in_progress", agent)
+func assignedIn(ctx context.Context, lists *BrLists, root string, db []string, agent string) ([]Bead, error) {
+	issues, err := brList(ctx, lists, root, db, "in_progress", agent)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +540,7 @@ func (c CLI) Closed(ctx context.Context, root, agent string) ([]string, error) {
 	var ids []string
 	seen := map[string]bool{}
 	for _, db := range dbs {
-		issues, err := brList(ctx, root, db, "closed", agent)
+		issues, err := brList(ctx, c.Lists, root, db, "closed", agent)
 		if err != nil {
 			return nil, err
 		}
@@ -565,7 +594,7 @@ func (c CLI) Known(ctx context.Context, root, agent string) (bool, error) {
 		return false, err
 	}
 	for _, db := range dbs {
-		issues, err := brList(ctx, root, db, "all", agent)
+		issues, err := brList(ctx, c.Lists, root, db, "all", agent)
 		if err != nil {
 			return false, err
 		}

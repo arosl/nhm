@@ -109,6 +109,13 @@ func recycleOnClose(ctx context.Context, ie *instanceEnv, cfg maintainConfig, le
 	for _, a := range agents {
 		status[a.PaneID] = a.AgentStatus
 	}
+	// The pass's agents share one br list per database and status: br's
+	// exact --assignee cannot find a spawn assignment's claims, so each
+	// list is the whole status (nhm-i85).
+	if cli, ok := lenv.Facts.(lifecycle.CLI); ok {
+		cli.Lists = lifecycle.NewBrLists()
+		lenv.Facts = cli
+	}
 	next := map[string]lifecycle.OnCloseSeen{}
 	for _, b := range active {
 		seen := state[b.ID]

@@ -61,4 +61,26 @@ func TestFactsCountSpawnAssignmentClaims(t *testing.T) {
 		strings.Join(got["BlueLake"], ",") != "acfs-4" || len(got) != 3 {
 		t.Fatalf("InProgress = %v %v", got, err)
 	}
+
+	// A pass's lists: each database and status is read once for all its
+	// agents, and each agent still gets only its own beads.
+	logf := filepath.Join(bin, "argv.log")
+	script, err := os.ReadFile(filepath.Join(bin, "br"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(bin, "br"), strings.Replace(string(script), "#!/bin/sh\n", "#!/bin/sh\necho \"$*\" >> "+logf+"\n", 1))
+	pass := CLI{Lists: NewBrLists()}
+	for _, agent := range []string{"IcyKnoll", "BlueLake", "IcyKnoll"} {
+		if _, err := pass.Closed(ctx, root, agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if closedIDs, err := pass.Closed(ctx, root, "BlueLake"); err != nil || !slices.Equal(closedIDs, []string{"acfs-7"}) {
+		t.Fatalf("BlueLake's closed = %v %v", closedIDs, err)
+	}
+	argv, _ := os.ReadFile(logf)
+	if n := strings.Count(string(argv), "list --status closed"); n != 1 {
+		t.Fatalf("br list --status closed ran %d times in one pass:\n%s", n, argv)
+	}
 }
