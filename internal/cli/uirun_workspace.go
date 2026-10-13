@@ -25,17 +25,28 @@ func runSpawnJob(ctx context.Context, ie *instanceEnv, j runner.Job) (any, int, 
 	if err := j.Decode(&req); err != nil {
 		return nil, exitRefused, err
 	}
-	enrichment, err := spawnEnrichment(&spawnFlags{withMemory: req.Memory, withCASS: req.CASS, noCASSContext: !req.CASS})
+	sreq, err := spawnRequestOf(req)
 	if err != nil {
 		return nil, exitRefused, err
 	}
-	sreq := spawn.Request{Session: req.Session, Add: req.Add, Agents: req.Agents, Label: req.Label, Group: req.Group,
-		Prompt: req.Prompt, NoKickoff: req.NoKickoff, Enrich: enrichment, OperationID: j.ID}
+	sreq.OperationID = j.ID
 	res, code, err := spawnUnderOwner(ctx, ie, &sreq, "")
 	if err == nil {
 		code = spawnExit(res)
 	}
 	return res, code, err
+}
+
+// spawnRequestOf is the core's request for a surface's spawn: the
+// wizard's fields, with the kickoff's enrichment from nhm's config, as
+// the gum wizard builds it. The project is the cwd.
+func spawnRequestOf(r runner.SpawnRequest) (spawn.Request, error) {
+	enrichment, err := spawnEnrichment(&spawnFlags{withMemory: r.Memory, withCASS: r.CASS, noCASSContext: !r.CASS})
+	if err != nil {
+		return spawn.Request{}, err
+	}
+	return spawn.Request{Session: r.Session, Add: r.Add, Agents: r.Agents, Label: r.Label, Group: r.Group,
+		Prompt: r.Prompt, NoKickoff: r.NoKickoff, Enrich: enrichment}, nil
 }
 
 // runNewJob is nhm new.

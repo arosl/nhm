@@ -8,9 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arosl/nhm/internal/core/lifecycle"
+	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/ui"
+	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/runner"
 )
 
@@ -118,6 +121,52 @@ func TestUICoreRunsMutationsAsJobs(t *testing.T) {
 	var ir runner.InterruptRequest
 	if j := seenJob(t, jobs, "op-ui-2"); j.Verb != runner.VerbInterrupt || j.Decode(&ir) != nil || ir.Expect[icy.ID] != icy.Generation {
 		t.Fatalf("interrupt job = %+v", j)
+	}
+	// kill's review runs here and refuses: BlueLake works.
+	kres, err := core.Kill(ctx, lifecycle.KillRequest{WorkspaceID: "w1"})
+	if !errors.Is(err, lifecycle.ErrRefused) || len(kres.Refusals) == 0 {
+		t.Fatalf("kill review = %+v %v", kres, err)
+	}
+	if _, err := core.Kill(ctx, lifecycle.KillRequest{WorkspaceID: "w1", Yes: true, NoBeads: true, OperationID: "op-ui-3"}); err != nil {
+		t.Fatal(err)
+	}
+	var kr runner.KillRequest
+	if j := seenJob(t, jobs, "op-ui-3"); j.Verb != runner.VerbKill || j.Decode(&kr) != nil || kr != (runner.KillRequest{WorkspaceID: "w1", NoBeads: true}) {
+		t.Fatalf("kill job = %+v %+v", j, kr)
+	}
+	// reap's dry run runs here; the sweep is a job with exactly the set.
+	items, err := core.Reap(ctx, lifecycle.ReapRequest{WorkspaceID: "w1", Idle: time.Minute, DryRun: true}, "op-ui-x")
+	if err != nil || len(items) != 2 {
+		t.Fatalf("reap review = %+v %v", items, err)
+	}
+	if _, err := os.Stat(filepath.Join(jobs.JobDir, "op-ui-x.seen")); err == nil {
+		t.Fatal("reap's dry run started a job")
+	}
+	only := []lifecycle.ReapTarget{{BindingID: icy.ID, Generation: icy.Generation}}
+	if _, err := core.Reap(ctx, lifecycle.ReapRequest{WorkspaceID: "w1", Idle: time.Minute, Only: only}, "op-ui-4"); err != nil {
+		t.Fatal(err)
+	}
+	var rr runner.ReapRequest
+	if j := seenJob(t, jobs, "op-ui-4"); j.Verb != runner.VerbReap || j.Decode(&rr) != nil || len(rr.Only) != 1 || rr.Only[0] != only[0] {
+		t.Fatalf("reap job = %+v %+v", j, rr)
+	}
+	if _, err := core.New(ctx, "fresh", "/data/p", "op-ui-5"); err != nil || seenJob(t, jobs, "op-ui-5").Verb != runner.VerbNew {
+		t.Fatalf("new job: %v", err)
+	}
+	if _, err := core.Wake(ctx, []ui.Target{{BindingID: icy.ID, Generation: icy.Generation}}, "op-ui-6"); err != nil ||
+		seenJob(t, jobs, "op-ui-6").Verb != runner.VerbWake {
+		t.Fatalf("wake job: %v", err)
+	}
+	if _, err := core.Spawn(ctx, actions.SpawnRequest{Session: "w1", Add: true, Agents: []spawn.Want{{Kind: "claude", Count: 1}},
+		Memory: true}, "op-ui-7"); err != nil {
+		t.Fatal(err)
+	}
+	var sr runner.SpawnRequest
+	if j := seenJob(t, jobs, "op-ui-7"); j.Verb != runner.VerbSpawn || j.Decode(&sr) != nil || !sr.Add || !sr.Memory || sr.Agents[0].Count != 1 {
+		t.Fatalf("spawn job = %+v %+v", j, sr)
+	}
+	if _, err := core.Operation(ctx, "op-none"); !errors.Is(err, lifecycle.ErrNoOperation) {
+		t.Fatalf("a missing operation = %v", err)
 	}
 	// The send base is nhm send's for the workspace, with no selector.
 	if _, err := uiSendBase(ctx, ie, ui.Context{}); err == nil {

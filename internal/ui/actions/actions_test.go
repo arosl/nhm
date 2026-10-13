@@ -293,11 +293,15 @@ func TestDoChecks(t *testing.T) {
 			t.Errorf("%s ran: %v", id, err)
 		}
 	}
-	if why := mustAction(t, "workspace.kill").Unavailable(ui.Context{}, f.core()); why == "" || mustAction(t, "workspace.kill").Visible() {
-		t.Errorf("kill: unbuilt, so unavailable and hidden (%q)", why)
+	kill := mustAction(t, "workspace.kill")
+	if why := kill.Unavailable(ui.Context{}, f.core()); why == "" || !kill.Visible() {
+		t.Errorf("kill without a workspace: %q", why)
 	}
-	if why := mustAction(t, "spawn.add").Unavailable(ctxWS, f.core()); why != "not built yet" {
-		t.Errorf("spawn.add: %q", why)
+	if why := kill.Unavailable(ctxWS, f.core()); why != "this surface cannot kill" {
+		t.Errorf("kill without its core seam: %q", why)
+	}
+	if why := mustAction(t, "agent.adopt").Unavailable(ctxWS, f.core()); why != "not built yet" || mustAction(t, "agent.adopt").Visible() {
+		t.Errorf("adopt: unbuilt, so unavailable and hidden (%q)", why)
 	}
 	if why := mustAction(t, "palette").Unavailable(ui.Context{}, f.core()); why != "" || !mustAction(t, "palette").Visible() {
 		t.Errorf("palette: %q", why)

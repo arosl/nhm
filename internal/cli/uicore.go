@@ -8,7 +8,9 @@ import (
 
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
+	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/wait"
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/runner"
@@ -16,11 +18,12 @@ import (
 
 // uiCore is actions.Core for a surface's context c (plan-v4 sections 2
 // and 4): the one wiring for the menu, the board and the palette. A read
-// or a dry run runs in the surface, with the same env as the verb; the
-// surface runs in c's directory, as the verb would. A mutation runs as a
-// job of jobs (uiJobs) whose id is the operation id the guard gave: the
-// seam waits for the job's result, and the end of the wait (the surface
-// closing) never ends the job.
+// or a dry run (retire's and send's DryRun, kill without Yes, reap's and
+// spawn's dry run) runs in the surface, with the same env as the verb;
+// the surface runs in c's directory, as the verb would. A mutation runs
+// as a job of jobs (uiJobs) whose id is the operation id the guard gave:
+// the seam waits for the job's result, and the end of the wait (the
+// surface closing) never ends the job.
 func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 	return actions.Core{
 		SendBase: func(ctx context.Context) (send.Request, error) { return uiSendBase(ctx, ie, c) },
@@ -50,6 +53,65 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 		Recycle: func(ctx context.Context, req lifecycle.RecycleRequest) (lifecycle.RecycleResult, error) {
 			var res lifecycle.RecycleResult
 			return res, uiJob(ctx, jobs, runner.VerbRecycle, req.OperationID, req, &res, nil)
+		},
+		Kill: func(ctx context.Context, req lifecycle.KillRequest) (lifecycle.KillResult, error) {
+			if !req.Yes {
+				lenv, err := ie.lifecycleEnv()
+				if err != nil {
+					return lifecycle.KillResult{}, err
+				}
+				return lifecycle.KillWith(ctx, lenv, req)
+			}
+			var res lifecycle.KillResult
+			return res, uiJob(ctx, jobs, runner.VerbKill, req.OperationID,
+				runner.KillRequest{WorkspaceID: req.WorkspaceID, NoBeads: req.NoBeads}, &res, lifecycle.ErrRefused)
+		},
+		Reap: func(ctx context.Context, req lifecycle.ReapRequest, opID string) ([]lifecycle.ReapItem, error) {
+			if req.DryRun {
+				lenv, err := ie.lifecycleEnv()
+				if err != nil {
+					return nil, err
+				}
+				if req.Keep, err = lifecycle.LoadKeep(keepPaths()...); err != nil {
+					return nil, fmt.Errorf("the keep list: %w; nobody is reaped", err)
+				}
+				items, _, err := reapSweep(ctx, ie, lenv, req)
+				return items, err
+			}
+			var out struct {
+				Agents []lifecycle.ReapItem `json:"agents"`
+			}
+			err := uiJob(ctx, jobs, runner.VerbReap, opID, runner.ReapRequest{WorkspaceID: req.WorkspaceID, Idle: req.Idle,
+				Only: req.Only}, &out, lifecycle.ErrRefused)
+			return out.Agents, err
+		},
+		Wake: func(ctx context.Context, ts []ui.Target, opID string) (wake.Report, error) {
+			var res wakeResult
+			err := uiJob(ctx, jobs, runner.VerbWake, opID, runner.WakeRequest{Recipients: ts}, &res, nil)
+			return res.Report, err
+		},
+		New: func(ctx context.Context, label, project, opID string) (string, error) {
+			var res newResult
+			err := uiJob(ctx, jobs, runner.VerbNew, opID, runner.NewRequest{Label: label, Project: project}, &res, nil)
+			return res.WorkspaceID, err
+		},
+		Spawn: func(ctx context.Context, req actions.SpawnRequest, opID string) (spawn.Result, error) {
+			rreq := runner.SpawnRequest{Session: req.Session, Add: req.Add, Agents: req.Agents, Label: req.Label, Group: req.Group,
+				Prompt: req.Prompt, NoKickoff: req.NoKickoff, Memory: req.Memory, CASS: req.CASS}
+			if req.DryRun {
+				sreq, err := spawnRequestOf(rreq)
+				if err != nil {
+					return spawn.Result{}, err
+				}
+				sreq.DryRun = true
+				res, _, err := spawnUnderOwner(ctx, ie, &sreq, "")
+				return res, err
+			}
+			var res spawn.Result
+			return res, uiJob(ctx, jobs, runner.VerbSpawn, opID, rreq, &res, spawn.ErrRefused)
+		},
+		Operation: func(ctx context.Context, id string) (lifecycle.RecentOperation, error) {
+			return lifecycle.ReadOperation(ctx, ie.db, id)
 		},
 	}
 }
@@ -111,9 +173,10 @@ type uiJobError struct {
 
 func (e *uiJobError) Error() string { return e.Message }
 
-// Unwrap gives the core's refusal sentinel for a refusal (exit code 2).
+// Unwrap gives the core's refusal sentinel for a refusal: exit code 2, or
+// 3 for a spawn that admission refused.
 func (e *uiJobError) Unwrap() error {
-	if e.Code == exitRefused {
+	if e.Code == exitRefused || e.Code == exitAdmission {
 		return e.refused
 	}
 	return nil
