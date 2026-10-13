@@ -43,6 +43,18 @@ func runQuota(args []string, stdout, stderr io.Writer) int {
 			return runQuotaRecordClaude(stdout)
 		}
 	}
+	return quotaReport(args, stdout, stderr, true)
+}
+
+// runQuotaView is nhm quota's report for the menu's usage view, which only
+// reads: it stores nothing.
+func runQuotaView(args []string, stdout, stderr io.Writer) int {
+	return quotaReport(args, stdout, stderr, false)
+}
+
+// quotaReport prints the pools; with save, an enrolled server also stores
+// them for status and attention.
+func quotaReport(args []string, stdout, stderr io.Writer, save bool) int {
 	fs := flag.NewFlagSet("quota", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, quotaUsage) }
@@ -75,7 +87,7 @@ func runQuota(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	obs := quota.Collect(quota.DefaultEnv(), now, counts)
-	if r != nil && r.db != nil {
+	if save && r != nil && r.db != nil {
 		if err := quota.Store(ctx, r.db.SQL(), obs); err != nil {
 			env.Warnings = append(env.Warnings, err.Error())
 		}

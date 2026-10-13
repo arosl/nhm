@@ -81,7 +81,10 @@ func TestViewsEnvLoadsAndChangesNothing(t *testing.T) {
 	s, inst := cliInstance(t)
 	t.Setenv("AGENT_MAIL_URL", "http://127.0.0.1:1/mcp/") // no Agent Mail: doctor warns
 	t.Setenv("HOME", t.TempDir())                         // doctor's guard checks read no real hooks
-	t.Setenv("CODEX_HOME", t.TempDir())
+	// A known pool, whose rows nhm quota would store.
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	codexLimits(t, codexHome)
 	env := viewsEnv(ui.Context{SocketPath: s.SocketPath})
 	if env.RunsDir != filepath.Join(inst.Dir, store.RunsDir) {
 		t.Errorf("RunsDir = %q", env.RunsDir)
@@ -150,9 +153,9 @@ func TestViewsEnvLoadsAndChangesNothing(t *testing.T) {
 	if a := got["run status"]; a.err == nil || !strings.Contains(a.err.Error(), "no run") {
 		t.Errorf("status of a missing run = %q, %v", a.text, a.err)
 	}
-	for name, want := range map[string]string{"status": "icyknoll", "usage": "limits (a dry run: nothing is recorded)"} {
-		if a := got[name]; !strings.Contains(a.text, want) {
-			t.Errorf("%s = %q, %v; want %q in it", name, a.text, a.err, want)
+	for _, w := range [][2]string{{"status", "icyknoll"}, {"usage", "limits (a dry run: nothing is recorded)"}, {"usage", "codex (pro)"}} {
+		if a := got[w[0]]; !strings.Contains(a.text, w[1]) {
+			t.Errorf("%s = %q, %v; want %q in it", w[0], a.text, a.err, w[1])
 		}
 	}
 	if after := tableDump(t, inst.Dir); after != before {

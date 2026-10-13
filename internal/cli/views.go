@@ -25,8 +25,9 @@ import (
 // so a view shows what the verb shows, and no subprocess runs. Only
 // read-only verbs and forms are used: health, version, compatibility
 // status, admin recover inspect, feedback list, ensemble status, status,
-// attention, quota, limits --dry-run, read and mail inbox --keep-unread.
-// Doctor's checks and the capabilities come as nhm's own data and text.
+// attention, quota's report without its store (runQuotaView), limits
+// --dry-run, read and mail inbox --keep-unread. Doctor's checks and the
+// capabilities come as nhm's own data and text.
 func viewsEnv(c ui.Context) views.Env {
 	sock := c.SocketPath
 	if sock == "" {
@@ -67,10 +68,10 @@ func viewsEnv(c ui.Context) views.Env {
 		Feedback:      verbText(runFeedback, withSocket("list")...),
 		Status:        verbText(runStatus, withSocket()...),
 		Attention:     verbText(runAttention, withSocket()...),
-		// quota, then a limits pass that records nothing (no seen lines,
-		// no mail).
+		// quota's report, which stores nothing here, then a limits pass
+		// that records nothing (no seen lines, no mail).
 		Usage: func(ctx context.Context) (string, error) {
-			q, qerr := verbText(runQuota, withSocket()...)(ctx)
+			q, qerr := verbText(runQuotaView, withSocket()...)(ctx)
 			l, lerr := verbText(runLimits, withSocket("--dry-run")...)(ctx)
 			if strings.TrimSpace(l) == "" && lerr == nil {
 				l = "no agent is at a limit\n"

@@ -16,13 +16,10 @@ import (
 	"github.com/arosl/nhm/internal/store"
 )
 
-// quotaInstance is swarmInstance plus agent.list, a Codex session log at
-// 93 %, and an agent screen that shows a Claude limit.
-func quotaInstance(t *testing.T) *herdrtest.Server {
+// codexLimits writes a Codex session log into codexHome whose rate_limits
+// record, a minute old, is at 93 % for five hours and 20 % for the week.
+func codexLimits(t *testing.T, codexHome string) {
 	t.Helper()
-	s := swarmInstance(t)
-	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
 	now := time.Now().UTC()
 	line := `{"timestamp":"` + now.Add(-time.Minute).Format(time.RFC3339Nano) + `","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"pro","primary":{"used_percent":93.0,"window_minutes":300,"resets_at":` +
 		strconv.FormatInt(now.Add(time.Hour).Unix(), 10) + `},"secondary":{"used_percent":20.0,"window_minutes":10080,"resets_at":` +
@@ -34,6 +31,16 @@ func quotaInstance(t *testing.T) *herdrtest.Server {
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// quotaInstance is swarmInstance plus agent.list, a Codex session log at
+// 93 %, and an agent screen that shows a Claude limit.
+func quotaInstance(t *testing.T) *herdrtest.Server {
+	t.Helper()
+	s := swarmInstance(t)
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	codexLimits(t, codexHome)
 	s.Handle("agent.list", func(herdrtest.Request) (any, *herdrtest.Error) {
 		return map[string]any{"type": "agent_list", "agents": []any{
 			map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "t1", "agent": "claude", "agent_status": "idle", "focused": false, "revision": 1},
