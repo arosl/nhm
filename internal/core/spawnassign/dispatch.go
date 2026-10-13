@@ -143,19 +143,22 @@ func (p SendPort) Dispatch(ctx context.Context, req assignment.DispatchRequest) 
 		return receipt, assignment.GuaranteeNoActuation(errors.New("assignment dispatch has no persisted attempt"))
 	}
 	opID := OperationID(req.IdempotencyKey, req.Attempt)
+	// The CLI send's scope keys: feedback reads the bead in project_root.
+	scope := map[string]any{"workspace_id": p.WorkspaceID, "project_root": p.ProjectRoot, "mail_project_key": p.ProjectKey,
+		"assignment": map[string]any{"bead_id": req.BeadID, "idempotency_key": req.IdempotencyKey, "attempt": req.Attempt}}
 	// The context prepared for this intent, if any, is recorded with the
 	// delivery. One that cannot be read leaves the delivery without its
-	// record: the prompt itself is fixed in the ledger.
-	prepared, _ := readPrepared(p.PreparedDir, req.IdempotencyKey)
+	// record (the prompt itself is fixed in the ledger), and the operation
+	// says why.
+	prepared, preparedErr := readPrepared(p.PreparedDir, req.IdempotencyKey)
+	if preparedErr != nil {
+		scope["prepared_error"] = preparedErr.Error()
+	}
 	res, sendErr := send.Send(ctx, p.Env, send.Request{
 		Session: p.Session, WorkspaceID: p.WorkspaceID, ProjectRoot: p.ProjectRoot, ProjectKey: p.ProjectKey,
 		Selector: send.Selector{Bindings: []string{bindingID}}, Message: req.Prompt,
 		OperationID: opID, Expect: map[string]int64{bindingID: generation},
-		Source: history.SourceRobot,
-		// The CLI send's scope keys: feedback reads the bead in project_root.
-		Scope: map[string]any{"workspace_id": p.WorkspaceID, "project_root": p.ProjectRoot, "mail_project_key": p.ProjectKey,
-			"assignment": map[string]any{"bead_id": req.BeadID, "idempotency_key": req.IdempotencyKey, "attempt": req.Attempt}},
-		Prepared: prepared,
+		Source: history.SourceRobot, Scope: scope, Prepared: prepared,
 	})
 	receipt.Duration = time.Since(started)
 	if sendErr != nil {
@@ -182,6 +185,11 @@ func (p SendPort) Dispatch(ctx context.Context, req assignment.DispatchRequest) 
 	switch target.Status {
 	case send.StatusSubmitted:
 		receipt.DeliveryID = assignment.DispatchDeliveryID(req.Target, DeliveryProtocol, req.IdempotencyKey)
+		if prepared != nil {
+			// The operation holds the exposure now; no later attempt
+			// sends this intent.
+			removePrepared(p.PreparedDir, req.IdempotencyKey)
+		}
 		return receipt, nil
 	case send.StatusRefused, send.StatusFailed:
 		return receipt, assignment.GuaranteeNoActuation(fmt.Errorf("%s (%s): %s", target.Status, target.ErrorCode, target.Result.Reason))

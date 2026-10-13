@@ -475,6 +475,44 @@ func TestAssignEnrichedRetryKeepsItsPreparedContext(t *testing.T) {
 	if err != nil || len(ex) != 1 || len(ex[0].Items) != 1 {
 		t.Fatalf("attempt 2 exposure = %+v %v", ex, err)
 	}
+	// Delivered: the operation holds the exposure, and the kept file is gone.
+	path, _ := preparedPath(PreparedDir("inst-000000000000"), row.IdempotencyKey)
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the prepared context stays after its delivery: %v", err)
+	}
+}
+
+// A kept context that cannot be read does not stop the delivery (the
+// prompt is fixed in the ledger), and the operation says why it has no
+// record (review of 6ab2808).
+func TestAssignUnreadablePreparedContextStillDelivers(t *testing.T) {
+	isolate(t)
+	w := newWorld(t)
+	w.bind("IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	_, deps := w.enriching(t)
+	plan := planOf("bd-ctx")
+	plan.Context = PromptContextOptions{WithCASS: true}
+	w.herdr.promptErr["w1:p1"] = &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotReady}
+	first := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: append([]robot.SpawnedAgent(nil), w.agents...)}
+	Assign(context.Background(), first, plan, "inst-000000000000", "", deps)
+	key := first.Assignments[0].IdempotencyKey
+	path, _ := preparedPath(PreparedDir("inst-000000000000"), key)
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	delete(w.herdr.promptErr, "w1:p1")
+	second := &SpawnOutput{RobotResponse: robot.NewResponse(true, "json", time.Now()), Agents: append([]robot.SpawnedAgent(nil), w.agents...)}
+	Assign(context.Background(), second, plan, "inst-000000000000", "", deps)
+	if !second.Success || !second.Assignments[0].PromptSent {
+		t.Fatalf("second = %+v", second)
+	}
+	op, err := w.db.Operation(context.Background(), OperationID(key, 2))
+	if err != nil || !strings.Contains(op.ScopeJSON, "prepared_error") {
+		t.Fatalf("attempt 2 operation scope = %q %v", op.ScopeJSON, err)
+	}
+	if ex, err := enrich.Exposures(context.Background(), w.db, OperationID(key, 2)); err != nil || len(ex) != 0 {
+		t.Fatalf("an unreadable context was recorded: %+v %v", ex, err)
+	}
 }
 
 // A failed send proves no actuation only when the store has no operation of

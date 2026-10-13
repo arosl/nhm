@@ -184,6 +184,14 @@ func writePrepared(dir, key string, ex enrich.Exposure) error {
 	return nil
 }
 
+// removePrepared drops key's kept exposure once its delivery recorded it.
+// A file that stays only takes room.
+func removePrepared(dir, key string) {
+	if path, err := preparedPath(dir, key); err == nil && dir != "" {
+		_ = os.Remove(path)
+	}
+}
+
 // readPrepared is the exposure kept for key, or nil when none was.
 func readPrepared(dir, key string) (*enrich.Exposure, error) {
 	if dir == "" {
