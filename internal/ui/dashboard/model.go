@@ -273,10 +273,11 @@ func (m *Model) workspaceHistory(entries []history.HistoryEntry) []history.Histo
 }
 
 // historyPanes names the board's rows for the history panel: the target
-// keys nhm's send records (the slot, else the pane id).
+// keys nhm's send records (the slot, else the pane id). Every row, not
+// only those the filter shows.
 func (m *Model) historyPanes() []panels.HistoryPane {
 	var out []panels.HistoryPane
-	for _, r := range m.b.Sel.Rows() {
+	for _, r := range m.b.Rows() {
 		k := r.Slot()
 		if k == "" {
 			k = r.PaneID()
@@ -329,8 +330,7 @@ func (m *Model) waitChanged() tea.Cmd {
 // Update handles one message; it never blocks.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, isKey := msg.(tea.KeyMsg); !isKey {
-		// A form's own answers (its checks, its result) go to it, also to
-		// a closed form whose job runs on.
+		// The open form's own answers (its review, its result) go to it.
 		m.toForms(msg)
 	}
 	switch msg := msg.(type) {
@@ -638,7 +638,7 @@ func (m *Model) track(f *forms.AgentForm) {
 	}
 	if _, ok := m.b.Results.Get(id); !ok {
 		names := map[string]string{}
-		for _, r := range m.b.Sel.Rows() {
+		for _, r := range m.b.Rows() {
 			names[r.Key.Key()] = rowName(r)
 		}
 		_ = m.b.Results.Begin(id, f.Action().ID, f.Targets(), names, m.cfg.Now())
