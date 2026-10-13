@@ -541,13 +541,15 @@ const (
 	verdictDisplace = kinds.Displace
 )
 
-// keepTrue runs after the candidates: it displaces a binding whose pane
-// now holds another kind, records a restart in place (the same session,
-// a new process), and applies the herdr name again.
+// keepTrue runs after the candidates: it follows a pane that herdr
+// moved, displaces a binding whose pane now holds another kind, records
+// a restart in place (the same session, a new process), and applies the
+// herdr name again.
 func keepTrue(ctx context.Context, env Env, st paneState, b *bindings.Binding, r *Reconcile) error {
-	if !st.hasAgent {
-		// The agent left; a resume in place may follow. Nothing to do yet.
-		return nil
+	if !st.hasAgent || (st.agent.PaneID != "" && st.agent.PaneID != b.PaneID) {
+		// The agent left (a resume in place may follow), or herdr moved
+		// its pane to another workspace, which gives the pane a new id.
+		return followMove(ctx, env, b, r)
 	}
 	if st.agent.Agent != b.Kind {
 		return displace(ctx, env, b, st, fmt.Sprintf("herdr sees a %s agent, the binding has %s", st.agent.Agent, b.Kind), r)
@@ -566,17 +568,60 @@ func keepTrue(ctx context.Context, env Env, st paneState, b *bindings.Binding, r
 		*b = nb
 		r.act("%s restarted in %s as pid %d", b.MailName, b.PaneID, pid)
 	}
-	if b.HerdrAlias != "" && st.agent.Name != b.HerdrAlias {
-		if _, err := env.Herdr.AgentRename(ctx, b.PaneID, b.HerdrAlias); err != nil {
-			r.warn("herdr name %s not applied to %s: %v", b.HerdrAlias, b.PaneID, err)
-		} else {
-			r.act("named %s %s", b.PaneID, b.HerdrAlias)
-		}
-	}
+	keepName(ctx, env, st, b, r)
 	if env.TabLabels {
 		keepTabLabel(ctx, env, st, b, r)
 	}
 	return nil
+}
+
+// followMove moves a binding to its agent's new pane after herdr moved
+// the pane to another workspace (nhm-p1o; bindings.Moved has the rules).
+// The occupant and the generation stay. Agent Mail's identity file is
+// written for the new pane id; the old file stays, because the moved
+// process keeps its old HERDR_PANE_ID and herdr never reuses a pane id.
+// The herdr name follows, and the tab gets the agent's Mail name if it
+// still has herdr's default label.
+func followMove(ctx context.Context, env Env, b *bindings.Binding, r *Reconcile) error {
+	a, ok, err := bindings.Moved(ctx, env.Herdr, env.Bindings, *b)
+	if err != nil {
+		r.warn("%s left %s: %v", b.MailName, b.PaneID, err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	proof := fmt.Sprintf("pid %d", b.ForegroundPID)
+	if b.ForegroundPID == 0 {
+		proof = "session " + b.NativeSession.Value
+	}
+	from := b.PaneID
+	nb, err := env.Bindings.Relocate(ctx, b.ID, b.Generation, bindings.Location{WorkspaceID: a.WorkspaceID, TabID: a.TabID,
+		PaneID: a.PaneID}, bindings.Evidence{Kind: "move", Detail: fmt.Sprintf("herdr moved %s to %s, same %s", from, a.PaneID, proof)})
+	if err != nil {
+		return err
+	}
+	*b = nb
+	r.act("%s moved from %s to %s, slot %s", b.MailName, from, b.PaneID, b.Slot)
+	if _, err := agentmail.WriteIdentity(env.ConfigHome, b.MailProjectKey, b.PaneID, b.MailName, env.now()); err != nil {
+		r.warn("Agent Mail identity file: %v", err)
+	}
+	st := paneState{agent: a, hasAgent: true}
+	keepName(ctx, env, st, b, r)
+	keepTabLabel(ctx, env, st, b, r)
+	return nil
+}
+
+// keepName applies the binding's herdr name when herdr shows another.
+func keepName(ctx context.Context, env Env, st paneState, b *bindings.Binding, r *Reconcile) {
+	if b.HerdrAlias == "" || st.agent.Name == b.HerdrAlias {
+		return
+	}
+	if _, err := env.Herdr.AgentRename(ctx, b.PaneID, b.HerdrAlias); err != nil {
+		r.warn("herdr name %s not applied to %s: %v", b.HerdrAlias, b.PaneID, err)
+		return
+	}
+	r.act("named %s %s", b.PaneID, b.HerdrAlias)
 }
 
 // keepTabLabel names a bound agent's tab "<Name>" when the tab holds

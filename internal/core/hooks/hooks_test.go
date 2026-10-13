@@ -31,21 +31,35 @@ type pane struct {
 	session string
 	pid     int
 	cwd     string
+	ws, tab string // "" means w1 and w1:t1
 }
 
-// world is a herdr stub with mutable panes in one tab, w1:t1, and the
-// calls nhm made.
+// where is the pane's workspace and tab.
+func (p *pane) where() (string, string) {
+	if p.ws == "" {
+		return "w1", "w1:t1"
+	}
+	return p.ws, p.tab
+}
+
+// tabState is the stub's view of one tab.
+type tabState struct {
+	label string
+	panes int
+}
+
+// world is a herdr stub with mutable panes and tabs (w1:t1 to start
+// with), and the calls nhm made.
 type world struct {
-	t        *testing.T
-	mu       sync.Mutex
-	panes    map[string]*pane
-	calls    []string
-	tabLabel string
-	tabPanes int
+	t     *testing.T
+	mu    sync.Mutex
+	panes map[string]*pane
+	tabs  map[string]*tabState
+	calls []string
 }
 
 func newWorld(t *testing.T) (*world, *herdr.Client) {
-	w := &world{t: t, panes: map[string]*pane{}, tabLabel: "1", tabPanes: 1}
+	w := &world{t: t, panes: map[string]*pane{}, tabs: map[string]*tabState{"w1:t1": {label: "1", panes: 1}}}
 	s := herdrtest.New(t)
 	s.Handle("agent.get", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var p struct{ Target string }
@@ -96,35 +110,42 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.calls = append(w.calls, "tab.rename "+p.TabID+" "+p.Label)
-		w.tabLabel = p.Label
-		return map[string]any{"type": "tab_info", "tab": w.tabJSON()}, nil
+		tb, ok := w.tabs[p.TabID]
+		if !ok {
+			return nil, &herdrtest.Error{Code: "tab_not_found", Message: "tab " + p.TabID + " not found"}
+		}
+		tb.label = p.Label
+		return map[string]any{"type": "tab_info", "tab": w.tabJSON(p.TabID)}, nil
 	})
 	s.Handle("tab.get", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var p struct {
 			TabID string `json:"tab_id"`
 		}
 		_ = json.Unmarshal(r.Params, &p)
-		if p.TabID != "w1:t1" {
-			return nil, &herdrtest.Error{Code: "tab_not_found", Message: "tab " + p.TabID + " not found"}
-		}
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		return map[string]any{"type": "tab_info", "tab": w.tabJSON()}, nil
+		if _, ok := w.tabs[p.TabID]; !ok {
+			return nil, &herdrtest.Error{Code: "tab_not_found", Message: "tab " + p.TabID + " not found"}
+		}
+		return map[string]any{"type": "tab_info", "tab": w.tabJSON(p.TabID)}, nil
 	})
 	s.Handle("session.snapshot", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		w.mu.Lock()
-		panes, agents := []any{}, []any{}
+		panes, agents, tabs := []any{}, []any{}, []any{}
 		for id, pn := range w.panes {
-			panes = append(panes, map[string]any{"pane_id": id, "tab_id": "w1:t1", "workspace_id": "w1",
+			ws, tb := pn.where()
+			panes = append(panes, map[string]any{"pane_id": id, "tab_id": tb, "workspace_id": ws,
 				"terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1, "cwd": pn.cwd, "agent": pn.kind})
 			if pn.kind != "" {
 				agents = append(agents, w.agentJSON(id, pn))
 			}
 		}
-		tab := w.tabJSON()
+		for id := range w.tabs {
+			tabs = append(tabs, w.tabJSON(id))
+		}
 		w.mu.Unlock()
 		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 22, "version": "0.9.3",
-			"workspaces": []any{}, "panes": panes, "agents": agents, "tabs": []any{tab}}}, nil
+			"workspaces": []any{}, "panes": panes, "agents": agents, "tabs": tabs}}, nil
 	})
 	s.Handle("pane.process_info", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var p struct {
@@ -148,14 +169,17 @@ func newWorld(t *testing.T) (*world, *herdr.Client) {
 	return w, herdr.New(s.SocketPath)
 }
 
-// tabJSON is tab w1:t1; the caller holds w.mu.
-func (w *world) tabJSON() map[string]any {
-	return map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1, "label": w.tabLabel,
-		"focused": false, "pane_count": w.tabPanes, "agent_status": "idle"}
+// tabJSON is a tab the world has; the caller holds w.mu.
+func (w *world) tabJSON(id string) map[string]any {
+	ws, _, _ := strings.Cut(id, ":")
+	tb := w.tabs[id]
+	return map[string]any{"tab_id": id, "workspace_id": ws, "number": 1, "label": tb.label,
+		"focused": false, "pane_count": tb.panes, "agent_status": "idle"}
 }
 
 func (w *world) agentJSON(id string, pn *pane) map[string]any {
-	a := map[string]any{"pane_id": id, "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "term_1",
+	ws, tb := pn.where()
+	a := map[string]any{"pane_id": id, "tab_id": tb, "workspace_id": ws, "terminal_id": "term_1",
 		"agent": pn.kind, "agent_status": "idle", "focused": false, "revision": 1}
 	if pn.name != "" {
 		a["name"] = pn.name
@@ -201,9 +225,33 @@ func (w *world) count(prefix string) int {
 
 // setTab sets tab w1:t1's label and how many panes it holds.
 func (w *world) setTab(label string, panes int) {
+	w.addTab("w1:t1", label, panes)
+}
+
+// addTab adds a tab, or sets one's label and how many panes it holds.
+func (w *world) addTab(id, label string, panes int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.tabLabel, w.tabPanes = label, panes
+	w.tabs[id] = &tabState{label: label, panes: panes}
+}
+
+// close takes a pane out of herdr's session.
+func (w *world) close(id string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.panes, id)
+}
+
+// move is herdr's pane move to another workspace: the same agent and
+// process under a new pane id in tab, and herdr's name stays behind.
+func (w *world) move(from, to, tab string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	pn := w.panes[from]
+	delete(w.panes, from)
+	pn.ws, _, _ = strings.Cut(to, ":")
+	pn.tab, pn.name = tab, ""
+	w.panes[to] = pn
 }
 
 type harness struct {
@@ -441,6 +489,70 @@ func TestMaintainLabelsATabLeftAtItsNumber(t *testing.T) {
 		if r, err = ReconcilePane(ctx, h.env, "w1:p1"); err != nil || len(r.Actions) != 0 || h.world.count("tab.rename") != 1 {
 			t.Fatalf("tab %q with %d panes: calls %v, report %+v %v", tab.label, tab.panes, h.world.calls, r, err)
 		}
+	}
+}
+
+// herdr pane move to another workspace gives the pane a new id; the
+// binding follows its process there with the same generation, and the
+// next reconcile finds it in place (nhm-p1o).
+func TestBindingFollowsAPaneMovedToAnotherWorkspace(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	b := h.binding("IcyKnoll")
+
+	// herdr pane move w1:p1 --workspace w2 --new-tab: a tab labelled
+	// with its number.
+	h.world.move("w1:p1", "w2:p1", "w2:t1")
+	h.world.addTab("w2:t1", "3", 1)
+	r, err := ReconcilePane(ctx, h.env, "w1:p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nb := h.binding("IcyKnoll")
+	if nb.ID != b.ID || nb.Generation != b.Generation || nb.Status != bindings.Active || nb.PaneID != "w2:p1" ||
+		nb.WorkspaceID != "w2" || nb.TabID != "w2:t1" || nb.Slot != "0.1" || len(r.Warnings) != 0 {
+		t.Fatalf("binding = %+v, report %+v", nb, r)
+	}
+	if !slices.Contains(r.Actions, "IcyKnoll moved from w1:p1 to w2:p1, slot 0.1") ||
+		h.world.get("w2:p1").name != "icyknoll" || !h.world.called("tab.rename w2:t1 IcyKnoll") {
+		t.Fatalf("report %+v, calls %v", r, h.world.calls)
+	}
+	// Agent Mail's identity file names the new pane id, and the old one
+	// stays for the moved process's HERDR_PANE_ID.
+	for _, p := range []string{"w2:p1", "w1:p1"} {
+		if rec, ok, err := agentmail.ReadIdentity(h.env.ConfigHome, nb.MailProjectKey, p); err != nil || !ok || rec.Name != "IcyKnoll" {
+			t.Fatalf("identity file for %s = %+v %v %v", p, rec, ok, err)
+		}
+	}
+	if r, err = ReconcilePane(ctx, h.env, "w2:p1"); err != nil || len(r.Actions) != 0 || len(r.Warnings) != 0 {
+		t.Fatalf("second reconcile: %+v %v", r, err)
+	}
+}
+
+// An agent that left its pane, which herdr still has, did not move: the
+// binding stays where it is.
+func TestAgentThatLeftDoesNotMove(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	// The agent exits; the same session resumes in a new process in
+	// another workspace: a new occupant, for adopt --handoff-from.
+	h.world.set("w1:p1", pane{})
+	h.world.set("w2:p1", pane{kind: "claude", session: "sess-a", pid: 900, ws: "w2", tab: "w2:t1"})
+	r, err := ReconcilePane(ctx, h.env, "w1:p1")
+	if err != nil || len(r.Actions) != 0 {
+		t.Fatalf("reconcile: %+v %v", r, err)
+	}
+	// herdr closes the old pane: the other agent is still a new process.
+	h.world.close("w1:p1")
+	if r, err = ReconcilePane(ctx, h.env, "w1:p1"); err != nil || len(r.Actions) != 0 {
+		t.Fatalf("reconcile after close: %+v %v", r, err)
+	}
+	if b := h.binding("IcyKnoll"); b.PaneID != "w1:p1" || b.Status != bindings.Active {
+		t.Fatalf("binding = %+v", b)
 	}
 }
 
