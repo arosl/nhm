@@ -1,8 +1,10 @@
 package bindings
 
 import (
+	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -82,5 +84,39 @@ func TestProcEnvironReadsSelf(t *testing.T) {
 	}
 	if _, ok := env["PATH"]; !ok {
 		t.Fatalf("no PATH in %d variables", len(env))
+	}
+}
+
+// adopt of an agent whose shell names another agent in AGENT_MAIL_AGENT
+// binds it, warns (the CLI prints res.Warnings, text and --json), and
+// keeps the warning in the binding's evidence. An agent whose shell names
+// itself gets neither (nhm-a73).
+func TestAdoptWarnsOnAnotherAgentsMailVar(t *testing.T) {
+	fakeProcStart(t, map[int64]int64{300: 77, 301: 78})
+	fakeEnviron(t, map[int64]map[string]string{300: {"AGENT_MAIL_AGENT": "OldFox"}, 301: {"AGENT_MAIL_AGENT": "BlueLake"}})
+	h := session(paneSpec{pane: "w1:p1", kind: "claude", pid: 300}, paneSpec{pane: "w1:p2", kind: "claude", pid: 301})
+	env, _ := testEnv(t, h)
+	ctx := context.Background()
+	project := t.TempDir()
+
+	res, err := Adopt(ctx, env, AdoptRequest{MailName: "IcyKnoll", PaneID: "w1:p1", ProjectKey: project, ProjectID: "p"})
+	if err != nil || !res.Created {
+		t.Fatalf("adopt = %+v, %v", res, err)
+	}
+	if w := strings.Join(res.Warnings, " | "); !strings.Contains(w, "AGENT_MAIL_AGENT=OldFox") || !strings.Contains(w, "not IcyKnoll") {
+		t.Fatalf("warnings = %q", w)
+	}
+	b, err := env.Bindings.Get(ctx, res.Binding.ID)
+	if err != nil || !slices.ContainsFunc(b.Evidence, func(e Evidence) bool { return e.Kind == EvidencePaneEnv }) {
+		t.Fatalf("evidence = %+v, %v", b.Evidence, err)
+	}
+
+	res, err = Adopt(ctx, env, AdoptRequest{MailName: "BlueLake", PaneID: "w1:p2", ProjectKey: project, ProjectID: "p"})
+	if err != nil || !res.Created {
+		t.Fatalf("adopt = %+v, %v", res, err)
+	}
+	if slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "AGENT_MAIL_AGENT") }) ||
+		slices.ContainsFunc(res.Binding.Evidence, func(e Evidence) bool { return e.Kind == EvidencePaneEnv }) {
+		t.Fatalf("own name: warnings %q, evidence %+v", res.Warnings, res.Binding.Evidence)
 	}
 }

@@ -216,6 +216,9 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, opID 
 	occ := occupantOf(ctx, env.Herdr, pane, agent, alias, req.Model)
 	occ.Kind = kind
 	occ.Evidence = append([]Evidence{{Kind: "adopt", Detail: "bound by hand, operation " + opID}}, occ.Evidence...)
+	// A shell that still names another agent (a pane spawn made, reused
+	// by hand): in the binding's evidence and in the result (nhm-a73).
+	envWarning := WithMailAgentWarning(req.MailName, &occ)
 
 	if source.ID != "" {
 		// One owner of the identity at every moment (plan-v8 2.10): the old
@@ -248,6 +251,7 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, opID 
 	}
 	res.Warnings = append(res.Warnings, decorate(ctx, env, res.Binding, agent)...)
 	res.Warnings = append(res.Warnings, Label(ctx, env.Herdr, res.Binding)...)
+	res.Warnings = appendIf(res.Warnings, envWarning)
 	path, warn := writeIdentity(env, res.Binding)
 	res.IdentityPath = path
 	res.Warnings = appendIf(res.Warnings, warn)
