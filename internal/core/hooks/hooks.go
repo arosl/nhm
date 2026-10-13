@@ -27,6 +27,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/uilaunch"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/kinds"
@@ -247,6 +248,17 @@ func ReconcilePane(ctx context.Context, env Env, pane string) (Reconcile, error)
 	defer cancel()
 	err := core.WithOwnerShared(lctx, env.InstanceDir, func(o core.Owner) error {
 		r.Owner = o.Owner
+		// nhm's own board is no agent, whatever a hook or herdr says of
+		// its pane (plan-v4 section 7): no import, no binding.
+		board, err := uilaunch.IsBoardPane(ctx, uilaunch.Env{InstanceDir: env.InstanceDir, Now: env.Now}, env.Herdr, pane)
+		switch {
+		case err != nil:
+			r.warn("cannot check that the pane is not nhm's board (%v); the candidates wait", err)
+			return nil
+		case board:
+			r.warn("the pane is nhm's board, not an agent; nothing is reconciled")
+			return nil
+		}
 		if o.Owner != core.OwnerNhm {
 			// The Bash owns the instance: the candidates wait, and the
 			// pane's Bash-spawned agent is imported (acfs-9hkh.41).

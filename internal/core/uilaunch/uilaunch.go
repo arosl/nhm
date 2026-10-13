@@ -632,6 +632,33 @@ func IsBoard(ctx context.Context, env Env, h Herdr, workspaceID, paneID string) 
 	return board, err
 }
 
+// IsBoardPane is IsBoard for a caller that knows only the pane (a hook).
+// It reads the records without a lock to find the one that names the
+// pane (a record is written by a rename, so a read sees a whole one);
+// IsBoard then checks that record under its workspace's lock. herdr is
+// asked only when a record names the pane, and another workspace's lock
+// is never waited for. A record that cannot be read is an error: it may
+// name the pane.
+func IsBoardPane(ctx context.Context, env Env, h Herdr, paneID string) (bool, error) {
+	if paneID == "" {
+		return false, nil
+	}
+	workspaces, err := env.recorded()
+	if err != nil {
+		return false, err
+	}
+	for _, ws := range workspaces {
+		l, err := env.read(ws)
+		if err != nil {
+			return false, err
+		}
+		if l != nil && l.PaneID == paneID {
+			return IsBoard(ctx, env, h, ws, paneID)
+		}
+	}
+	return false, nil
+}
+
 // snapshotHerdr answers Snapshot with one snapshot taken before.
 type snapshotHerdr struct {
 	Herdr
