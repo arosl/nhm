@@ -196,6 +196,10 @@ func (e *uiLostError) Error() string {
 
 func (e *uiLostError) Unwrap() error { return e.Err }
 
+// Is lets the surfaces tell a lost answer from a failure: they show the
+// operation as unknown (actions.ErrNoAnswer).
+func (e *uiLostError) Is(target error) bool { return target == actions.ErrNoAnswer }
+
 // uiJobError is how a job ended when it gave an error: its message and
 // the verb's exit code.
 type uiJobError struct {

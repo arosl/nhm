@@ -18,6 +18,8 @@
 //   - behaviour: esc while the spawn runs only closes the wizard: the
 //     spawn runs on as a job (plan-v4 section 4).
 //   - view: five steps, with " → " between them so they fit the modal.
+//   - behaviour: a method's preset fills the counts once; going back to
+//     the counts keeps the operator's edits (ntm refilled them).
 // See evidence spawn_wizard-closure.md (nhm-qbi.4).
 
 package forms
@@ -106,6 +108,9 @@ type SpawnWizard struct {
 	countsForm *huh.Form
 	countStrs  []string
 	modelStrs  []string
+	// filled is the method the counts were last filled for: going back
+	// to the counts keeps the operator's edits.
+	filled string
 
 	// Step 3: Options
 	optionsForm *huh.Form
@@ -624,11 +629,13 @@ func (sw *SpawnWizard) initMethodForm() {
 }
 
 func (sw *SpawnWizard) initCountsForm() {
-	// Pre-fill based on method
+	// Pre-fill based on method, once per method
 	switch sw.configMethod {
 	case "quick", "minimal":
-		for i, k := range sw.kinds {
-			sw.countStrs[i] = strconv.Itoa(presets[sw.configMethod][k.Name])
+		if sw.filled != sw.configMethod {
+			for i, k := range sw.kinds {
+				sw.countStrs[i] = strconv.Itoa(presets[sw.configMethod][k.Name])
+			}
 		}
 	default:
 		// Manual - keep existing values or defaults
@@ -659,6 +666,7 @@ func (sw *SpawnWizard) initCountsForm() {
 				Validate(validateModel))
 		}
 	}
+	sw.filled = sw.configMethod
 	sw.countsForm = huh.NewForm(
 		huh.NewGroup(fields...),
 	).WithTheme(theme.HuhTheme()).WithWidth(sw.modalContentWidth())

@@ -85,12 +85,12 @@ func TestUIJobLostAndNotStarted(t *testing.T) {
 	defer cancel()
 	res, err := uiRun(ctx, jobs, runner.VerbSend, "op-lost", send.Request{}, nil, func(r *send.Result) *string { return &r.OperationID })
 	var lost *uiLostError
-	if !errors.As(err, &lost) || res.OperationID != "op-lost" || !errors.Is(err, context.DeadlineExceeded) {
+	if !errors.As(err, &lost) || res.OperationID != "op-lost" || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, actions.ErrNoAnswer) {
 		t.Fatalf("lost answer = %+v %v", res, err)
 	}
 	jobs.Bin = filepath.Join(t.TempDir(), "missing")
 	res, err = uiRun(context.Background(), jobs, runner.VerbSend, "op-gone", send.Request{}, nil, func(r *send.Result) *string { return &r.OperationID })
-	if err == nil || errors.As(err, &lost) || res.OperationID != "" {
+	if err == nil || errors.As(err, &lost) || errors.Is(err, actions.ErrNoAnswer) || res.OperationID != "" {
 		t.Fatalf("a job that did not start = %+v %v", res, err)
 	}
 }

@@ -64,6 +64,27 @@ func TestSpawnWizardBackspaceDoesNotLeaveCountsStep(t *testing.T) {
 	}
 }
 
+// Going back to the counts keeps an edit of a preset's count.
+func TestSpawnWizardBackKeepsEditedCounts(t *testing.T) {
+	t.Parallel()
+
+	sw := newTestWizard(t, "spawn.add", &spawnCore{})
+	sw.configMethod = "quick"
+	sw.step = SpawnStepCounts
+	sw.initCountsForm()
+	if sw.countStrs[0] != "2" {
+		t.Fatalf("quick did not fill the counts: %v", sw.countStrs)
+	}
+	sw.countStrs[0] = "5"
+	sw.step = SpawnStepOptions
+	sw.initOptionsForm()
+	updated, _ := sw.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	sw = updated.(*SpawnWizard)
+	if sw.step != SpawnStepCounts || sw.countStrs[0] != "5" {
+		t.Fatalf("back to the counts: step %v, counts %v", sw.step, sw.countStrs)
+	}
+}
+
 func TestSpawnWizardShiftTabMovesBackOneStep(t *testing.T) {
 	t.Parallel()
 
