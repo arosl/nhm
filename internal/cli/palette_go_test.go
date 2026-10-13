@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -109,8 +110,31 @@ func TestPaletteReaderAsksTheJob(t *testing.T) {
 		Request: map[string]string{}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := read(ctx, "op-done"); err != nil || res.OperationID != "op-done" {
+	if res, err := read(ctx, "op-done"); err != nil || res.OperationID != "op-done" || !res.InProgress {
 		t.Fatalf("a recorded send = %+v %v", res, err)
+	}
+	// A record still open whose job was killed during the send: the core
+	// no longer runs it, so it is not "in progress"; its receipts stand.
+	if _, err := db.ClaimOperation(ctx, store.ClaimRequest{ID: "op-cut", Verb: send.Verb, Scope: map[string]string{},
+		Request: map[string]string{}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runner.JobPath(jobs.JobDir, "op-cut"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cutClaim := filepath.Join(jobs.JobDir, "op-cut.run")
+	if err := os.WriteFile(cutClaim, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := read(ctx, "op-cut"); err != nil || !res.InProgress {
+		t.Fatalf("an open record whose job runs = %+v %v", res, err)
+	}
+	if err := os.WriteFile(cutClaim, []byte(strconv.Itoa(dead.Process.Pid)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := read(ctx, "op-cut"); err != nil || res.InProgress || res.OperationID != "op-cut" ||
+		!slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "job ended during the send") }) {
+		t.Fatalf("an open record whose job was killed = %+v %v", res, err)
 	}
 }
 

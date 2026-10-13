@@ -259,7 +259,9 @@ func paletteEngine(c ui.Context) (string, error) {
 	return surfaceEngine("palette")
 }
 
-// paletteReader reads what the core recorded for a send. With no record
+// paletteReader reads what the core recorded for a send. A record still
+// open whose job has ended is not in progress: the core no longer runs
+// it, and its receipts say what reached each target. With no record
 // yet, the job decides: one that still runs is in progress; one that
 // ended with an error refused before the claim, so nothing was sent; so
 // did one whose process ended with no result, because the core records a
@@ -268,6 +270,16 @@ func paletteReader(db *store.DB, jobs runner.Client) palette.Reader {
 	return func(ctx context.Context, id string) (send.Result, error) {
 		for again := true; ; again = false {
 			res, err := send.Stored(ctx, db, id)
+			if err == nil && res.InProgress && jobs.Ended(id) {
+				if again {
+					// It ended between the reads: the record may have
+					// been completed just before.
+					continue
+				}
+				res.InProgress = false
+				res.Warnings = append(res.Warnings, "its job ended during the send: each target's receipt is as the core recorded it")
+				return res, nil
+			}
 			if !errors.Is(err, sql.ErrNoRows) {
 				return res, err
 			}
