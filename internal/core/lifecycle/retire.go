@@ -104,6 +104,20 @@ type RetireRequest struct {
 	OperationID string
 	// Reason is recorded: retire, reap or kill.
 	Reason string
+	// ExpectedGeneration is the generation the caller reviewed; 0 is
+	// unset. When set, retire refuses, under the binding's lock and
+	// before any effect, a binding now at another generation.
+	ExpectedGeneration int64
+}
+
+// generationRefusal is the refusal of a binding that is not at the
+// generation a caller reviewed; "" when expected is 0 or matches.
+func generationRefusal(b bindings.Binding, expected int64) string {
+	if expected == 0 || b.Generation == expected {
+		return ""
+	}
+	return fmt.Sprintf("%s changed since it was reviewed: expected generation %d, the binding is at generation %d",
+		b.MailName, expected, b.Generation)
 }
 
 // RetireResult is what retire did, or why it refused.
@@ -191,6 +205,10 @@ func Retire(ctx context.Context, env Env, req RetireRequest) (RetireResult, erro
 	// generation to the compare-and-set at the end.
 	if b, err = env.Bindings.Get(ctx, b.ID); err != nil {
 		return res, err
+	}
+	if why := generationRefusal(b, req.ExpectedGeneration); why != "" {
+		res.Refusals = append(res.Refusals, why)
+		return res, ErrRefused
 	}
 
 	plan := check(ctx, env, req, b, &res)

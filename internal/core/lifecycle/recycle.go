@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,10 @@ type RecycleRequest struct {
 	Template, Prompt string
 	NoHandoff        bool
 	OperationID      string
+	// ExpectedGeneration is the generation the caller reviewed; 0 is
+	// unset. When set, recycle stops at its check, under the binding's
+	// lock and before any effect, when the binding is at another one.
+	ExpectedGeneration int64
 }
 
 // RecycleResult is how far a recycle got.
@@ -121,6 +126,9 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 		return fail(StageCheck, err)
 	}
 	res.PaneID, res.Generation = b.PaneID, b.Generation
+	if why := generationRefusal(b, req.ExpectedGeneration); why != "" {
+		return fail(StageCheck, errors.New(why))
+	}
 	if b.Status != bindings.Active {
 		return fail(StageCheck, fmt.Errorf("%s is %s", b.MailName, b.Status))
 	}

@@ -466,7 +466,7 @@ func TestDispatchRefusesAChangedBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := w.fake.agents["w1:p1"]
-	if err := dispatch(ctx, w.env, rdb, Target{Binding: b, Agent: &a, Key: "0.1"}, &rc, "hi", false); err != nil {
+	if err := dispatch(ctx, w.env, rdb, Target{Binding: b, Agent: &a, Key: "0.1"}, &rc, "hi", false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if rc.Status != StatusRefused || rc.ErrorCode != "generation_changed" || w.fake.promptCount() != 0 {

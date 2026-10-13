@@ -108,8 +108,15 @@ type Request struct {
 	WhenAny     bool
 	Force       bool
 	OperationID string
-	DryRun      bool
-	Source      history.Source
+	// Expect freezes the targets a caller reviewed: binding id to the
+	// generation it saw. When it is set, a selected target whose binding
+	// is at another generation, or that is not in it, is refused under
+	// the target's lock before any prompt, and an expected binding that
+	// the selection no longer finds gets a refused receipt. Nil keeps
+	// selection at submission (the CLI).
+	Expect map[string]int64
+	DryRun bool
+	Source history.Source
 	// Scope is recorded with the operation.
 	Scope any
 	// Enrich is the CM and CASS enrichment and the duplicate check.
@@ -216,6 +223,7 @@ type opRecord struct {
 	CM            enrich.Mode       `json:"cm,omitempty"`
 	CASS          enrich.Mode       `json:"cass,omitempty"`
 	MemoryQuery   string            `json:"memory_query,omitempty"`
+	Expect        map[string]int64  `json:"expect,omitempty"`
 }
 
 // opScope is the operation row's scope: the caller's scope, the session
@@ -230,6 +238,41 @@ type opScope struct {
 	// The retrieval reports, without the items' text.
 	MemoryInjection *Injection `json:"memory_injection,omitempty"`
 	CASSInjection   *Injection `json:"cass_injection,omitempty"`
+}
+
+// Receipt error codes of an expected-generation refusal (Request.Expect).
+const (
+	CodeGenerationChanged = "generation_changed"
+	CodeNotReviewed       = "not_reviewed"
+	CodeNotSelected       = "not_selected"
+)
+
+// expectRefusal says why a target at generation gen is refused under
+// expect; "" when expect is nil or matches.
+func expectRefusal(expect map[string]int64, id string, gen int64) (code, reason string) {
+	if expect == nil {
+		return "", ""
+	}
+	want, ok := expect[id]
+	switch {
+	case !ok:
+		return CodeNotReviewed, "the agent was not in the reviewed set"
+	case want != gen:
+		return CodeGenerationChanged, fmt.Sprintf("expected generation %d, the binding is at generation %d", want, gen)
+	}
+	return "", ""
+}
+
+// unselected lists, sorted, the expected bindings no target holds.
+func unselected(expect map[string]int64, targets []Target) []string {
+	var out []string
+	for id := range expect {
+		if !slices.ContainsFunc(targets, func(t Target) bool { return t.Binding.ID == id }) {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Errors.
@@ -264,7 +307,7 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 		MemoryInjection: notInjected, CASSInjection: notInjected}
 	record := opRecord{WorkspaceID: req.WorkspaceID, ProjectKey: req.ProjectKey, Selector: req.Selector,
 		Template: req.Template, Vars: req.Vars, BeadID: req.BeadID, WhenAny: req.WhenAny, Force: req.Force,
-		CM: req.Enrich.CM, CASS: req.Enrich.CASS, MemoryQuery: req.Enrich.Query}
+		CM: req.Enrich.CM, CASS: req.Enrich.CASS, MemoryQuery: req.Enrich.Query, Expect: req.Expect}
 	record.MessageSHA256, _ = Digest(req.Message)
 	if req.FileContent != "" {
 		record.FileSHA256, _ = Digest(req.FileContent)
@@ -323,6 +366,9 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 			if t.Agent == nil || !Admit(g, req.WhenAny, req.Force) {
 				status = StatusRefused
 			}
+			if code, why := expectRefusal(req.Expect, t.Binding.ID, t.Binding.Generation); code != "" {
+				status, reason = StatusRefused, why
+			}
 			res.Targets = append(res.Targets, Receipt{TargetIndex: i, Key: t.Key, BindingID: t.Binding.ID,
 				MailName: t.Binding.MailName, PaneID: t.Binding.PaneID, Kind: t.Binding.Kind, Generation: t.Binding.Generation,
 				Status: status, Result: ReceiptResult{Gate: g, Reason: reason, TaskResult: "unknown"}})
@@ -362,6 +408,12 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 		rc.Result = ReceiptResult{Key: c.Name, PaneID: c.PaneID, Reason: "no binding; " + c.Hint, TaskResult: "unknown"}
 		receipts = append(receipts, rc)
 	}
+	for _, id := range unselected(req.Expect, targets) {
+		rc := Receipt{OperationID: res.OperationID, TargetIndex: len(receipts), Key: id, BindingID: id,
+			Generation: req.Expect[id], Status: StatusRefused, ErrorCode: CodeNotSelected, UpdatedAt: now}
+		rc.Result = ReceiptResult{Key: id, Reason: "the selection no longer finds this agent (left, moved or not active)", TaskResult: "unknown"}
+		receipts = append(receipts, rc)
+	}
 	for _, rc := range receipts {
 		if err := rdb.insert(ctx, rc); err != nil {
 			return res, err
@@ -389,7 +441,7 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := dispatch(ctx, env, rdb, t, &receipts[i], payloads[i], req.WhenAny || req.Force); err != nil {
+			if err := dispatch(ctx, env, rdb, t, &receipts[i], payloads[i], req.WhenAny || req.Force, req.Expect); err != nil {
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -442,7 +494,7 @@ func replay(ctx context.Context, db *store.DB, id string, record opRecord) (Resu
 // dispatch sends to one target under its lock: revalidate, gate,
 // baseline, one agent.prompt, result. Only a receipt write failure is an
 // error; everything else is the receipt's status.
-func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt, payload string, anyState bool) error {
+func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt, payload string, anyState bool, expect map[string]int64) error {
 	finish := func(status, code, reason string) error {
 		rc.Status, rc.ErrorCode, rc.UpdatedAt = status, code, env.now()
 		if reason != "" {
@@ -465,6 +517,9 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 	if cur.Generation != t.Binding.Generation || cur.Status != bindings.Active || cur.PaneID != t.Binding.PaneID {
 		return finish(StatusRefused, "generation_changed",
 			fmt.Sprintf("the binding changed since selection (generation %d, %s, pane %s)", cur.Generation, cur.Status, cur.PaneID))
+	}
+	if code, why := expectRefusal(expect, cur.ID, cur.Generation); code != "" {
+		return finish(StatusRefused, code, why)
 	}
 	a, err := env.Herdr.AgentGet(ctx, cur.PaneID)
 	var agent *herdr.AgentInfo

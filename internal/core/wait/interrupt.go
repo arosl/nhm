@@ -3,6 +3,8 @@ package wait
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
@@ -53,7 +55,21 @@ type InterruptRequest struct {
 	OperationID string
 	Scope       any
 	Targets     []bindings.Binding
+	// Expect freezes the targets a caller reviewed: binding id to the
+	// generation it saw. When it is set, a target whose binding is now at
+	// another generation, or that is not in it, is refused before its key
+	// is sent, and an expected binding missing from Targets gets a
+	// refused entry. Nil keeps today's check (the generation of Targets).
+	// Interrupt takes no target lock: it must reach an agent that a send
+	// or a recycle holds; the check runs just before the key.
+	Expect map[string]int64
 }
+
+// Interrupt refusal reasons of Expect.
+const (
+	ReasonNotReviewed = "the agent was not in the reviewed set"
+	ReasonNotSelected = "the agent is no longer among the targets"
+)
 
 // frozenTarget is one target as the claim records it; the claim's
 // fingerprint covers the frozen targets.
@@ -71,9 +87,12 @@ func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req Inte
 	for i, b := range req.Targets {
 		frozen[i] = frozenTarget{BindingID: b.ID, Generation: b.Generation}
 	}
+	request := map[string]any{"targets": frozen}
+	if req.Expect != nil {
+		request["expect"] = req.Expect
+	}
 	claim, err := db.ClaimOperation(ctx, store.ClaimRequest{
-		ID: req.OperationID, Verb: VerbInterrupt, Scope: req.Scope,
-		Request: map[string]any{"targets": frozen},
+		ID: req.OperationID, Verb: VerbInterrupt, Scope: req.Scope, Request: request,
 	}, now())
 	if err != nil {
 		return InterruptResult{}, err
@@ -85,7 +104,7 @@ func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req Inte
 	}
 	sent, failed := 0, 0
 	for _, b := range req.Targets {
-		t := interruptOne(ctx, h, bs, b)
+		t := interruptOne(ctx, h, bs, b, req.Expect)
 		switch t.Status {
 		case InterruptSent:
 			sent++
@@ -94,8 +113,12 @@ func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req Inte
 		}
 		res.Targets = append(res.Targets, t)
 	}
+	for _, id := range missingExpected(req.Expect, req.Targets) {
+		res.Targets = append(res.Targets, InterruptTarget{BindingID: id, Generation: req.Expect[id],
+			Status: InterruptRefused, Reason: ReasonNotSelected})
+	}
 	switch {
-	case sent == len(req.Targets):
+	case sent == len(res.Targets):
 		res.Status = "done"
 	case sent > 0:
 		res.Status = "partial"
@@ -110,7 +133,19 @@ func Interrupt(ctx context.Context, db *store.DB, h Herdr, bs Bindings, req Inte
 	return res, nil
 }
 
-func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding) InterruptTarget {
+// missingExpected lists, sorted, the expected bindings not in targets.
+func missingExpected(expect map[string]int64, targets []bindings.Binding) []string {
+	var out []string
+	for id := range expect {
+		if !slices.ContainsFunc(targets, func(b bindings.Binding) bool { return b.ID == id }) {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding, expect map[string]int64) InterruptTarget {
 	t := InterruptTarget{BindingID: b.ID, MailName: b.MailName, PaneID: b.PaneID, Slot: b.Slot, Kind: b.Kind, Generation: b.Generation}
 	refuse := func(reason string) InterruptTarget {
 		t.Status, t.Reason = InterruptRefused, reason
@@ -123,6 +158,15 @@ func interruptOne(ctx context.Context, h Herdr, bs Bindings, b bindings.Binding)
 	}
 	if cur.Generation != b.Generation || cur.Status != bindings.Active || cur.PaneID != b.PaneID {
 		return refuse(fmt.Sprintf("the binding changed since selection (generation %d, %s, pane %s)", cur.Generation, cur.Status, cur.PaneID))
+	}
+	if expect != nil {
+		want, ok := expect[cur.ID]
+		switch {
+		case !ok:
+			return refuse(ReasonNotReviewed)
+		case want != cur.Generation:
+			return refuse(fmt.Sprintf("expected generation %d, the binding is at generation %d", want, cur.Generation))
+		}
 	}
 	t.Keys = InterruptKeys(cur.Kind)
 	if t.Keys == nil {
