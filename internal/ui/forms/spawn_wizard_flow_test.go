@@ -227,3 +227,23 @@ func TestSpawnWizardNewSessionNeedsALabel(t *testing.T) {
 		t.Fatalf("request = %+v", r)
 	}
 }
+
+// The same spawn twice through one guard (a board keeps one for its
+// life): the first answer settles the hold, so the second review is not
+// "already submitted" (ScarletOrchid's HIGH on 1e82151).
+func TestSpawnWizardSameSpawnTwice(t *testing.T) {
+	t.Parallel()
+
+	sc := &spawnCore{review: spawn.Result{Admission: spawn.Admission{Decision: spawn.Admit}}}
+	run := newRunner(t, "spawn.add", sc.core())
+	for i := range 2 {
+		sw := reachReview(t, NewSpawnWizard(run, ctxW, testKinds, 120, 30))
+		sw = pressWizard(t, sw, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		if sw.outcome == nil || sw.outcome.Status != "started" {
+			t.Fatalf("spawn %d: %v %+v %v", i+1, sw.step, sw.outcome, sw.runErr)
+		}
+	}
+	if len(sc.asked) != 4 || sc.asked[3].DryRun {
+		t.Fatalf("asked %+v", sc.asked)
+	}
+}

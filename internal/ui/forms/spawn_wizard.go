@@ -376,13 +376,15 @@ func (sw *SpawnWizard) submit() tea.Cmd {
 	if sw.running || sw.outcome != nil {
 		return nil
 	}
-	opID, err := sw.run.Guard.Submit(sw.reviewKey)
+	// The request first: a request that cannot be built submits nothing,
+	// so the guard holds nothing for it.
+	req, err := sw.actionRequest()
 	if err != nil {
 		sw.runErr = err
 		sw.step = SpawnStepResult
 		return nil
 	}
-	req, err := sw.actionRequest()
+	opID, err := sw.run.Guard.Submit(sw.reviewKey)
 	if err != nil {
 		sw.runErr = err
 		sw.step = SpawnStepResult
