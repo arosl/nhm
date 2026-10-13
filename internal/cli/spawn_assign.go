@@ -174,8 +174,12 @@ type humanAssign struct {
 	// long name; "" assigns to every agent.
 	agentType      string
 	verbose, quiet bool
-	timeout        time.Duration
-	context        spawnassign.PromptContextOptions
+	// reviewer: --role reviewer, whose agents work no beads; as ntm's role
+	// gating keeps reviewer panes from implementation work, they get the
+	// kickoff only.
+	reviewer bool
+	timeout  time.Duration
+	context  spawnassign.PromptContextOptions
 	// kickoff is the request as the user gave it, for AssignPrefix.
 	kickoff spawn.Request
 	// ask asks for the user's yes after the preflight; nil with --yes or
@@ -200,7 +204,7 @@ type spawnAssignResult struct {
 // spawn then sends none.
 func newHumanAssign(f *spawnFlags, req *spawn.Request) *humanAssign {
 	a := &humanAssign{strategy: f.strategy, limit: f.limit, initPrompt: f.initPrompt, verbose: f.assignVerbose, quiet: f.assignQuiet,
-		timeout:   f.assignTimeout,
+		timeout: f.assignTimeout, reviewer: req.Role == spawn.RoleReviewer,
 		agentType: spawnassign.ResolveSpawnAssignAgentType(f.assignAgent, f.assignCCOnly, f.assignCodOnly, f.assignGmiOnly, f.assignAgyOnly),
 		context:   spawnassign.PromptContextOptions{WithCASS: f.withCASS, WithMemory: f.withMemory}, kickoff: *req}
 	req.NoKickoff, req.Prompt, req.AssignOptions = true, "", a.options()
@@ -252,13 +256,13 @@ func (a *humanAssign) options() string {
 
 // selectWork is the human form's SelectWork: ntm's selection over the
 // agents of --assign-agent's type, with the ledger's active beads and
-// bv's dependency cycles; the other agents get no bead. It keeps the
-// selection in sel for the text.
+// bv's dependency cycles; the other agents, and every reviewer, get no
+// bead. It keeps the selection in sel for the text.
 func (a *humanAssign) selectWork(ctx context.Context, ie *instanceEnv, session, project string, sel *spawnassign.HumanSelection) func(*bv.TriageResponse, []robot.SpawnedAgent) ([]robot.SpawnedAgent, []spawnassign.WorkItem) {
 	return func(triage *bv.TriageResponse, agents []robot.SpawnedAgent) ([]robot.SpawnedAgent, []spawnassign.WorkItem) {
 		var matching, others []robot.SpawnedAgent
 		for _, ag := range agents {
-			if a.agentType == "" || assign.LegacyAgentType(agent.AgentType(ag.Type)) == a.agentType {
+			if !a.reviewer && (a.agentType == "" || assign.LegacyAgentType(agent.AgentType(ag.Type)) == a.agentType) {
 				matching = append(matching, ag)
 			} else {
 				others = append(others, ag)

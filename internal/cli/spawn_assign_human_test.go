@@ -15,6 +15,7 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/spawnassign"
+	"github.com/arosl/nhm/internal/integrations/bv"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -72,8 +73,34 @@ func TestNewHumanAssignTakesTheKickoff(t *testing.T) {
 		t.Fatalf("assign options = %q", req.AssignOptions)
 	}
 	if a.strategy != "rr" || a.limit != 3 || a.initPrompt != "Then check mail." || a.agentType != "codex" || !a.verbose ||
-		a.kickoff.Prompt != "Read AGENTS.md first." || a.kickoff.NoKickoff || !a.context.WithCASS || a.context.WithMemory {
+		a.kickoff.Prompt != "Read AGENTS.md first." || a.kickoff.NoKickoff || !a.context.WithCASS || a.context.WithMemory || a.reviewer {
 		t.Fatalf("assign = %+v", a)
+	}
+	if a := newHumanAssign(f, &spawn.Request{Session: "swarm", Role: spawn.RoleReviewer}); !a.reviewer {
+		t.Fatalf("--role reviewer: assign = %+v", a)
+	}
+}
+
+// --role reviewer agents work no beads: the selection leaves every one out,
+// so each gets the kickoff only, as ntm's role gating keeps reviewer panes
+// from implementation work. Other agents share the ready bead.
+func TestSelectWorkLeavesReviewersOut(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir()) // no bv: no cycles
+	triage := &bv.TriageResponse{Triage: bv.TriageData{Recommendations: []bv.TriageRecommendation{
+		{ID: "nhm-1", Title: "Fix the thing", Type: "task", Status: "open", Priority: 1, Score: 0.9}}}}
+	agents := []robot.SpawnedAgent{{Pane: "2.1", PaneID: "w1:p11", Type: "claude"}, {Pane: "2.2", PaneID: "w1:p12", Type: "claude"}}
+	ie := &instanceEnv{inst: store.Instance{ID: "inst-reviewers"}}
+	for _, c := range []struct {
+		reviewer bool
+		items    int
+	}{{false, 1}, {true, 0}} {
+		a := &humanAssign{strategy: "balanced", reviewer: c.reviewer, timeout: time.Second}
+		var sel spawnassign.HumanSelection
+		ordered, items := a.selectWork(context.Background(), ie, "swarm", t.TempDir(), &sel)(triage, agents)
+		if len(items) != c.items || len(ordered) != len(agents) {
+			t.Fatalf("reviewer=%v: items %+v, agents %+v", c.reviewer, items, ordered)
+		}
 	}
 }
 

@@ -60,7 +60,7 @@ verified before anything starts, in a dry run too. --strategy is ntm's:
 balanced (the default), speed, quality, dependency or round-robin; any
 other word takes ntm's load-balanced default. --limit caps the beads
 assigned; --assign-agent (or an --assign-*-only flag) assigns to one type
-of agent only. Each agent gets one bead: a bead the strategy plans for an
+of agent only; --role reviewer agents get no bead. Each agent gets one bead: a bead the strategy plans for an
 agent that already has one fails, as in ntm. An agent with a bead gets its
 identity line, the kickoff, --init-prompt and the bead's work prompt in one
 delivery, since a working agent takes no second prompt; every other agent
@@ -603,6 +603,13 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	env.Warnings = append(res.Admission.Warnings, res.Warnings...)
 	show := func(w io.Writer) { printSpawn(w, res) }
 	if err != nil {
+		if assign != nil && !req.DryRun {
+			// The spawn sent no kickoff for --assign: an agent that started
+			// before the error (the operation's last write) gets it now.
+			if _, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff); kerr != nil {
+				err = fmt.Errorf("%w; kickoff: %v", err, kerr)
+			}
+		}
 		return output(stdout, stderr, asJSON, env, err, code, show)
 	}
 	switch {
