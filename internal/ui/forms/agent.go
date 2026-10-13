@@ -27,14 +27,15 @@ import (
 // Core); the result shows each target's outcome in the core's words.
 // Closing the form while it runs does not cancel the job.
 type AgentForm struct {
-	action  actions.Action
-	core    actions.Core
-	guard   *actions.Guard
+	run     Runner
 	ctx     ui.Context
 	targets []ui.Target
 	names   map[string]string
 	fields  []*field
 	focus   int
+	// frozen, when set, refuses the submission while it returns an error
+	// (the board's upgrade freeze, plan-v4 section 7).
+	frozen func() error
 
 	phase   Phase
 	request uint64
@@ -48,6 +49,22 @@ type AgentForm struct {
 	closed  bool
 }
 
+// AgentOption sets up an agent form.
+type AgentOption func(*agentSetup)
+
+type agentSetup struct {
+	frozen func() error
+	origin string
+}
+
+// WithFrozen makes the form refuse its submission while frozen returns an
+// error; the error is shown. The review still runs: it only reads.
+func WithFrozen(frozen func() error) AgentOption { return func(s *agentSetup) { s.frozen = frozen } }
+
+// WithOrigin names the surface the targets come from ("board", "menu");
+// the default is the context's origin.
+func WithOrigin(origin string) AgentOption { return func(s *agentSetup) { s.origin = origin } }
+
 // field is one input of the form: text, or a toggle.
 type field struct {
 	param string
@@ -60,20 +77,29 @@ type field struct {
 // AgentFormActions are the actions the form takes.
 var AgentFormActions = []string{"agent.interrupt", "agent.retire", "agent.recycle", "agent.adopt"}
 
-// RunTimeout bounds how long the form waits for the core's answer; the
-// job itself runs on.
-var RunTimeout = 15 * time.Minute
-
-type agentReviewed struct {
-	request uint64
-	res     actions.Result
-	err     error
+// IsAgentAction reports whether the agent form runs the action with id.
+func IsAgentAction(id string) bool {
+	for _, a := range AgentFormActions {
+		if a == id {
+			return true
+		}
+	}
+	return false
 }
 
-type agentRan struct {
-	request uint64
-	res     actions.Result
-	err     error
+// RunTimeout bounds how long the form waits for the core's answer; the
+// job itself runs on, and no answer in time is "unknown".
+var RunTimeout = 15 * time.Minute
+
+// doWithin is Runner.do with a deadline on the wait.
+func doWithin(r Runner, request uint64, req actions.Request, d time.Duration) tea.Cmd {
+	a, core := r.Action, r.Core
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		res, err := a.Do(ctx, core, req)
+		return done{request: request, res: res, err: err}
+	}
 }
 
 // NewAgentForm is action a on targets ts in context c: the marks, or the
@@ -81,12 +107,8 @@ type agentRan struct {
 // to the name to show. It refuses an action the form does not take, one
 // that cannot run here, and targets that do not fit the action.
 func NewAgentForm(a actions.Action, core actions.Core, guard *actions.Guard, c ui.Context, ts []ui.Target,
-	names map[string]string) (*AgentForm, error) {
-	known := false
-	for _, id := range AgentFormActions {
-		known = known || id == a.ID
-	}
-	if !known {
+	names map[string]string, opts ...AgentOption) (*AgentForm, error) {
+	if !IsAgentAction(a.ID) {
 		return nil, fmt.Errorf("forms: %s is not an agent action of this form", a.ID)
 	}
 	if guard == nil {
@@ -95,12 +117,16 @@ func NewAgentForm(a actions.Action, core actions.Core, guard *actions.Guard, c u
 	if why := a.Unavailable(c, core); why != "" {
 		return nil, fmt.Errorf("%w: %s: %s", actions.ErrUnavailable, a.Label, why)
 	}
-	c = c.WithTargets(c.Origin, ts)
+	setup := agentSetup{origin: c.Origin}
+	for _, o := range opts {
+		o(&setup)
+	}
+	c = c.WithTargets(setup.origin, ts)
 	targets, _, err := a.Targets(c)
 	if err != nil {
 		return nil, err
 	}
-	f := &AgentForm{action: a, core: core, guard: guard, ctx: c, targets: targets, names: names}
+	f := &AgentForm{run: Runner{Action: a, Core: core, Guard: guard}, ctx: c, targets: targets, names: names, frozen: setup.frozen}
 	switch a.ID {
 	case "agent.retire":
 		f.fields = []*field{toggle(actions.ParamKeepIdentity, "keep the Agent Mail identity"),
@@ -126,6 +152,15 @@ func text(param, label string) *field {
 
 // Phase is where the form is.
 func (f *AgentForm) Phase() Phase { return f.phase }
+
+// Action is the form's action.
+func (f *AgentForm) Action() actions.Action { return f.run.Action }
+
+// Targets are the form's frozen targets.
+func (f *AgentForm) Targets() []ui.Target { return append([]ui.Target(nil), f.targets...) }
+
+// Running reports whether a submission waits for its answer.
+func (f *AgentForm) Running() bool { return f.phase == Running }
 
 // Done reports whether the operator left the form.
 func (f *AgentForm) Done() bool { return f.closed }
@@ -183,7 +218,7 @@ func (f *AgentForm) params() map[string]string {
 
 // check refuses values the action cannot take.
 func (f *AgentForm) check(p map[string]string) string {
-	switch f.action.ID {
+	switch f.run.Action.ID {
 	case "agent.recycle":
 		if p[actions.ParamTemplate] != "" && p[actions.ParamPrompt] != "" {
 			return "give a template or a kickoff text, not both"
@@ -208,46 +243,36 @@ func (f *AgentForm) startReview() tea.Cmd {
 		f.note = why
 		return nil
 	}
-	f.key = actions.ReviewKey(f.action.ID, f.requestFor(p, ""))
-	id, err := f.guard.Review(f.key)
+	key, id, err := f.run.review(f.requestFor(p, ""))
 	if err != nil {
 		f.phase, f.err = Failed, err
 		return nil
 	}
-	f.opID, f.yes, f.review, f.err, f.note = id, false, actions.Result{}, nil, ""
-	if f.action.ID != "agent.retire" {
+	f.key, f.opID, f.yes, f.review, f.err, f.note = key, id, false, actions.Result{}, nil, ""
+	if f.run.Action.ID != "agent.retire" {
 		f.phase = Reviewed
 		return nil
 	}
 	f.phase, f.request = Reviewing, nextRequest()
-	dry := map[string]string{actions.ParamDryRun: "1"}
-	for k, v := range p {
-		dry[k] = v
-	}
-	a, core, req, rid := f.action, f.core, f.requestFor(dry, id), f.request
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), RunTimeout)
-		defer cancel()
-		res, err := a.Do(ctx, core, req)
-		return agentReviewed{request: rid, res: res, err: err}
-	}
+	return doWithin(f.run, f.request, withParam(f.requestFor(p, id), actions.ParamDryRun, "1"), RunTimeout)
 }
 
-// confirm submits the reviewed request once.
+// confirm submits the reviewed request once; a frozen surface refuses it
+// before the guard spends the submission.
 func (f *AgentForm) confirm() tea.Cmd {
-	id, err := f.guard.Submit(f.key)
+	if f.frozen != nil {
+		if err := f.frozen(); err != nil {
+			f.note = err.Error()
+			return nil
+		}
+	}
+	id, err := f.run.Guard.Submit(f.key)
 	if err != nil {
 		f.note = err.Error()
 		return nil
 	}
 	f.phase, f.request = Running, nextRequest()
-	a, core, req, rid := f.action, f.core, f.requestFor(f.params(), id), f.request
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), RunTimeout)
-		defer cancel()
-		res, err := a.Do(ctx, core, req)
-		return agentRan{request: rid, res: res, err: err}
-	}
+	return doWithin(f.run, f.request, f.requestFor(f.params(), id), RunTimeout)
 }
 
 // Update takes keys and the core's answers.
@@ -256,27 +281,27 @@ func (f *AgentForm) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	switch m := msg.(type) {
-	case agentReviewed:
-		if m.request != f.request || f.phase != Reviewing {
+	case done:
+		if m.request != f.request {
 			return nil
 		}
-		f.review = m.res
-		switch {
-		case m.res.Status == "refused":
-			f.phase, f.err = Refused, m.err
-		case m.err != nil:
-			f.phase, f.err = Failed, m.err
-		default:
-			f.phase = Reviewed
-		}
-	case agentRan:
-		if m.request != f.request || f.phase != Running {
-			return nil
-		}
-		f.result, f.err = m.res, m.err
-		f.phase = Done
-		if m.err != nil {
-			f.phase = Failed
+		switch f.phase {
+		case Reviewing:
+			f.review = m.res
+			switch {
+			case m.res.Status == "refused":
+				f.phase, f.err = Refused, m.err
+			case m.err != nil:
+				f.phase, f.err = Failed, m.err
+			default:
+				f.phase = Reviewed
+			}
+		case Running:
+			f.result, f.err = m.res, m.err
+			f.phase = Done
+			if m.err != nil {
+				f.phase = Failed
+			}
 		}
 	case tea.KeyMsg:
 		return f.onKey(m)
@@ -368,7 +393,7 @@ func (f *AgentForm) View(width int) string {
 	var b strings.Builder
 	line := func(style func(...string) string, s string) { b.WriteString(style(fit(s)) + "\n") }
 	n := len(f.targets)
-	head := fmt.Sprintf("%s %d agent", f.action.Label, n)
+	head := fmt.Sprintf("%s %d agent", f.run.Action.Label, n)
 	if n != 1 {
 		head += "s"
 	}
@@ -401,10 +426,10 @@ func (f *AgentForm) View(width int) string {
 	case Reviewing:
 		line(st.Dim.Render, "checking…")
 	case Refused:
-		line(st.Error.Render, f.action.Label+" refuses:")
+		line(st.Error.Render, f.run.Action.Label+" refuses:")
 		f.writeTargets(&b, st, fit, f.review)
 	case Reviewed:
-		if f.action.ID == "agent.retire" {
+		if f.run.Action.ID == "agent.retire" {
 			line(st.Info.Render, "retire will:")
 			for _, l := range f.review.Lines {
 				line(st.Normal.Render, "  "+cleanText(l))
@@ -465,7 +490,7 @@ func (f *AgentForm) writeResult(b *strings.Builder, st theme.Styles, fit func(st
 		return
 	}
 	status := firstNonEmpty(r.Status, "done")
-	b.WriteString(st.Title.Render(fit(f.action.Label+": "+cleanText(status)+" · operation "+firstNonEmpty(r.OperationID, f.opID))) + "\n")
+	b.WriteString(st.Title.Render(fit(f.run.Action.Label+": "+cleanText(status)+" · operation "+firstNonEmpty(r.OperationID, f.opID))) + "\n")
 	f.writeTargets(b, st, fit, r)
 	for _, l := range r.Lines {
 		b.WriteString(st.Normal.Render(fit("  "+cleanText(l))) + "\n")

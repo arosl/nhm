@@ -93,7 +93,7 @@ func (f *AgentForm) step(cmd tea.Cmd) {
 	for cmd != nil {
 		msg := cmd()
 		switch msg.(type) {
-		case agentReviewed, agentRan:
+		case done:
 			cmd = f.Update(msg)
 		default:
 			return
@@ -332,6 +332,33 @@ func TestNewAgentFormRefuses(t *testing.T) {
 	}
 	if _, err := NewAgentForm(retire, c.core(), nil, agentCtx, []ui.Target{tBlue}, names); err == nil {
 		t.Error("no guard: accepted")
+	}
+}
+
+// TestFrozenRefusesTheSubmission: a frozen surface (the board after an
+// upgrade on disk) refuses the confirm and spends no submission; once it
+// thaws, the same review submits.
+func TestFrozenRefusesTheSubmission(t *testing.T) {
+	c := &agentCore{interrupt: wait.InterruptResult{Status: "done"}}
+	frozen := errors.New("nhm was upgraded on disk: reopen the board")
+	a, _ := actions.ByID("agent.interrupt")
+	f, err := NewAgentForm(a, c.core(), newGuard(), agentCtx, []ui.Target{tBlue}, names,
+		WithFrozen(func() error { return frozen }), WithOrigin("board"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.step(f.Init())
+	f.press("tab", "enter")
+	if len(c.interrupts) != 0 || f.Phase() != Reviewed || !strings.Contains(f.View(80), "reopen the board") {
+		t.Fatalf("frozen: calls %v, phase %s", c.interrupts, f.Phase())
+	}
+	frozen = nil
+	f.press("enter")
+	if len(c.interrupts) != 1 || f.Phase() != Done {
+		t.Fatalf("thawed: calls %v, phase %s", c.interrupts, f.Phase())
+	}
+	if f.Action().ID != "agent.interrupt" || len(f.Targets()) != 1 || f.Running() || !IsAgentAction("agent.adopt") || IsAgentAction("send") {
+		t.Fatal("accessors")
 	}
 }
 
