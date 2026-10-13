@@ -11,9 +11,9 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/wait"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
-	"github.com/arosl/nhm/internal/ui/actions"
 )
 
 const attachUsage = `Usage: nhm attach [session] [--socket PATH] [--json]
@@ -116,8 +116,8 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
 	}
-	z, err := zoomPane(ctx, ie.herdr, ws, res.PaneID)
-	var unshown *actions.ZoomUnshown
+	z, err := zoom.Pane(ctx, ie.herdr, ws, res.PaneID)
+	var unshown *zoom.Unshown
 	switch {
 	case errors.As(err, &unshown):
 		// The pane is zoomed; only its tab did not come in front.
@@ -134,41 +134,6 @@ func runZoom(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(w, "zoomed %s in %s; open herdr to see it\n", who, pos[0])
 	})
-}
-
-// zoomPane focuses workspace ws, zooms pane on, and brings the pane's tab
-// in front: nhm zoom, the menu's zoom and the board's. When only the tab
-// fails, the error is an *actions.ZoomUnshown: the pane is zoomed, and the
-// caller warns.
-func zoomPane(ctx context.Context, h *herdr.Client, ws, pane string) (herdr.ZoomResult, error) {
-	if err := h.WorkspaceFocus(ctx, ws); err != nil {
-		return herdr.ZoomResult{}, err
-	}
-	z, err := h.PaneZoom(ctx, pane, "on")
-	if err != nil {
-		return z, err
-	}
-	if err := frontTab(ctx, h, pane); err != nil {
-		return z, &actions.ZoomUnshown{PaneID: pane, Reason: err.Error()}
-	}
-	return z, nil
-}
-
-// frontTab brings pane's tab in front of herdr's attached clients. herdr
-// 0.9.3's client follows tab.focus and workspace.focus, but not the focus
-// that pane.zoom moves to another tab (seen in the sandbox, nhm-qbi.5).
-func frontTab(ctx context.Context, h *herdr.Client, pane string) error {
-	snap, err := h.Snapshot(ctx)
-	if err != nil {
-		return err
-	}
-	for _, p := range snap.Panes {
-		if p.PaneID == pane {
-			_, err := h.TabFocus(ctx, p.TabID)
-			return err
-		}
-	}
-	return fmt.Errorf("pane %s is gone", pane)
 }
 
 // focusSession focuses a session's workspace and returns its id, or the

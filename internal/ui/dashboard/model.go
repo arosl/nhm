@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store/history"
@@ -40,8 +41,9 @@ import (
 type Config struct {
 	Board   *board.Board
 	Context ui.Context
-	// Zoom focuses the workspace and zooms a pane, as nhm zoom does; nil
-	// leaves enter and z out.
+	// Zoom focuses the workspace and zooms a pane, as nhm zoom does
+	// (zoom.Pane); nil leaves enter and z out. A *zoom.Unshown error is
+	// a zoom that worked, with the pane's tab behind.
 	Zoom func(ctx context.Context, workspaceID, paneID string) error
 	// Inbox peeks at an agent's unread mail; it never marks it read. nil
 	// leaves i out.
@@ -404,7 +406,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.waitChanged()
 	case zoomMsg:
-		var unshown *actions.ZoomUnshown
+		var unshown *zoom.Unshown
 		switch {
 		case errors.As(msg.err, &unshown):
 			// The pane is zoomed; only its tab did not come in front.

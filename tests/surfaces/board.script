@@ -75,19 +75,26 @@ expect 5 Spawn Wizard
 key esc
 refute 2 Spawn Wizard
 expect 3 nhm board · workspace proj (w1)
-note z zooms IcyKnoll: its tab comes in front; prefix+d brings the board back
+note a second pane in IcyKnoll's tab: herdr does not zoom a tab's only pane
+run herdr pane split w1:p1 --direction right --no-focus >"$HERDR_WORK/split.json"
+check jq -e '.result.pane.pane_id' "$HERDR_WORK/split.json"
+note z zooms IcyKnoll: its tab comes in front and stays zoomed; prefix+d brings the board back
 key z
 refute 5 nhm board · workspace proj
 check herdr pane get w1:p1 | jq -e '.result.pane.focused'
+check herdr pane layout --pane w1:p1 | jq -e '.result.layout.zoomed == true'
 key ctrl+b d
 expect 5 nhm board · workspace proj (w1)
 run herdr pane zoom w1:p1 --off >/dev/null
-note nhm zoom from a shell brings IcyKnoll's tab in front too
+check herdr pane layout --pane w1:p1 | jq -e '.result.layout.zoomed == false'
+note nhm zoom from a shell brings IcyKnoll's tab in front too, zoomed
 run nhm zoom proj IcyKnoll >/dev/null
 refute 5 nhm board · workspace proj
+check herdr pane layout --pane w1:p1 | jq -e '.result.layout.zoomed == true'
 key ctrl+b d
 expect 5 nhm board · workspace proj (w1)
 run herdr pane zoom w1:p1 --off >/dev/null
+run herdr pane close "$(jq -r '.result.pane.pane_id' "$HERDR_WORK/split.json")" >/dev/null
 note a second workspace with its own board; the menu kills that workspace
 run herdr workspace create --label boardkill --cwd "$HOME" --focus >/dev/null
 key ctrl+b d

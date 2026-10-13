@@ -20,6 +20,7 @@ import (
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/wait"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/kinds"
@@ -306,12 +307,20 @@ func TestZoom(t *testing.T) {
 	// The pane is zoomed, but its tab did not come in front: the board
 	// says so, and does not call it a failed zoom.
 	unshown := newModel(t, Config{Zoom: func(_ context.Context, ws, pane string) error {
-		return &actions.ZoomUnshown{PaneID: pane, Reason: "no such tab"}
+		return &zoom.Unshown{PaneID: pane, Reason: "no such tab"}
 	}})
 	unshown.Update(press(unshown, "enter")())
 	if v := plain(unshown); !strings.Contains(v, "zoomed IcyKnoll, but herdr did not bring its tab in front: no such tab") ||
 		strings.Contains(v, "zoom IcyKnoll:") {
 		t.Fatalf("a zoom without its tab:\n%s", v)
+	}
+	// A failed zoom says so, and never says zoomed.
+	failed := newModel(t, Config{Zoom: func(context.Context, string, string) error {
+		return errors.New("pane w1:p1 not found")
+	}})
+	failed.Update(press(failed, "enter")())
+	if v := plain(failed); !strings.Contains(v, "zoom IcyKnoll: pane w1:p1 not found") || strings.Contains(v, "zoomed") {
+		t.Fatalf("a failed zoom:\n%s", v)
 	}
 
 	off := newModel(t, Config{})

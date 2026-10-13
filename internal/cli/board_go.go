@@ -15,6 +15,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/core/uilaunch"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
@@ -234,7 +235,7 @@ func goBoardConfig(ctx context.Context, ie *instanceEnv, c ui.Context, b *board.
 			return out.Text, err
 		},
 		Zoom: func(ctx context.Context, ws, pane string) error {
-			_, err := zoomPane(ctx, h, ws, pane)
+			_, err := zoom.Pane(ctx, h, ws, pane)
 			return err
 		}}
 }

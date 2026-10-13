@@ -206,14 +206,24 @@ type ProcessInfo struct {
 	TTY                      string    `json:"tty,omitempty"`
 }
 
-// ZoomResult is pane.zoom's answer, without the layout.
+// ZoomResult is pane.zoom's answer, with the workspace and tab of its
+// layout.
 type ZoomResult struct {
-	PaneID        string `json:"pane_id"`
-	Zoomed        bool   `json:"zoomed"`
-	Changed       bool   `json:"changed"`
-	ZoomChanged   bool   `json:"zoom_changed"`
-	FocusChanged  bool   `json:"focus_changed"`
-	FocusedPaneID string `json:"focused_pane_id"`
+	PaneID        string     `json:"pane_id"`
+	Zoomed        bool       `json:"zoomed"`
+	Changed       bool       `json:"changed"`
+	ZoomChanged   bool       `json:"zoom_changed"`
+	FocusChanged  bool       `json:"focus_changed"`
+	FocusedPaneID string     `json:"focused_pane_id"`
+	Layout        ZoomLayout `json:"layout"`
+}
+
+// ZoomLayout is the part of pane.zoom's layout that nhm reads: the
+// zoomed pane's workspace and tab, and whether the tab is zoomed.
+type ZoomLayout struct {
+	WorkspaceID string `json:"workspace_id"`
+	TabID       string `json:"tab_id"`
+	Zoomed      bool   `json:"zoomed"`
 }
 
 // PluginInfo is one installed plugin, as plugin.list gives it: the fields

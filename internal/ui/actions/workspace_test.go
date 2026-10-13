@@ -11,6 +11,7 @@ import (
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/wake"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/ui"
 )
 
@@ -142,7 +143,7 @@ func TestZoomAndFocus(t *testing.T) {
 			case 9:
 				return "", errors.New("the agent you picked is gone")
 			case 7:
-				return "w1:p1", &ZoomUnshown{PaneID: "w1:p1", Reason: "pane w1:p1 is gone"}
+				return "w1:p1", &zoom.Unshown{PaneID: "w1:p1", Reason: "no such tab"}
 			}
 			return "w1:p1", nil
 		},

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/arosl/nhm/internal/core/uilaunch"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/ui"
@@ -175,24 +177,43 @@ func TestGoBoardConfigReleasesEndedJobs(t *testing.T) {
 	}
 }
 
-// The board's zoom brings the zoomed pane's tab in front; a pane that
-// herdr no longer lists is an error.
-func TestFrontTabFocusesThePanesTab(t *testing.T) {
+// The board's zoom brings the tab that pane.zoom names in front. A tab
+// that stays behind is a *zoom.Unshown, which the board reports as a
+// zoom; a failed zoom is not (ScarletOrchid's review of 289e9a4).
+func TestGoBoardZoomBringsItsTabInFront(t *testing.T) {
 	s, _ := cliInstance(t)
 	boardHerdr(t, s)
-	h := herdr.New(s.SocketPath)
-	ctx := context.Background()
-	if err := frontTab(ctx, h, "w1:p9"); err == nil || !strings.Contains(err.Error(), "w1:p9 is gone") {
-		t.Fatalf("frontTab before the pane = %v", err)
-	}
-	if _, err := h.PluginPaneOpen(ctx, herdr.PluginPaneOpenParams{PluginID: "nhm", Entrypoint: "board", Placement: "tab"}); err != nil {
+	ie, err := openInstance(s.SocketPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := frontTab(ctx, h, "w1:p9"); err != nil {
+	defer func() { _ = ie.db.Close() }()
+	s.Handle("workspace.focus", func(herdrtest.Request) (any, *herdrtest.Error) { return map[string]any{"type": "ok"}, nil })
+	s.Handle("pane.zoom", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p9", "zoomed": true,
+			"layout": map[string]any{"workspace_id": "w1", "tab_id": "w1:t9", "zoomed": true}}}, nil
+	})
+	cfg := goBoardConfig(context.Background(), ie, ui.Context{SocketPath: s.SocketPath, WorkspaceID: "w1"}, nil, nil, nil)
+	ctx := context.Background()
+	if err := cfg.Zoom(ctx, "w1", "w1:p9"); err != nil {
 		t.Fatal(err)
 	}
 	if tabs := requests(s, "tab.focus"); len(tabs) != 1 || !strings.Contains(string(tabs[0].Params), `"w1:t9"`) {
 		t.Fatalf("tab.focus = %+v", tabs)
+	}
+	s.Handle("tab.focus", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return nil, &herdrtest.Error{Code: "tab_not_found", Message: "no such tab"}
+	})
+	var unshown *zoom.Unshown
+	if err := cfg.Zoom(ctx, "w1", "w1:p9"); !errors.As(err, &unshown) || unshown.PaneID != "w1:p9" ||
+		!strings.Contains(unshown.Reason, "no such tab") {
+		t.Fatalf("zoom with its tab behind = %v", err)
+	}
+	s.Handle("pane.zoom", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return nil, &herdrtest.Error{Code: "pane_not_found", Message: "no such pane"}
+	})
+	if err := cfg.Zoom(ctx, "w1", "w1:p9"); err == nil || errors.As(err, &unshown) || !strings.Contains(err.Error(), "no such pane") {
+		t.Fatalf("a failed zoom = %v", err)
 	}
 }
 

@@ -229,7 +229,7 @@ func TestEveryMethodRoundTrips(t *testing.T) {
 		"agent.send_keys":  {"type": "ok"},
 		"agent.wait":       {"type": "agent_info", "agent": agentFixture("idle", nil)},
 		"pane.split":       {"type": "pane_info", "pane": paneFixture("w1:p3")},
-		"pane.zoom":        {"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p1", "zoomed": true, "changed": true, "zoom_changed": true, "focus_changed": false, "focused_pane_id": "w1:p1", "layout": map[string]any{}}},
+		"pane.zoom":        {"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p1", "zoomed": true, "changed": true, "zoom_changed": true, "focus_changed": false, "focused_pane_id": "w1:p1", "layout": map[string]any{"workspace_id": "w1", "tab_id": "w1:t2", "zoomed": true}}},
 		"pane.process_info": {"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "shell_pid": 100, "foreground_process_group_id": 101,
 			"foreground_processes": []any{map[string]any{"pid": 101, "name": "claude", "argv": []string{"claude"}, "cmdline": "claude", "cwd": "/work"}}}},
 		"pane.read":                 {"type": "pane_read", "read": readFixture()},
@@ -299,7 +299,7 @@ func TestEveryMethodRoundTrips(t *testing.T) {
 		},
 		"pane.zoom": func() error {
 			z, err := c.PaneZoom(ctx, "w1:p1", "on")
-			if err == nil && !z.Zoomed {
+			if err == nil && (!z.Zoomed || z.Layout.TabID != "w1:t2" || !z.Layout.Zoomed) {
 				return errors.New("zoom not decoded")
 			}
 			return err

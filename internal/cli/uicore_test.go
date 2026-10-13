@@ -14,6 +14,7 @@ import (
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
@@ -216,27 +217,61 @@ func TestUICoreRunsMutationsAsJobs(t *testing.T) {
 	// front (nhm-e46).
 	s.Handle("session.snapshot", snapshotWithPanes(map[string]string{"w1:p1": "w1:t1", "w1:p2": "w1:t2"}))
 	var herdrCalls []string
-	for _, name := range []string{"workspace.focus", "pane.zoom", "tab.focus"} {
-		name := name
-		s.Handle(name, func(r herdrtest.Request) (any, *herdrtest.Error) {
-			herdrCalls = append(herdrCalls, name+" "+string(r.Params))
-			switch name {
-			case "pane.zoom":
-				return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p1", "zoomed": true}}, nil
-			case "tab.focus":
-				return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1,
-					"label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"}}, nil
-			}
-			return map[string]any{"type": "ok"}, nil
-		})
+	// serveZoom answers the zoom's three herdr calls; the call named fail
+	// fails.
+	serveZoom := func(fail string) {
+		herdrCalls = nil
+		for _, name := range []string{"workspace.focus", "pane.zoom", "tab.focus"} {
+			name := name
+			s.Handle(name, func(r herdrtest.Request) (any, *herdrtest.Error) {
+				herdrCalls = append(herdrCalls, name+" "+string(r.Params))
+				switch {
+				case name == fail:
+					return nil, &herdrtest.Error{Code: "internal", Message: name + " failed"}
+				case name == "pane.zoom":
+					return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w1:p1", "zoomed": true,
+						"layout": map[string]any{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": true}}}, nil
+				case name == "tab.focus":
+					return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "number": 1,
+						"label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"}}, nil
+				}
+				return map[string]any{"type": "ok"}, nil
+			})
+		}
 	}
+	serveZoom("")
 	stale := ui.Target{BindingID: icy.ID, Generation: icy.Generation + 1, PaneID: "w1:p1"}
 	if _, err := core.Zoom(ctx, stale); err == nil || !strings.Contains(err.Error(), "gone") || len(herdrCalls) != 0 {
 		t.Fatalf("zoom of a stale target = %v %v", err, herdrCalls)
 	}
-	if pane, err := core.Zoom(ctx, ui.Target{BindingID: icy.ID, Generation: icy.Generation}); err != nil || pane != "w1:p1" ||
+	picked := ui.Target{BindingID: icy.ID, Generation: icy.Generation}
+	if pane, err := core.Zoom(ctx, picked); err != nil || pane != "w1:p1" ||
 		len(herdrCalls) != 3 || !strings.Contains(herdrCalls[0], `"w1"`) || !strings.Contains(herdrCalls[2], `"w1:t1"`) {
 		t.Fatalf("zoom = %q %v %v", pane, err, herdrCalls)
+	}
+	// The menu's zoom on this core: a failed workspace focus or zoom is
+	// refused, never "zoomed"; a tab that stays behind is "zoomed" with a
+	// warning, and its error keeps its type (ScarletOrchid's review of
+	// 289e9a4).
+	zoomAction, _ := actions.ByID("agent.zoom")
+	for _, fail := range []string{"workspace.focus", "pane.zoom", "tab.focus"} {
+		serveZoom(fail)
+		_, err := core.Zoom(ctx, picked)
+		var unshown *zoom.Unshown
+		if err == nil || errors.As(err, &unshown) != (fail == "tab.focus") || !strings.Contains(err.Error(), fail+" failed") {
+			t.Errorf("zoom with %s failing = %v", fail, err)
+		}
+		res, err := zoomAction.Do(ctx, core, actions.Request{Context: jobs.Context, Targets: []ui.Target{picked}})
+		switch fail {
+		case "tab.focus":
+			if err != nil || res.Status != "zoomed" || len(res.Warnings) != 1 {
+				t.Errorf("the menu's zoom with its tab behind = %+v %v", res, err)
+			}
+		default:
+			if err == nil || res.Status != "refused" || len(res.Warnings) != 0 {
+				t.Errorf("the menu's zoom with %s failing = %+v %v", fail, res, err)
+			}
+		}
 	}
 	// The send base is nhm send's for the workspace, with no selector.
 	if _, err := uiSendBase(ctx, ie, ui.Context{}); err == nil {

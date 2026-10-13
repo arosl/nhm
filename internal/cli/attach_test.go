@@ -9,6 +9,9 @@ import (
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 )
 
+// zoomTabs is each pane's tab, as pane.zoom's layout names it.
+var zoomTabs = map[string]string{"w1:p1": "w1:t1", "w1:p2": "w1:t2", "w1:p7": "w1:t3"}
+
 // zoomServer is waitInstance's server, with the agents' panes in their
 // tabs, and herdr's focus and zoom calls recorded in order. ACFS's Bash
 // owns the instance: attach and zoom change no agent, so they run under
@@ -34,7 +37,8 @@ func zoomServer(t *testing.T) (*herdrtest.Server, func() []string) {
 			switch name {
 			case "pane.zoom":
 				return map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": p.PaneID, "zoomed": true,
-					"changed": true, "zoom_changed": true, "focus_changed": true}}, nil
+					"changed": true, "zoom_changed": true, "focus_changed": true,
+					"layout": map[string]any{"workspace_id": "w1", "tab_id": zoomTabs[p.PaneID], "zoomed": true}}}, nil
 			case "tab.focus":
 				return map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": p.TabID, "workspace_id": "w1", "number": 1,
 					"label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"}}, nil
@@ -161,6 +165,46 @@ func TestZoomWarnsWhenItsTabStaysBehind(t *testing.T) {
 	code, out, errOut = runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath)
 	if code != exitOK || !strings.Contains(out, "zoomed BlueLake") || !strings.Contains(errOut, "warning: zoomed w1:p2, but herdr did not") {
 		t.Fatalf("zoom = %d %q %q", code, out, errOut)
+	}
+}
+
+// A failed workspace focus or zoom fails nhm zoom: exit 1, no "zoomed",
+// no warning, and no tab focus (ScarletOrchid's review of 289e9a4).
+func TestFailedZoomFails(t *testing.T) {
+	for _, method := range []string{"workspace.focus", "pane.zoom"} {
+		s, calls := zoomServer(t)
+		s.Handle(method, func(herdrtest.Request) (any, *herdrtest.Error) {
+			return nil, &herdrtest.Error{Code: "pane_not_found", Message: method + " failed"}
+		})
+		code, out, errOut := runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath, "--json")
+		env := decodeEnvelope(t, out)
+		msg, _ := env["error"].(string)
+		warnings, _ := env["warnings"].([]any)
+		if code != exitError || env["result"] != nil || len(warnings) != 0 || !strings.Contains(msg, method+" failed") {
+			t.Errorf("%s fails: zoom --json = %d %s %q", method, code, out, errOut)
+		}
+		code, out, errOut = runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath)
+		if code != exitError || strings.Contains(out, "zoomed") || strings.Contains(errOut, "warning") || !strings.Contains(errOut, method+" failed") {
+			t.Errorf("%s fails: zoom = %d %q %q", method, code, out, errOut)
+		}
+		if got := strings.Join(calls(), ";"); strings.Contains(got, "tab.focus") {
+			t.Errorf("%s fails: calls = %s", method, got)
+		}
+	}
+}
+
+// The tab to bring in front is the one pane.zoom's answer names: a pane
+// that herdr's snapshot no longer lists after the zoom is no warning.
+func TestZoomTakesTheTabFromTheZoom(t *testing.T) {
+	s, calls := zoomServer(t)
+	s.Handle("session.snapshot", snapshotWithPanes(map[string]string{"w1:p1": "w1:t1"}))
+	code, out, errOut := runVerb(runZoom, "swarm", "BlueLake", "--socket", s.SocketPath, "--json")
+	env := decodeEnvelope(t, out)
+	if warnings, _ := env["warnings"].([]any); code != exitOK || len(warnings) != 0 || env["error"] != nil {
+		t.Fatalf("zoom = %d %s %q", code, out, errOut)
+	}
+	if got := strings.Join(calls(), ";"); got != "workspace.focus w1;pane.zoom w1:p2 on;tab.focus w1:t2" {
+		t.Fatalf("calls = %s", got)
 	}
 }
 

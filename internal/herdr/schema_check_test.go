@@ -192,6 +192,7 @@ func TestObjectsMatchSchema(t *testing.T) {
 		"PaneProcessInfo":         ProcessInfo{},
 		"PaneProcessInfoProcess":  Process{},
 		"PaneZoomResult":          ZoomResult{},
+		"PaneLayoutSnapshot":      ZoomLayout{},
 		"PaneMoveResult":          PaneMoveResult{},
 		"InstalledPluginInfo":     PluginInfo{},
 		"PluginManifestPane":      PluginSpec{},

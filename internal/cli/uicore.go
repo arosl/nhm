@@ -13,6 +13,7 @@ import (
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/core/wake"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/runner"
@@ -129,7 +130,7 @@ func uiCore(ie *instanceEnv, c ui.Context, jobs runner.Client) actions.Core {
 }
 
 // uiZoom is nhm zoom for a frozen target: it focuses the target's
-// workspace, zooms its pane and brings the pane's tab in front (zoomPane).
+// workspace, zooms its pane and brings the pane's tab in front (zoom.Pane).
 // A bound target is found by its binding, which may have moved; one at
 // another generation is refused, never swapped for the agent now in its
 // pane. Zoom changes no agent, so it runs in the surface.
@@ -160,12 +161,10 @@ func uiZoom(ctx context.Context, ie *instanceEnv, t ui.Target) (string, error) {
 	if pane == "" || ws == "" {
 		return "", fmt.Errorf("pane %q is gone", pane)
 	}
-	if _, err := zoomPane(ctx, ie.herdr, ws, pane); err != nil {
-		// An *actions.ZoomUnshown: the pane is zoomed, and the action
-		// warns that its tab did not come in front.
-		return pane, err
-	}
-	return pane, nil
+	// A *zoom.Unshown is a zoom that worked: the action warns that the
+	// pane's tab did not come in front. Any other error is a failed zoom.
+	_, err := zoom.Pane(ctx, ie.herdr, ws, pane)
+	return pane, err
 }
 
 // uiJobs is a surface's runner client: this nhm binary with the surface's

@@ -13,6 +13,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/wake"
+	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/ui"
 )
 
@@ -227,7 +228,7 @@ func runWake(ctx context.Context, core Core, req Request) (Result, error) {
 func runZoom(ctx context.Context, core Core, req Request) (Result, error) {
 	t := req.Targets[0]
 	pane, err := core.Zoom(ctx, t)
-	var unshown *ZoomUnshown
+	var unshown *zoom.Unshown
 	switch {
 	case errors.As(err, &unshown):
 		// The pane is zoomed; only its tab did not come in front.
