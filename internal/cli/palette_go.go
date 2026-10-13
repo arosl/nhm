@@ -1,0 +1,261 @@
+package cli
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/arosl/nhm/internal/core/enrich"
+	"github.com/arosl/nhm/internal/core/send"
+	"github.com/arosl/nhm/internal/integrations/kinds"
+	"github.com/arosl/nhm/internal/store"
+	"github.com/arosl/nhm/internal/ui/actions"
+	"github.com/arosl/nhm/internal/ui/palette"
+	"github.com/arosl/nhm/internal/ui/runner"
+	"github.com/arosl/nhm/internal/ui/tui/theme"
+)
+
+// The Go palette (nhm-qbi.6, plan-v4 section 5): ntm's palette on nhm, in
+// this terminal. nhm palette --go runs it by hand; with [ui] palette =
+// "go" in nhm's config, prefix+a runs it in the popup. Its sends are
+// runner jobs through uiCore, as the board's and the menu's are, so a
+// send outlives the popup.
+
+const paletteGoUsage = `Usage: nhm palette --go [--workspace ID] [--file PATH]
+
+The new command palette (ntm's), in this terminal, for the calling
+pane's workspace: pick a prompt, edit it, pick the agents by kind digit
+or by hand, and read a receipt per agent. With [ui] palette = "go" in
+nhm's config, prefix+a opens it.
+
+  --workspace ID   the agents of this workspace (default: the context's;
+                   else pick one)
+  --file PATH      read prompts from this file only
+
+Keys: f1 in the list, ? elsewhere.
+`
+
+// paletteGoWait bounds the palette's reads before the program starts.
+const paletteGoWait = 15 * time.Second
+
+// runPaletteGo is nhm palette --go, and the popup body with [ui]
+// palette = "go".
+func runPaletteGo(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("palette", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprint(stderr, paletteGoUsage) }
+	fs.Bool("go", true, "the Go palette")
+	workspace := fs.String("workspace", "", "the workspace whose agents get prompts")
+	file := fs.String("file", "", "read prompts from this file only")
+	if hasFlag(args, "h") || hasFlag(args, "help") {
+		fmt.Fprint(stdout, paletteGoUsage)
+		return exitOK
+	}
+	pos, err := parseInterleaved(fs, args)
+	if err != nil || len(pos) > 0 {
+		fs.Usage()
+		return exitRefused
+	}
+	fail := func(code int, err error) int {
+		fmt.Fprintf(stderr, "nhm palette: %v\n", err)
+		return code
+	}
+	c, err := popupContext()
+	if err != nil {
+		return fail(exitError, err)
+	}
+	if *workspace != "" {
+		c.WorkspaceID, c.WorkspaceLabel = *workspace, ""
+	}
+	if *file != "" {
+		if *file, err = filepath.Abs(*file); err != nil {
+			return fail(exitRefused, err)
+		}
+	}
+	if st, err := os.Stat(c.Cwd); c.Cwd != "" && err == nil && st.IsDir() {
+		// The palette acts for the pane it was opened over: that pane's
+		// project and catalogs, not the plugin's directory, where herdr
+		// starts a popup.
+		if err := os.Chdir(c.Cwd); err != nil {
+			return fail(exitError, err)
+		}
+	}
+	ie, err := openInstance(c.SocketPath)
+	if err != nil {
+		return fail(exitError, err)
+	}
+	defer func() { _ = ie.db.Close() }()
+	// A restored or handed-on context must be this server's.
+	if err := c.CheckInstance(ie.inst.ID); err != nil {
+		return fail(exitRefused, err)
+	}
+	src, closeSrc, err := pickerSource(c.SocketPath)
+	if err != nil {
+		return fail(exitError, err)
+	}
+	defer closeSrc()
+
+	theme.ApplyLipGlossDefaults(theme.Current())
+	ctx, cancel := context.WithTimeout(context.Background(), paletteGoWait)
+	m, err := src(ctx)
+	cancel()
+	if err != nil {
+		return fail(exitError, err)
+	}
+	if c.WorkspaceID == "" {
+		// Typed by hand outside a workspace: pick one, as ntm picks a session.
+		if c.WorkspaceID, err = palette.RunSessionSelector(palette.SessionsFrom(m)); err != nil {
+			return fail(exitError, err)
+		}
+		if c.WorkspaceID == "" {
+			return exitOK
+		}
+	}
+	label := c.WorkspaceLabel
+	if w, err := m.FindWorkspace(c.WorkspaceID); err == nil && label == "" {
+		label = w.Label
+	}
+	if label == "" {
+		label = c.WorkspaceID
+	}
+
+	jobs := uiJobs(ie, c)
+	core := uiCore(ie, c, jobs)
+	ctx, cancel = context.WithTimeout(context.Background(), paletteGoWait)
+	base, err := core.SendBase(ctx)
+	cancel()
+	if err != nil {
+		return fail(exitError, err)
+	}
+	cmds, errs := palette.LoadCommands(palette.CatalogPaths(os.Getenv, c.Cwd, base.ProjectRoot, *file))
+	for _, e := range errs {
+		fmt.Fprintf(stderr, "nhm palette: %v\n", e)
+	}
+	if len(cmds) == 0 {
+		return fail(exitRefused, errors.New("no palette prompts found (see nhm palette --help for the files it reads)"))
+	}
+	pstore := palette.Store{Dir: palette.StateDir(os.Getenv)}
+	state, err := pstore.Load()
+	if err != nil {
+		fmt.Fprintf(stderr, "nhm palette: pins and favorites: %v\n", err)
+	}
+	bodies, err := os.MkdirTemp("", "nhm-palette-")
+	if err != nil {
+		return fail(exitError, err)
+	}
+
+	ws := c.WorkspaceID
+	sub := palette.NewSubmitter(paletteSender(core), paletteReader(ie.db, jobs), paletteMemory(base.ProjectRoot),
+		func() (string, error) { return store.NewOperationID(time.Now()) })
+	model := palette.NewWithOptions(label, cmds, palette.Options{
+		PaletteState: state,
+		Store:        pstore,
+		Panes: func(ctx context.Context) ([]palette.Pane, int, error) {
+			m, err := src(ctx)
+			if err != nil {
+				return nil, 0, err
+			}
+			panes, unbound := palette.PanesFrom(m, ws)
+			return panes, unbound, nil
+		},
+		KindKeys:  palette.KindKeys(kinds.All()),
+		Submitter: sub,
+		Base:      base,
+		Bodies:    palette.Bodies{Dir: bodies},
+	})
+	final, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
+	pending := ""
+	if fm, ok := final.(palette.Model); ok {
+		pending = fm.Pending()
+	}
+	if pending != "" {
+		// The job runs on and may still read its template: its file stays.
+		fmt.Fprintf(stderr, "nhm palette: the send %s runs on; recent operations shows its result\n", pending)
+	} else {
+		_ = os.RemoveAll(bodies)
+	}
+	if err != nil {
+		return fail(exitError, err)
+	}
+	if fm, ok := final.(palette.Model); ok {
+		if _, perr := fm.Result(); perr != nil {
+			return fail(exitError, perr)
+		}
+	}
+	return exitOK
+}
+
+// paletteSender is the palette's send: uiCore's, as a runner job. When
+// the job's answer does not come back (the wait ended, the result file
+// does not read), the send may have happened: the result names the
+// operation, so the palette shows it as unknown, never as "nothing was
+// sent". A job that answered with an error (uiJobError) keeps the core's
+// own result: no operation id means the core refused before its claim.
+func paletteSender(core actions.Core) palette.Sender {
+	return func(ctx context.Context, req send.Request) (send.Result, error) {
+		res, err := core.Send(ctx, req)
+		var jerr *uiJobError
+		if err != nil && res.OperationID == "" && !errors.As(err, &jerr) {
+			res.OperationID = req.OperationID
+		}
+		return res, err
+	}
+}
+
+// paletteReader reads what the core recorded for a send. With no record
+// yet, the job decides: one that still runs is in progress; one that
+// ended with an error refused before the claim, so nothing was sent.
+func paletteReader(db *store.DB, jobs runner.Client) palette.Reader {
+	return func(ctx context.Context, id string) (send.Result, error) {
+		res, err := send.Stored(ctx, db, id)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return res, err
+		}
+		r, done, rerr := jobs.Result(id)
+		switch {
+		case rerr != nil:
+			return send.Result{}, rerr
+		case done && r.Error != "":
+			return send.Result{}, fmt.Errorf("%s: %w", r.Error, err)
+		case !done:
+			if _, serr := os.Stat(runner.JobPath(jobs.JobDir, id)); serr == nil {
+				return send.Result{OperationID: id, InProgress: true}, nil
+			}
+		}
+		return res, err
+	}
+}
+
+// paletteMemory is the memory preview's retrieval: nhm memory's, with the
+// modes and budgets a send of the palette uses (nhm's config).
+func paletteMemory(projectRoot string) palette.MemoryFunc {
+	return func(ctx context.Context, text string) (palette.Memory, error) {
+		cfg, err := loadEnrichConfig()
+		if err != nil {
+			return palette.Memory{}, err
+		}
+		cmM, err := enrich.ParseMode(string(cfg.Memory.CM))
+		if err != nil {
+			return palette.Memory{}, fmt.Errorf("[memory] cm: %w", err)
+		}
+		cassM, err := enrich.ParseMode(string(cfg.CASS.Context))
+		if err != nil {
+			return palette.Memory{}, fmt.Errorf("[cass] context: %w", err)
+		}
+		cmc, cs, budgets := enrichClients(cfg)
+		q := enrich.QueryOf(text)
+		retr := enrich.NewRetriever(cmc, cs, budgets, time.Now()).Retrieve(ctx,
+			enrich.Request{Query: q, Workspace: projectRoot, CM: cmM, CASS: cassM})
+		plan := enrich.PlanFor(retr, nil, budgets.BlockBytes)
+		return palette.Memory{Query: q, Block: plan.Block, Items: append(append([]enrich.Item{}, plan.CM...), plan.CASS...),
+			CM: retr.CM, CASS: retr.CASS}, retr.Err()
+	}
+}

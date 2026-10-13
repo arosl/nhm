@@ -69,6 +69,15 @@ func (s submission) sentAny() bool {
 	return false
 }
 
+// Pending is the operation id of a submission whose answer has not come
+// back, or "": the caller says, after the program exits, that it runs on.
+func (m Model) Pending() string {
+	if m.sub.inFlight {
+		return m.sub.opID
+	}
+	return ""
+}
+
 // recentSavedMsg follows a write of the recents.
 type recentSavedMsg struct {
 	err error

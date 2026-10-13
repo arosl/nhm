@@ -55,6 +55,15 @@ func runUI(args []string, stdout, stderr io.Writer) int {
 	case "spawn-popup":
 		return holdOnFailure(runSpawnPopup(stderr), stderr)
 	case "palette-popup":
+		// [ui] palette = "go": the Go palette, in the same popup.
+		engine, err := surfaceEngine("palette")
+		if err != nil {
+			fmt.Fprintf(stderr, "nhm ui palette: %v\n", err)
+			return holdOnFailure(exitError, stderr)
+		}
+		if engine == "go" {
+			return holdOnFailure(runPaletteGo(nil, stdout, stderr), stderr)
+		}
 		return holdOnFailure(runPaletteBody(nil, stderr), stderr)
 	case "board-popup":
 		if os.Getenv(uilaunch.TokenEnv) != "" {
@@ -377,6 +386,7 @@ func runMenuBody(stderr io.Writer) int {
 }
 
 const paletteUsage = `Usage: nhm palette [--workspace ID] [nhm-palette's flags]
+       nhm palette --go [--workspace ID] [--file PATH]
        nhm board [--go]
        nhm menu
 
@@ -384,9 +394,14 @@ The palette, the agent board and the nhm menu, in this terminal, for the
 calling pane's workspace. In herdr, prefix+a, prefix+d and prefix+m open
 them as popups (nhm bind). nhm board --go runs the new Go board; with
 [ui] board = "go" in nhm's config, prefix+d opens it in a tab of its own.
+nhm palette --go runs the new Go palette; with [ui] palette = "go",
+prefix+a opens it.
 `
 
 func runPalette(args []string, stdout, stderr io.Writer) int {
+	if hasFlag(args, "go") {
+		return runPaletteGo(args, stdout, stderr)
+	}
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Fprint(stdout, paletteUsage)
 		return exitOK
