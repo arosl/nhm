@@ -55,7 +55,7 @@ The same rules apply to code from pt and dcg.
 | `internal/robot/types.go` | `internal/robot/types.go`, `robot.go`, `capabilities.go`, `registry.go` (derived) | only the types of the read surfaces nhm serves (`--robot-status`, `-snapshot`, `-activity`, `-tail`, `-capabilities`), with ntm's JSON keys; optional fields nhm cannot fill left out; nhm's extras under `_nhm`; `NewResponse` takes the output format |
 | `internal/robot/send.go` | `internal/robot/robot.go`, `cm_inject.go`, `operation_idempotency.go`, `send_idempotency.go` (derived) | only the send, receipt and operation types nhm fills, with ntm's JSON keys; nhm's receipt fields under `_nhm`; `ErrCodeNotOwner` is nhm's |
 | `internal/robot/ack.go` | `internal/robot/ack.go` (derived) | the types only; nhm reads acknowledgment from its receipts and the completion observation |
-| `internal/robot/spawn.go` | `internal/robot/spawn.go`, `spawn_pacing.go`, `internal/pressure/pressure.go` (derived) | only the fields nhm fills of `SpawnOutput`, `SpawnedAgent`, `SpawnStaggerPlan`, `SpawnStaggerSlot` and `SpawnAdmission`; nhm's admission reasons and warnings; extras under `_nhm` |
+| `internal/robot/spawn.go` | `internal/robot/spawn.go`, `spawn_pacing.go`, `internal/pressure/pressure.go` (derived) | only the fields nhm fills of `SpawnOutput`, `SpawnedAgent`, `SpawnAssignment`, `SpawnStaggerPlan`, `SpawnStaggerSlot` and `SpawnAdmission`; nhm's admission reasons and warnings; extras under `_nhm`; `assignments` always present |
 | `internal/core/templates/LICENSE` | `LICENSE` | none |
 | `internal/core/templates/template.go` | `internal/templates/template.go` | provenance header; nhm's placeholders (`agent`, `herdr`, `model`, `thread`, `project`, `group`) in `ExecutionContext`; `Template.Enrichment` (plan-v8 2.13) |
 | `internal/core/templates/parser.go` | `internal/templates/parser.go` | provenance header; the unused `@macro` pattern removed; nhm's per-target placeholders are pane context and filled in `variables` |
@@ -197,6 +197,14 @@ The same rules apply to code from pt and dcg.
 | `internal/integrations/bv/work_source_batch_test.go` | `internal/bv/work_source_batch_test.go` | provenance header |
 | `internal/integrations/bv/util/LICENSE` | `LICENSE` | none |
 | `internal/integrations/bv/util/dirs.go` | `internal/util/dirs.go` (in part) | provenance header; package comment; only `ResolveProjectDir` and what it calls |
+| `internal/core/spawnassign/LICENSE` | `LICENSE` | none |
+| `internal/core/spawnassign/spawn_ntm.go` | `internal/robot/spawn.go` (in part) | provenance header; the assignment loop and its helpers at the backend boundary: `Policy` for `config.Config`, verified occupants (binding id, generation, slot) for tmux panes, `ObserveOccupant` for tmux observation, the `Dispatch` port (nhm's send core) for the tmux dispatch service, the Mail name as claim name, no reservation branch, the slot as coverage key; `enrichSpawnWorkPrompt` is a stand-in until nhm-i85 step 3b (nhm-i85) |
+| `internal/core/spawnassign/bulk_assign_ntm.go` | `internal/robot/bulk_assign.go` (in part) | provenance header; the replay helpers take the occupancy key beside the dispatch target |
+| `internal/core/spawnassign/assign_ntm.go` | `internal/robot/assign.go` (in part) | provenance header |
+| `internal/core/spawnassign/policy.go` | `internal/config/merge.go`, `project.go`, `config.go` (derived) | the `[assign]` section only: nhm's config as the global file, the project's `.ntm/config.toml` merged by ntm's rules; `mergeOperatorGatedLabels` whole |
+| `internal/core/spawnassign/spawn_ntm_test.go` | `internal/robot/spawn_test.go` (in part) | provenance header; the strategy, prompt, finalize and schema tests; the tmux "single-window pane" finalize case left out |
+| `internal/core/spawnassign/assign/LICENSE` | `LICENSE` | none |
+| `internal/core/spawnassign/assign/capability.go` | `internal/assign/capability.go` | provenance header; the agent import path; `tmux.AgentType` and its constants, aliases of `agent.AgentType`'s, written as the latter |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 

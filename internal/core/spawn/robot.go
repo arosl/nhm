@@ -10,12 +10,13 @@ import (
 
 // SpawnOutput projects a spawn onto ntm's --robot-spawn answer (plan-v8
 // 2.12): agents[] (or would_create[] in a dry run) with the slot N.M as
-// "pane", admission.decision, stagger.schedule[], and assignments always
-// empty: nhm never picks a bead.
+// "pane", admission.decision, stagger.schedule[], and assignments empty:
+// --spawn-assign-work's assignment phase (internal/core/spawnassign) fills
+// them after the spawn.
 func SpawnOutput(res Result, err error, format string, now time.Time) robot.SpawnOutput {
 	out := robot.SpawnOutput{RobotResponse: robot.NewResponse(err == nil && (res.DryRun || res.Ready()), format, now), Session: res.Session,
 		CreatedAt: now.UTC().Format(time.RFC3339), WorkingDir: res.ProjectRoot, Agents: []robot.SpawnedAgent{},
-		Layout: "tabs", TotalStartupMs: res.TotalStartupMS, DryRun: res.DryRun, Assignments: []any{},
+		Layout: "tabs", TotalStartupMs: res.TotalStartupMS, DryRun: res.DryRun, Assignments: []robot.SpawnAssignment{},
 		Admission: &robot.SpawnAdmission{Decision: res.Admission.Decision, Reason: res.Admission.Reason,
 			Session: res.Session, RequestedAgents: len(res.Targets), Reasons: res.Admission.Reasons, Warnings: res.Admission.Warnings},
 		NHM: map[string]any{"operation_id": res.OperationID, "workspace_id": res.WorkspaceID, "agents": res.Targets,

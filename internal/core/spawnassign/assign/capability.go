@@ -1,0 +1,288 @@
+// Taken from ntm (github.com/Dicklesworthstone/ntm)
+// internal/assign/capability.go at commit 9d5ed977; see LICENSE in this
+// directory and PROVENANCE.md. Local changes: this header; the agent
+// import path (nhm's port of ntm's agent types); ntm's agent.AgentType and
+// its tmux.Agent* constants, which are aliases of agent.AgentType and its
+// agent.AgentType* constants, are written as the latter.
+
+// Package assign implements intelligent work assignment for multi-agent workflows.
+package assign
+
+import (
+	"strings"
+	"sync"
+
+	"github.com/arosl/nhm/internal/ui/tui/agent"
+)
+
+// TaskType represents categories of work for capability matching.
+type TaskType string
+
+const (
+	TaskRefactor      TaskType = "refactor"
+	TaskAnalysis      TaskType = "analysis"
+	TaskDocs          TaskType = "docs"
+	TaskDocumentation TaskType = "documentation" // alias for docs
+	TaskBug           TaskType = "bug"
+	TaskFeature       TaskType = "feature"
+	TaskTesting       TaskType = "testing"
+	TaskTask          TaskType = "task"
+	TaskChore         TaskType = "chore"
+	TaskEpic          TaskType = "epic"
+)
+
+// DefaultCapabilities defines baseline scores for agent/task combinations.
+// Scores range from 0.0 (unsuitable) to 1.0 (optimal).
+var DefaultCapabilities = map[agent.AgentType]map[TaskType]float64{
+	agent.AgentTypeClaudeCode: {
+		TaskRefactor:      0.95, // Excellent at large-scale refactoring
+		TaskAnalysis:      0.90, // Strong code analysis and architecture
+		TaskDocs:          0.85, // Good documentation
+		TaskDocumentation: 0.85,
+		TaskBug:           0.80,
+		TaskFeature:       0.85,
+		TaskTesting:       0.75,
+		TaskTask:          0.80,
+		TaskChore:         0.70,
+		TaskEpic:          0.90, // Good at epic-level planning
+	},
+	agent.AgentTypeCodex: {
+		TaskRefactor:      0.75,
+		TaskAnalysis:      0.70,
+		TaskDocs:          0.70,
+		TaskDocumentation: 0.70,
+		TaskBug:           0.90, // Excellent at bug fixes
+		TaskFeature:       0.90, // Excellent at feature implementation
+		TaskTesting:       0.85,
+		TaskTask:          0.85,
+		TaskChore:         0.80,
+		TaskEpic:          0.60,
+	},
+	agent.AgentTypeGemini: {
+		TaskRefactor:      0.75,
+		TaskAnalysis:      0.85, // Strong analysis
+		TaskDocs:          0.90, // Excellent documentation
+		TaskDocumentation: 0.90,
+		TaskBug:           0.75,
+		TaskFeature:       0.80,
+		TaskTesting:       0.80,
+		TaskTask:          0.75,
+		TaskChore:         0.75,
+		TaskEpic:          0.75,
+	},
+	// Antigravity (agy) is Gemini CLI's successor; mirror Gemini's scores.
+	agent.AgentTypeAntigravity: {
+		TaskRefactor:      0.75,
+		TaskAnalysis:      0.85, // Strong analysis
+		TaskDocs:          0.90, // Excellent documentation
+		TaskDocumentation: 0.90,
+		TaskBug:           0.75,
+		TaskFeature:       0.80,
+		TaskTesting:       0.80,
+		TaskTask:          0.75,
+		TaskChore:         0.75,
+		TaskEpic:          0.75,
+	},
+	agent.AgentTypeCursor: {
+		TaskRefactor:      0.85,
+		TaskAnalysis:      0.85,
+		TaskDocs:          0.80,
+		TaskDocumentation: 0.80,
+		TaskBug:           0.85,
+		TaskFeature:       0.90,
+		TaskTesting:       0.85,
+		TaskTask:          0.85,
+		TaskChore:         0.80,
+		TaskEpic:          0.70,
+	},
+	agent.AgentTypeWindsurf: {
+		TaskRefactor:      0.85,
+		TaskAnalysis:      0.85,
+		TaskDocs:          0.80,
+		TaskDocumentation: 0.80,
+		TaskBug:           0.85,
+		TaskFeature:       0.90,
+		TaskTesting:       0.85,
+		TaskTask:          0.85,
+		TaskChore:         0.80,
+		TaskEpic:          0.70,
+	},
+	agent.AgentTypeAider: {
+		TaskRefactor:      0.80,
+		TaskAnalysis:      0.75,
+		TaskDocs:          0.70,
+		TaskDocumentation: 0.70,
+		TaskBug:           0.95, // Excellent at editing/fixing
+		TaskFeature:       0.95,
+		TaskTesting:       0.90,
+		TaskTask:          0.90,
+		TaskChore:         0.85,
+		TaskEpic:          0.60,
+	},
+	// Oh My Pi (omp) is a model-agnostic frontier coding harness: its
+	// strengths follow whichever model its model roles select (Claude,
+	// GPT-class, and other frontier models behind one TUI), so no single
+	// vendor's skew applies. Basis: the per-task midpoint of the Claude and
+	// Codex profiles above, the two frontier CLI agents it is deployed
+	// alongside (rounded half up to two decimals).
+	agent.AgentTypeOmp: {
+		TaskRefactor:      0.85, // (0.95 + 0.75) / 2
+		TaskAnalysis:      0.80, // (0.90 + 0.70) / 2
+		TaskDocs:          0.78, // (0.85 + 0.70) / 2
+		TaskDocumentation: 0.78,
+		TaskBug:           0.85, // (0.80 + 0.90) / 2
+		TaskFeature:       0.88, // (0.85 + 0.90) / 2
+		TaskTesting:       0.80, // (0.75 + 0.85) / 2
+		TaskTask:          0.83, // (0.80 + 0.85) / 2
+		TaskChore:         0.75, // (0.70 + 0.80) / 2
+		TaskEpic:          0.75, // (0.90 + 0.60) / 2
+	},
+	agent.AgentTypeOllama: {
+		TaskRefactor:      0.70,
+		TaskAnalysis:      0.75,
+		TaskDocs:          0.75,
+		TaskDocumentation: 0.75,
+		TaskBug:           0.70,
+		TaskFeature:       0.70,
+		TaskTesting:       0.70,
+		TaskTask:          0.75,
+		TaskChore:         0.70,
+		TaskEpic:          0.50,
+	},
+}
+
+// CapabilityMatrix manages agent capability scores with support for
+// configuration overrides and learned adjustments.
+type CapabilityMatrix struct {
+	mu        sync.RWMutex
+	base      map[agent.AgentType]map[TaskType]float64
+	overrides map[agent.AgentType]map[TaskType]float64
+	learned   map[agent.AgentType]map[TaskType]float64
+}
+
+// NewCapabilityMatrix creates a new matrix initialized with default capabilities.
+func NewCapabilityMatrix() *CapabilityMatrix {
+	m := &CapabilityMatrix{
+		base:      make(map[agent.AgentType]map[TaskType]float64),
+		overrides: make(map[agent.AgentType]map[TaskType]float64),
+		learned:   make(map[agent.AgentType]map[TaskType]float64),
+	}
+
+	// Deep copy defaults
+	for agent, tasks := range DefaultCapabilities {
+		m.base[agent] = make(map[TaskType]float64)
+		for task, score := range tasks {
+			m.base[agent][task] = score
+		}
+	}
+
+	return m
+}
+
+// GetScore returns the effective score for an agent/task combination.
+// Priority: learned > overrides > base > 0.5 (default)
+func (m *CapabilityMatrix) GetScore(agentType agent.AgentType, taskType TaskType) float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Check learned scores first
+	if tasks, ok := m.learned[agentType]; ok {
+		if score, ok := tasks[taskType]; ok {
+			return score
+		}
+	}
+
+	// Check overrides
+	if tasks, ok := m.overrides[agentType]; ok {
+		if score, ok := tasks[taskType]; ok {
+			return score
+		}
+	}
+
+	// Check base
+	if tasks, ok := m.base[agentType]; ok {
+		if score, ok := tasks[taskType]; ok {
+			return score
+		}
+	}
+
+	return 0.5 // Default for unknown combinations
+}
+
+// clampScore ensures score is within [0.0, 1.0].
+func clampScore(s float64) float64 {
+	if s < 0.0 {
+		return 0.0
+	}
+	if s > 1.0 {
+		return 1.0
+	}
+	return s
+}
+
+// Global matrix instance for convenience functions.
+var globalMatrix = NewCapabilityMatrix()
+
+// GetAgentScoreByString returns the score using string identifiers,
+// useful for integration with existing code that uses strings.
+func GetAgentScoreByString(agentType string, taskType string) float64 {
+	return globalMatrix.GetScore(ParseAgentType(agentType), ParseTaskType(taskType))
+}
+
+// ParseAgentType converts a string to AgentType.
+// Supports both short codes (cc, cod, gmi) and full names (claude, codex, gemini).
+func ParseAgentType(s string) agent.AgentType {
+	trimmed := strings.TrimSpace(s)
+	switch agent.AgentType(trimmed).Canonical() {
+	case agent.AgentTypeClaudeCode:
+		return agent.AgentTypeClaudeCode
+	case agent.AgentTypeCodex:
+		return agent.AgentTypeCodex
+	case agent.AgentTypeGemini:
+		return agent.AgentTypeGemini
+	case agent.AgentTypeAntigravity:
+		return agent.AgentTypeAntigravity
+	case agent.AgentTypeOmp:
+		return agent.AgentTypeOmp
+	case agent.AgentTypeCursor:
+		return agent.AgentTypeCursor
+	case agent.AgentTypeWindsurf:
+		return agent.AgentTypeWindsurf
+	case agent.AgentTypeAider:
+		return agent.AgentTypeAider
+	case agent.AgentTypeOllama:
+		return agent.AgentTypeOllama
+	default:
+		return agent.AgentType(strings.ToLower(trimmed))
+	}
+}
+
+// ParseTaskType converts a string to TaskType.
+func ParseTaskType(s string) TaskType {
+	s = strings.ToLower(s)
+	switch s {
+	case "refactor", "refactoring":
+		return TaskRefactor
+	case "analysis", "analyze", "investigate", "research", "design":
+		return TaskAnalysis
+	case "docs", "doc", "documentation", "readme", "comment":
+		return TaskDocs
+	case "bug", "fix", "broken", "error", "crash":
+		return TaskBug
+	case "feature", "implement", "add", "new":
+		return TaskFeature
+	case "test", "testing", "spec", "coverage":
+		return TaskTesting
+	case "chore":
+		return TaskChore
+	case "epic":
+		return TaskEpic
+	default:
+		return TaskTask
+	}
+}
+
+// GlobalMatrix returns the global capability matrix for advanced configuration.
+func GlobalMatrix() *CapabilityMatrix {
+	return globalMatrix
+}
