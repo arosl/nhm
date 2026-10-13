@@ -55,6 +55,11 @@ type Config struct {
 	// NewOperationID makes the submission guard's operation ids
 	// (store.NewOperationID); nil leaves space out.
 	NewOperationID func() (string, error)
+	// OperationEnded reports whether an operation's runner job has ended
+	// (runner.Client.Ended): the guard then releases a request it held for
+	// it, such as one whose answer was lost. nil holds it for the board's
+	// life.
+	OperationEnded func(opID string) bool
 	// History reads the recent send history (history.ReadRecent); nil
 	// leaves the history panel out.
 	History func() ([]history.HistoryEntry, error)
@@ -206,7 +211,7 @@ func New(cfg Config) (*Model, error) {
 	m.keys.InboxToggle.SetEnabled(cfg.Inbox != nil)
 	m.keys.MailRefresh.SetEnabled(cfg.Board.Mail != nil)
 	if cfg.NewOperationID != nil {
-		m.guard = actions.NewGuard(cfg.NewOperationID)
+		m.guard = actions.NewGuard(cfg.NewOperationID).ReleaseEnded(cfg.OperationEnded)
 	}
 	for _, a := range actions.Space() {
 		// The forms and the send need the guard; the read view is the

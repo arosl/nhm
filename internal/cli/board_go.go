@@ -185,6 +185,9 @@ func runGoBoard(stderr io.Writer) int {
 	m, err := dashboard.New(dashboard.Config{Board: b, Context: c, Binary: bin, Inbox: inbox, Memory: memory,
 		Core:           core,
 		NewOperationID: func() (string, error) { return store.NewOperationID(time.Now()) },
+		// The board keeps one guard for its life: a request held for a
+		// job that ended (its answer lost, say) is released.
+		OperationEnded: jobs.Ended,
 		History:        func() ([]history.HistoryEntry, error) { return history.ReadRecent(200) },
 		// space a: the palette popup on the board's frozen selection; the
 		// palette sends to exactly those targets (nhm-qbi.6, 0531e21).

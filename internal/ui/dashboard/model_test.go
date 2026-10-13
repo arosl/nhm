@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -979,6 +980,43 @@ func TestSendSubmitsOnceAndSettles(t *testing.T) {
 	m.Update(again())
 	if len(sc.reqs) != 2 || sc.reqs[0].OperationID != "op-1" || sc.reqs[1].OperationID != "op-2" {
 		t.Fatalf("sends = %+v", sc.reqs)
+	}
+}
+
+// A lost answer keeps the guard's hold, so the same text is not sent
+// again while its job may still run. The board keeps one guard for its
+// life: once the job has ended (OperationEnded), the hold is released,
+// and the text goes as a new operation.
+func TestLostAnswerIsReleasedWhenItsJobEnded(t *testing.T) {
+	ended := map[string]bool{}
+	var reqs []send.Request
+	core := actions.Core{
+		SendBase: func(context.Context) (send.Request, error) { return send.Request{Session: "w1"}, nil },
+		Send: func(_ context.Context, req send.Request) (send.Result, error) {
+			reqs = append(reqs, req)
+			return send.Result{}, fmt.Errorf("%w: the job died", actions.ErrNoAnswer)
+		},
+	}
+	m := newModel(t, Config{Core: core, NewOperationID: opIDs(), OperationEnded: func(id string) bool { return ended[id] }})
+	press(m, "space", "s", "h", "i")
+	_, first := m.Update(palette.ComposedMsg{Text: "hi"})
+	if first == nil {
+		t.Fatal("the first send started nothing")
+	}
+	m.Update(first())
+	press(m, "enter") // close the result
+	press(m, "space", "s", "h", "i")
+	if _, again := m.Update(palette.ComposedMsg{Text: "hi"}); again != nil {
+		t.Fatalf("the same text was sent again while op-1 may run:\n%s", plain(m))
+	}
+	ended["op-1"] = true
+	_, again := m.Update(palette.ComposedMsg{Text: "hi"})
+	if again == nil {
+		t.Fatalf("the hold outlived its ended job:\n%s", plain(m))
+	}
+	m.Update(again())
+	if len(reqs) != 2 || reqs[0].OperationID != "op-1" || reqs[1].OperationID != "op-2" {
+		t.Fatalf("sends = %+v", reqs)
 	}
 }
 
