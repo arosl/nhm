@@ -152,6 +152,22 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/forms/spawn_wizard.go` | `internal/tui/dashboard/panels/spawn_wizard.go`, `internal/tui/dashboard/panels/panel.go` (`Keybinding`) | provenance header; package; nhm's theme import path; `Keybinding` copied in as `SpawnKeybinding`. Behaviour: one count (0 to 32) and, where the kind takes one, a model per kind of nhm's registry, instead of ntm's fixed four; the quick and minimal methods keep ntm's mix for the kinds the registry has; new steps after the counts: options (a new session's label, tab label, group, kickoff, memory), the review (the action's dry run: admission and the plan), the confirm and the result; the wizard runs spawn.add or spawn.new through the action table and its guard, where ntm's dashboard ran `ntm add`; going back drops the review; a refused review has no confirm; esc while the spawn runs only closes the wizard (evidence spawn_wizard-closure.md); a method's preset fills the counts once, so going back keeps the operator's edits; view: five steps, with " → " between them |
 | `internal/ui/forms/spawn_wizard_test.go` | `internal/tui/dashboard/panels/spawn_wizard_test.go` | provenance header; the constructor takes a runner, a context and nhm's kinds; counts per kind |
 | `internal/ui/forms/spawn_wizard_flow_test.go` | `internal/tui/dashboard/panels/spawn_wizard_flow_test.go` | provenance header; nhm's steps (counts, options, review); the tests from `TestSpawnWizardReviewThenSpawnOnce` on are nhm's |
+| `internal/core/assignment/LICENSE` | `LICENSE` | none |
+| `internal/core/assignment/atomic.go` | `internal/assignment/atomic.go` | provenance header; the events import path; the occupant identity is an nhm binding id (`bnd-` and 16 lowercase hex digits) in place of a tmux pane id (`isPhysicalPaneOccupancyKey`, the `PaneIdentityMigrationError` text, comments; `strconv` dropped); `DispatchRequest.Attempt` carries the persisted attempt (nhm-i85) |
+| `internal/core/assignment/store.go` | `internal/assignment/store.go` | provenance header; the events import path; `StorageDir` under `store.StateRoot` in place of `~/.ntm`; nhm names a store `<instance id>.<workspace id>` |
+| `internal/core/assignment/store_lock.go` | `internal/assignment/store_lock.go` | provenance header |
+| `internal/core/assignment/store_lock_unix.go` | `internal/assignment/store_lock_unix.go` | provenance header; `store_lock_windows.go` is not taken (Linux only) |
+| `internal/core/assignment/outcomes.go` | `internal/assignment/outcomes.go` | provenance header; the agent import path (`internal/ui/tui/agent`) |
+| `internal/core/assignment/stranded.go` | `internal/assignment/stranded.go` | provenance header |
+| `internal/core/assignment/atomic_test.go` | `internal/assignment/atomic_test.go` | provenance header; binding ids in place of `%N`; the identity table keeps each refused shape in binding-id form and adds a tmux pane id, a herdr pane id and a slot |
+| `internal/core/assignment/atomic_e2e_test.go` | `internal/assignment/atomic_e2e_test.go` | provenance header; the import path; binding ids in place of `%N` |
+| `internal/core/assignment/store_test.go` | `internal/assignment/store_test.go` | provenance header; binding ids in place of `%N`; storage paths under `~/.local/state/nhm` |
+| `internal/core/assignment/store_branch_test.go` | `internal/assignment/store_branch_test.go` | provenance header; the storage path under `~/.local/state/nhm` |
+| `internal/core/assignment/store_lock_test.go` | `internal/assignment/store_lock_test.go` | provenance header |
+| `internal/core/assignment/outcomes_test.go` | `internal/assignment/outcomes_test.go` | provenance header |
+| `internal/core/assignment/stranded_test.go` | `internal/assignment/stranded_test.go` | provenance header; a binding id in place of `%993` |
+| `internal/core/assignment/events/LICENSE` | `LICENSE` | none |
+| `internal/core/assignment/events/events.go` | `internal/events/webhook_event.go`, `internal/events/bus.go` (derived) | the webhook types, `WebhookEvent`, `NewWebhookEvent`, `BusEvent`, `BaseEvent`; `EventEmitter` and `DefaultEmitter` are nhm's stand-in that drops each notice (nhm has no webhook sink) |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
