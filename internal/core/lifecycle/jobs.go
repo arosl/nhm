@@ -26,10 +26,14 @@ type Job struct {
 func (j Job) Stopped() bool { return j.State == 'T' || j.State == 't' }
 
 // Runs reports a job whose program, or the script its interpreter runs, is
-// command (a base name, such as claude).
+// command (a base name, such as claude): by its base name, the base name
+// without its extension (npm's codex runs as node …/codex.js), or one
+// that starts with "<command>-" (grok-linux-x86_64), as kinds names a
+// kind's program.
 func (j Job) Runs(command string) bool {
 	for _, arg := range j.Argv[:min(len(j.Argv), 2)] {
-		if filepath.Base(arg) == command {
+		base := filepath.Base(arg)
+		if base == command || strings.TrimSuffix(base, filepath.Ext(base)) == command || strings.HasPrefix(base, command+"-") {
 			return true
 		}
 	}

@@ -44,9 +44,26 @@ func TestSessionJobsReadsProc(t *testing.T) {
 	if j.PID != 123 || j.State != 'T' || !j.Stopped() || !slices.Equal(j.Argv, []string{"node", "/opt/claude/cli.js"}) {
 		t.Fatalf("job = %+v", j)
 	}
-	if j.Runs("claude") || !j.Runs("cli.js") || !(Job{Argv: []string{"/usr/bin/claude"}}).Runs("claude") ||
+	if j.Runs("claude") || !j.Runs("cli") || !(Job{Argv: []string{"/usr/bin/claude"}}).Runs("claude") ||
 		(Job{Argv: []string{"sh", "-c", "claude"}}).Runs("claude") {
 		t.Fatalf("Runs does not read argv[0] and argv[1] only")
+	}
+	// The shapes kinds knows: npm's codex runs as node …/codex.js, grok's
+	// binary is grok-linux-x86_64. A longer name is another program
+	// (QuietSpring's re-check of 56dc442).
+	for _, c := range []struct {
+		argv    []string
+		command string
+		want    bool
+	}{
+		{[]string{"node", "/usr/lib/node_modules/@openai/codex/bin/codex.js"}, "codex", true},
+		{[]string{"/opt/grok/grok-linux-x86_64", "--yolo"}, "grok", true},
+		{[]string{"codexsearch"}, "codex", false},
+		{[]string{"node", "/opt/mcp/server.js"}, "codex", false},
+	} {
+		if got := (Job{Argv: c.argv}).Runs(c.command); got != c.want {
+			t.Errorf("%v: Runs(%s) = %v, want %v", c.argv, c.command, got, c.want)
+		}
 	}
 	writeFile(t, filepath.Join(dir, "126", "stat"), "126 no name")
 	if _, err := SessionJobs(77); err == nil || !strings.Contains(err.Error(), "126") {
