@@ -16,11 +16,13 @@ import (
 
 	"github.com/arosl/nhm/internal/core/ensemble"
 	"github.com/arosl/nhm/internal/core/lifecycle"
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
 	"github.com/arosl/nhm/internal/ui/forms"
+	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/runner"
 	"github.com/arosl/nhm/internal/ui/views"
 )
@@ -345,6 +347,43 @@ func TestReopenedFormFindsItsRequestHeld(t *testing.T) {
 	press(m, "w", "r", "enter", "esc", "esc", "w", "r")
 	if s, ok := m.open.(*reapScreen); !ok || s.f.Phase() != forms.Reviewed {
 		t.Fatalf("the reopened reap after its job ended: %T %v", m.open, s.f.Err())
+	}
+}
+
+// Two quick ctrl+s on the send screen give one send: the second text
+// comes while the first runs. A second screen on the same guard finds the
+// request held until its answer arrives (PearlKnoll's re-check of
+// nhm-qbi.11, LOW 2).
+func TestSendScreenSendsOnce(t *testing.T) {
+	a, _ := actions.ByID("send")
+	sends := 0
+	core := actions.Core{
+		SendBase: func(context.Context) (send.Request, error) { return send.Request{}, nil },
+		Send: func(_ context.Context, r send.Request) (send.Result, error) {
+			sends++
+			return send.Result{OperationID: r.OperationID}, nil
+		},
+	}
+	n := 0
+	guard := actions.NewGuard(func() (string, error) { n++; return fmt.Sprintf("op-%d", n), nil })
+	ts := []ui.Target{{BindingID: "b1", Generation: 1, PaneID: "w1:p2", Kind: "claude"}}
+	s := newSendScreen(a, core, guard, ctxW, ts, 80, 20, nil)
+	first, _ := s.Update(palette.ComposedMsg{Text: "hello"})
+	if again, _ := s.Update(palette.ComposedMsg{Text: "hello"}); first == nil || again != nil {
+		t.Fatalf("two ctrl+s: first %v, second %v", first != nil, again != nil)
+	}
+	other := newSendScreen(a, core, guard, ctxW, ts, 80, 20, nil)
+	if cmd, _ := other.Update(palette.ComposedMsg{Text: "hello"}); cmd != nil || !errors.Is(other.err, actions.ErrSubmitted) {
+		t.Fatalf("a second screen while the first runs: %v %v", cmd != nil, other.err)
+	}
+	s.Update(first())
+	if sends != 1 || s.result == nil || s.err != nil {
+		t.Fatalf("%d sends; result %+v %v", sends, s.result, s.err)
+	}
+	// The answer settled the hold: the same text may be sent again.
+	other = newSendScreen(a, core, guard, ctxW, ts, 80, 20, nil)
+	if cmd, _ := other.Update(palette.ComposedMsg{Text: "hello"}); cmd == nil {
+		t.Fatalf("after the answer: %v", other.err)
 	}
 }
 
