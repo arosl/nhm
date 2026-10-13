@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +108,46 @@ func TestGoBoardOpensThenFocuses(t *testing.T) {
 	focus := requests(s, "plugin.pane.focus")
 	if len(focus) != 1 || !strings.Contains(string(focus[0].Params), `"w1:p9"`) {
 		t.Fatalf("focus = %+v", focus)
+	}
+}
+
+// prefix+d follows [ui] board: "go" opens the Go board in a tab; the
+// default opens today's board popup.
+func TestUIBoardFollowsTheSwitch(t *testing.T) {
+	s, _ := cliInstance(t)
+	boardHerdr(t, s)
+	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
+	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", `{"workspace_id":"w1","workspace_label":"swarm","focused_pane_id":"w1:p1"}`)
+	placement := func() string {
+		opens := requests(s, "plugin.pane.open")
+		var p struct {
+			Placement string `json:"placement"`
+		}
+		if err := json.Unmarshal(opens[len(opens)-1].Params, &p); err != nil {
+			t.Fatal(err)
+		}
+		return p.Placement
+	}
+	var stderr bytes.Buffer
+	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitOK || placement() != "popup" {
+		t.Fatalf("default: code %d, placement %q: %s", code, placement(), stderr.String())
+	}
+	dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "nhm")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[ui]\nboard = \"go\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitOK || placement() != "tab" {
+		t.Fatalf("go: code %d, placement %q: %s", code, placement(), stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[ui]\nboard = \"gogo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitError || !strings.Contains(stderr.String(), "ui.board") {
+		t.Fatalf("a bad value: code %d: %s", code, stderr.String())
 	}
 }
 

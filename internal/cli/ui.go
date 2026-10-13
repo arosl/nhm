@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/arosl/nhm/internal/core/snapshot"
+	"github.com/arosl/nhm/internal/core/uilaunch"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/ui"
@@ -38,13 +39,28 @@ func runUI(args []string, stdout, stderr io.Writer) int {
 		return exitRefused
 	}
 	switch name := args[0]; name {
-	case "palette", "board", "menu", "spawn":
+	case "board":
+		// [ui] board = "go": the Go board, in a tab of its own.
+		engine, err := surfaceEngine("board")
+		if err != nil {
+			fmt.Fprintf(stderr, "nhm ui board: %v\n", err)
+			return exitError
+		}
+		if engine == "go" {
+			return openGoBoard(stderr)
+		}
+		return openPopup(name, stderr)
+	case "palette", "menu", "spawn":
 		return openPopup(name, stderr)
 	case "spawn-popup":
 		return holdOnFailure(runSpawnPopup(stderr), stderr)
 	case "palette-popup":
 		return holdOnFailure(runPaletteBody(nil, stderr), stderr)
 	case "board-popup":
+		if os.Getenv(uilaunch.TokenEnv) != "" {
+			// A board tab that openGoBoard opened.
+			return holdOnFailure(runGoBoard(stderr), stderr)
+		}
 		return holdOnFailure(runBoardBody(stderr), stderr)
 	case "menu-popup":
 		return holdOnFailure(runMenuBody(stderr), stderr)
@@ -361,12 +377,13 @@ func runMenuBody(stderr io.Writer) int {
 }
 
 const paletteUsage = `Usage: nhm palette [--workspace ID] [nhm-palette's flags]
-       nhm board
+       nhm board [--go]
        nhm menu
 
 The palette, the agent board and the nhm menu, in this terminal, for the
 calling pane's workspace. In herdr, prefix+a, prefix+d and prefix+m open
-them as popups (nhm bind).
+them as popups (nhm bind). nhm board --go runs the new Go board; with
+[ui] board = "go" in nhm's config, prefix+d opens it in a tab of its own.
 `
 
 func runPalette(args []string, stdout, stderr io.Writer) int {
@@ -378,6 +395,9 @@ func runPalette(args []string, stdout, stderr io.Writer) int {
 }
 
 func runBoard(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "--go" {
+		return runGoBoard(stderr)
+	}
 	if len(args) > 0 {
 		fmt.Fprint(stderr, paletteUsage)
 		return exitRefused
