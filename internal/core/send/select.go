@@ -17,16 +17,20 @@ import (
 	"github.com/arosl/nhm/internal/integrations/kinds"
 )
 
-// Selector picks the targets (plan-v8 2.3, "Selection rules"). Names and
-// Panes are a union; Kinds are a union among themselves; the kinds,
-// States and the workspace are an intersection. With neither names nor
-// panes, every bound agent of the workspace is selected (--all, or a
-// prompt with no selector). The caller is left out unless IncludeSelf or
-// named.
+// Selector picks the targets (plan-v8 2.3, "Selection rules"). Names,
+// Panes and Bindings are a union; Kinds are a union among themselves; the
+// kinds, States and the workspace are an intersection. With neither
+// names, panes nor bindings, every bound agent of the workspace is
+// selected (--all, or a prompt with no selector). The caller is left out
+// unless IncludeSelf or named.
 type Selector struct {
-	All         bool                `json:"all,omitempty"`
-	Names       []string            `json:"names,omitempty"`
-	Panes       []string            `json:"panes,omitempty"`
+	All   bool     `json:"all,omitempty"`
+	Names []string `json:"names,omitempty"`
+	Panes []string `json:"panes,omitempty"`
+	// Bindings are binding ids (send --if-generation's pins). One that is
+	// not active in the workspace selects nothing; with Request.Expect it
+	// gets a refused receipt (not_selected), never another agent.
+	Bindings    []string            `json:"bindings,omitempty"`
 	Kinds       []string            `json:"kinds,omitempty"`
 	States      []herdr.AgentStatus `json:"states,omitempty"`
 	Limit       int                 `json:"limit,omitempty"`
@@ -93,7 +97,12 @@ func Select(ctx context.Context, l Lister, agents []herdr.AgentInfo, workspaceID
 		}
 		named[list[i].ID] = true
 	}
-	explicit := len(sel.Names) > 0 || len(sel.Panes) > 0
+	for _, id := range sel.Bindings {
+		if slices.ContainsFunc(list, func(b bindings.Binding) bool { return b.ID == id }) {
+			named[id] = true
+		}
+	}
+	explicit := len(sel.Names) > 0 || len(sel.Panes) > 0 || len(sel.Bindings) > 0
 	wantDone := slices.Contains(sel.States, herdr.StatusDone)
 	var out []Target
 	for _, b := range list {

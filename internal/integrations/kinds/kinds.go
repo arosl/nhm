@@ -522,7 +522,7 @@ func init() {
 		require-observations socket stagger-delay stagger-mode state t template thread timeout trust-folder
 		type until var version wait when with-cass with-memory yes
 		no-cass-context effort memory-query role
-		dir no-user safety assign-work robot-format robot-spawn robot-send`) {
+		dir no-user safety assign-work robot-format robot-spawn robot-send if-generation`) {
 		reserved[f] = true
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,7 +40,7 @@ const sendUsage = `Usage: nhm send <session> [prompt] [--all | --KIND | --type K
                 [--msg M | --msg-file F|-] [-t KEY | --template KEY] [--bead ID] [--var k=v]… [--file F|-]
                 [--when ready|any] [--force] [--wait [--until done|idle|complete] [--timeout D]]
                 [--with-memory[=false]] [--with-cass | --no-cass] [--memory-query Q]
-                [--cass-check | --no-cass-check]
+                [--cass-check | --no-cass-check] [--if-generation ID:G]…
                 [--op-id ID] [--dry-run] [--project DIR] [--socket PATH] [--json]
 
 Send one prompt to the selected agents of a session (a workspace id or
@@ -62,6 +63,14 @@ a busy or unknown one unless --when any or --force. The operation is
 claimed before the first prompt: the same --op-id never sends twice and
 returns the stored receipt. nhm never resends on its own.
 
+--if-generation ID:G (repeatable, or comma-separated) pins a target: the
+prompt goes to binding ID only while it is at generation G, as nhm
+--robot-spawn or nhm status --json reported it. A binding that changed
+since (an agent recycled or restarted in the same pane) is refused with
+generation_changed, and one that is gone with not_selected, before
+anything is typed. Without --all, --name or --pane, the pins are the
+selection; with them, a selected agent that is not pinned is refused.
+
 Per target: submitted, possibly submitted (herdr did not confirm; never
 retried), refused or failed. --wait then waits for each target (nhm
 wait --after-op). --dry-run prints the targets and the prompt and writes
@@ -81,7 +90,7 @@ flags win. The CASS duplicate check (on by default; --no-cass-check or
 work in the last 7 days. nhm memory shows the block without sending.
 
 Exit codes: 0 every target submitted; 1 an error or a partial result;
-2 refused before any dispatch; 3 the gate refused every target;
+2 refused before any dispatch; 3 every target was refused (the gate, or a pin);
 4 possibly submitted, or an ambiguous completion.
 `
 
@@ -114,6 +123,7 @@ type sendFlags struct {
 	states                       listFlag
 	vars                         listFlag
 	panes                        listFlag
+	pins                         listFlag
 	all                          bool
 	kindSel                      []kindFlag
 	limit                        int
@@ -175,6 +185,7 @@ func addSendFlags(fs *flag.FlagSet) *sendFlags {
 	fs.BoolVar(&f.cassCheck, "cass-check", false, "the CASS duplicate check (the default)")
 	fs.BoolVar(&f.noCassCheck, "no-cass-check", false, "no CASS duplicate check")
 	fs.StringVar(&f.thread, "thread", "", "an Agent Mail thread whose mail goes with the prompt; wakes the targets after the send")
+	fs.Var(&f.pins, "if-generation", "send to binding ID only at generation G: ID:G (repeatable)")
 	fs.StringVar(&f.group, "group", "", "a spawn group (comes with nhm.spawn)")
 	fs.StringVar(&f.opID, "op-id", "", "operation id, for an idempotent retry")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print the targets and the prompt; send nothing")
@@ -357,8 +368,52 @@ func (f sendFlags) request(prompt string) (send.Request, error) {
 	if f.limit < 0 {
 		return req, errors.New("--limit is positive")
 	}
-	req.Selector = sel
+	expect, err := parsePins(f.pins)
+	if err != nil {
+		return req, err
+	}
+	req.Selector, req.Expect = pinSelection(sel, expect), expect
 	return req, nil
+}
+
+// parsePins reads --if-generation's ID:G values into the send's Expect;
+// nil when there are none.
+func parsePins(values []string) (map[string]int64, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	expect := map[string]int64{}
+	for _, v := range values {
+		i := strings.LastIndex(v, ":")
+		if i <= 0 {
+			return nil, fmt.Errorf("--if-generation %q: use BINDING_ID:GENERATION", v)
+		}
+		id := v[:i]
+		gen, err := strconv.ParseInt(v[i+1:], 10, 64)
+		if err != nil || gen < 1 {
+			return nil, fmt.Errorf("--if-generation %q: the generation is a whole number from 1", v)
+		}
+		if old, ok := expect[id]; ok && old != gen {
+			return nil, fmt.Errorf("--if-generation pins %s at generations %d and %d", id, old, gen)
+		}
+		expect[id] = gen
+	}
+	return expect, nil
+}
+
+// pinSelection is the selector of a pinned send: without --all, names or
+// panes, the pinned bindings themselves, so that an empty selector never
+// means every agent; with them, the selector as given (Expect refuses
+// the selected agents that are not pinned).
+func pinSelection(sel send.Selector, expect map[string]int64) send.Selector {
+	if len(expect) == 0 || sel.All || len(sel.Names) > 0 || len(sel.Panes) > 0 {
+		return sel
+	}
+	for id := range expect {
+		sel.Bindings = append(sel.Bindings, id)
+	}
+	slices.Sort(sel.Bindings)
+	return sel
 }
 
 func readInput(path string) (string, error) {
@@ -562,6 +617,8 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&panes, "panes", "")
 	fs.Var(&panes, "pane", "")
 	fs.Var(&types, "type", "")
+	var pins listFlag
+	fs.Var(&pins, "if-generation", "")
 	all := fs.Bool("all", false, "")
 	msg := fs.String("msg", "", "")
 	msgFile := fs.String("msg-file", "", "")
@@ -625,8 +682,13 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 	default:
 		text = *msg
 	}
+	expect, err := parsePins(pins)
+	if err != nil {
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, err.Error(), "", *format, robotError, now)
+	}
 	req := send.Request{Message: text, OperationID: *opID, DryRun: *dryRun, Source: history.SourceRobot,
-		Caller: ie.callerPane(ctx), Selector: send.Selector{All: *all, Panes: panes, Kinds: types}, Enrich: enrichment}
+		Caller: ie.callerPane(ctx), Selector: pinSelection(send.Selector{All: *all, Panes: panes, Kinds: types}, expect),
+		Expect: expect, Enrich: enrichment}
 	if err := ie.fillScope(ctx, &req, *sendS, ""); err != nil {
 		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "list sessions: nhm --robot-status", *format, robotError, now)
 	}
