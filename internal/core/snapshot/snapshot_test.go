@@ -221,7 +221,11 @@ func TestHerdrDownKeepsLocalTruth(t *testing.T) {
 func TestBoardsAreNoAgents(t *testing.T) {
 	db, h := setup(t)
 	var asked []string
-	boards := func(_ context.Context, ws string) (map[string]bool, error) {
+	boards := func(_ context.Context, snap herdr.SessionSnapshot, ws string) (map[string]bool, error) {
+		// The build's own snapshot: no second herdr round trip.
+		if len(snap.Agents) != 4 || snap.Version != "0.9.3" {
+			t.Errorf("Boards got snapshot %+v", snap)
+		}
 		asked = append(asked, ws)
 		return map[string]bool{"w1:p3": true}, nil
 	}
@@ -237,7 +241,7 @@ func TestBoardsAreNoAgents(t *testing.T) {
 			t.Fatalf("attention names the board: %+v", it)
 		}
 	}
-	m = Build(context.Background(), Deps{Herdr: h, DB: db, Boards: func(context.Context, string) (map[string]bool, error) {
+	m = Build(context.Background(), Deps{Herdr: h, DB: db, Boards: func(context.Context, herdr.SessionSnapshot, string) (map[string]bool, error) {
 		return map[string]bool{"w1:p3": true}, errors.New("w2: the workspace lock is busy")
 	}}, Options{})
 	if len(m.Agents) != 3 || m.Sources[SourceBoards].Status != Unavailable || !strings.Contains(m.Sources[SourceBoards].Error, "w2") {

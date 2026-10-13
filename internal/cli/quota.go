@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/uilaunch"
 	"github.com/arosl/nhm/internal/integrations/quota"
 )
 
@@ -81,7 +82,7 @@ func quotaReport(args []string, stdout, stderr io.Writer, save bool) int {
 			// nhm's own board is no agent, whatever herdr names in it.
 			var boards map[string]bool
 			if r.inst != nil {
-				if boards, err = boardsIn(r.inst.Dir, r.herdr)(ctx, ""); err != nil {
+				if boards, err = boardPanes(uilaunch.Boards(ctx, readerLaunchEnv(r.inst.Dir), r.herdr)); err != nil {
 					env.Warnings = append(env.Warnings, "nhm's boards not left out of the count: "+err.Error())
 				}
 			}

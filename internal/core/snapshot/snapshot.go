@@ -86,10 +86,11 @@ type Deps struct {
 	// Beads lists the beads in progress in a project's bead databases,
 	// by assignee (an Agent Mail name); nil skips the beads.
 	Beads func(ctx context.Context, projectRoot string) (map[string][]string, error)
-	// Boards lists nhm's live boards by pane id (uilaunch.Boards) in a
-	// workspace, or in all for "": a board's pane is no agent, even when
-	// herdr names one in it (plan-v4 section 7). nil skips the check.
-	Boards func(ctx context.Context, workspace string) (map[string]bool, error)
+	// Boards lists nhm's live boards by pane id (uilaunch.BoardsAt) in a
+	// workspace, or in all for "", against the build's own snapshot: a
+	// board's pane is no agent, even when herdr names one in it (plan-v4
+	// section 7). nil skips the check.
+	Boards func(ctx context.Context, snap herdr.SessionSnapshot, workspace string) (map[string]bool, error)
 }
 
 // Options select and bound a build.
@@ -288,7 +289,7 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 		// boards it found in the others.
 		m.stage(SourceBoards, now, orDefault(opts.LocalTimeout, defaultLocalTimeout), ctx, func(c context.Context) error {
 			var err error
-			m.boards, err = deps.Boards(c, opts.Workspace)
+			m.boards, err = deps.Boards(c, snap, opts.Workspace)
 			return err
 		})
 	}

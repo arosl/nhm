@@ -456,7 +456,7 @@ func TestConcurrentOpensOpenOne(t *testing.T) {
 // directory are not records. A record that cannot be read is named, and
 // the others are still listed. One snapshot serves every record.
 func TestBoardsListsLiveBoards(t *testing.T) {
-	env, _ := testEnv(t)
+	env, c := testEnv(t)
 	h := newFake("w1", "w2", "w3", "w4")
 	ctx := context.Background()
 	if b, err := Boards(ctx, env, h); err != nil || len(b) != 0 || h.snaps != 0 {
@@ -495,15 +495,22 @@ func TestBoardsListsLiveBoards(t *testing.T) {
 	if b, err := Boards(ctx, env, h, "w2", "w1", "w9", "bad/"); err != nil || len(b) != 1 || b[live.PaneID].Token != live.Token {
 		t.Fatalf("Boards(w2, w1, w9) = %v, %v", b, err)
 	}
-	// IsBoard answers as Boards does, and asks herdr only for the
-	// record's own pane.
+	// BoardsAt answers the same from the caller's snapshot, and takes
+	// none of its own.
+	snap, _ := h.Snapshot(ctx)
 	h.snaps = 0
+	if b, err := BoardsAt(ctx, env, h, snap, "w1", "w2"); err != nil || len(b) != 1 || b[live.PaneID].Token != live.Token || h.snaps != 0 {
+		t.Fatalf("BoardsAt = %v, %v (%d snapshots)", b, err, h.snaps)
+	}
+	// IsBoard answers as Boards does, and also for a starting board in
+	// the pane herdr named for it. It asks herdr only for the record's
+	// own pane.
 	for _, c := range []struct {
 		ws, pane string
 		want     bool
 		err      bool
 	}{
-		{"w1", live.PaneID, true, false}, {"w1", starting.PaneID, false, false}, {"w2", starting.PaneID, false, false},
+		{"w1", live.PaneID, true, false}, {"w1", starting.PaneID, false, false}, {"w2", starting.PaneID, true, false},
 		{"w3", restored.PaneID, false, false}, {"w4", "pz", false, true}, {"w9", live.PaneID, false, false},
 	} {
 		got, err := IsBoard(ctx, env, h, c.ws, c.pane)
@@ -513,6 +520,11 @@ func TestBoardsListsLiveBoards(t *testing.T) {
 	}
 	if h.snaps != 3 {
 		t.Fatalf("IsBoard took %d snapshots, want 3 (w1, w2, w3 name their pane)", h.snaps)
+	}
+	// A launch that never registered is no board after StartGrace.
+	c.add(StartGrace)
+	if got, err := IsBoard(ctx, env, h, "w2", starting.PaneID); got || err != nil {
+		t.Fatalf("IsBoard of a launch past its grace = %v, %v", got, err)
 	}
 }
 

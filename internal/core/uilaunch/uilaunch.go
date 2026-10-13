@@ -17,8 +17,10 @@
 //     time). A pane label or tab name is never evidence.
 //  4. Unregister (the board, at its end) removes the record if it is
 //     still the board's own.
-//  5. Boards and IsBoard name the live boards, by Verify: the panes that
-//     agent counts, targets, adopt, maintain and kill's review leave out.
+//  5. Boards names the live boards, by Verify: the panes that agent
+//     counts, targets, maintain and kill's review leave out. IsBoard also
+//     takes a starting board in the pane herdr named for it, for adopt
+//     and the import, which refuse it.
 package uilaunch
 
 import (
@@ -524,6 +526,17 @@ func Unregister(ctx context.Context, env Env, workspaceID, token string) error {
 // out of the list and named in the error, with the boards that could be
 // checked.
 func Boards(ctx context.Context, env Env, h Herdr, workspaces ...string) (map[string]Launch, error) {
+	return boards(ctx, env, h, h.Snapshot, workspaces)
+}
+
+// BoardsAt is Boards against a snapshot that the caller took: herdr is
+// asked only for the processes of the boards' panes.
+func BoardsAt(ctx context.Context, env Env, h Herdr, snap herdr.SessionSnapshot, workspaces ...string) (map[string]Launch, error) {
+	return boards(ctx, env, h, func(context.Context) (herdr.SessionSnapshot, error) { return snap, nil }, workspaces)
+}
+
+func boards(ctx context.Context, env Env, h Herdr, snapshot func(context.Context) (herdr.SessionSnapshot, error),
+	workspaces []string) (map[string]Launch, error) {
 	if len(workspaces) == 0 {
 		var err error
 		if workspaces, err = env.recorded(); err != nil {
@@ -539,7 +552,7 @@ func Boards(ctx context.Context, env Env, h Herdr, workspaces ...string) (map[st
 	if len(workspaces) == 0 {
 		return out, nil
 	}
-	snap, err := h.Snapshot(ctx)
+	snap, err := snapshot(ctx)
 	if err != nil {
 		return out, fmt.Errorf("uilaunch: herdr: %w", err)
 	}
@@ -593,10 +606,12 @@ func (e Env) recorded() ([]string, error) {
 	return out, nil
 }
 
-// IsBoard says whether a pane of a workspace is that workspace's live
-// board, as Boards would. It asks herdr only when the record names the
-// pane. An error means the record could not be read or checked: the pane
-// may be the board.
+// IsBoard says whether a pane of a workspace is that workspace's board:
+// live, as Boards lists it, or starting in the pane that herdr named in
+// its answer to nhm's open (StartGrace at most). Adopt and the import
+// refuse such a pane; counts and kill take only a live board. It asks
+// herdr only when the record names the pane. An error means the record
+// could not be read or checked: the pane may be the board.
 func IsBoard(ctx context.Context, env Env, h Herdr, workspaceID, paneID string) (bool, error) {
 	if paneID == "" || !store.ValidWorkspaceID(workspaceID) {
 		return false, nil
@@ -604,17 +619,17 @@ func IsBoard(ctx context.Context, env Env, h Herdr, workspaceID, paneID string) 
 	if _, err := os.Stat(env.path(workspaceID)); os.IsNotExist(err) {
 		return false, nil
 	}
-	live := false
+	board := false
 	err := env.locked(ctx, workspaceID, func() error {
 		l, err := env.read(workspaceID)
 		if err != nil || l == nil || l.PaneID != paneID {
 			return err
 		}
 		st, err := Verify(ctx, env, h, *l)
-		live = st.State == Live
+		board = st.State == Live || st.State == Starting
 		return err
 	})
-	return live, err
+	return board, err
 }
 
 // snapshotHerdr answers Snapshot with one snapshot taken before.

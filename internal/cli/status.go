@@ -114,22 +114,31 @@ func (r *reader) build(ctx context.Context, projectKey string, withBeads bool) *
 }
 
 // boardsIn is snapshot.Deps.Boards for an instance: nhm's live boards
-// (uilaunch.Boards). A reader waits at most a second for a workspace's
-// lock; a check that fails keeps the rows and degrades the source.
-func boardsIn(instanceDir string, h uilaunch.Herdr) func(context.Context, string) (map[string]bool, error) {
-	env := uilaunch.Env{InstanceDir: instanceDir, LockWait: time.Second}
-	return func(ctx context.Context, workspace string) (map[string]bool, error) {
+// (uilaunch.BoardsAt), checked against the build's snapshot.
+func boardsIn(instanceDir string, h uilaunch.Herdr) func(context.Context, herdr.SessionSnapshot, string) (map[string]bool, error) {
+	return func(ctx context.Context, snap herdr.SessionSnapshot, workspace string) (map[string]bool, error) {
 		var only []string
 		if workspace != "" {
 			only = []string{workspace}
 		}
-		found, err := uilaunch.Boards(ctx, env, h, only...)
-		out := make(map[string]bool, len(found))
-		for pane := range found {
-			out[pane] = true
-		}
-		return out, err
+		return boardPanes(uilaunch.BoardsAt(ctx, readerLaunchEnv(instanceDir), h, snap, only...))
 	}
+}
+
+// readerLaunchEnv is the uilaunch env of a reader: it waits at most a
+// second for a workspace's lock. A check that fails keeps the rows and
+// says so.
+func readerLaunchEnv(instanceDir string) uilaunch.Env {
+	return uilaunch.Env{InstanceDir: instanceDir, LockWait: time.Second}
+}
+
+// boardPanes is the pane ids of uilaunch.Boards' answer.
+func boardPanes(found map[string]uilaunch.Launch, err error) (map[string]bool, error) {
+	out := make(map[string]bool, len(found))
+	for pane := range found {
+		out[pane] = true
+	}
+	return out, err
 }
 
 // selectWorkspace narrows the model to one session (a workspace label or
