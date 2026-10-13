@@ -50,6 +50,11 @@ func (m *Model) View() string {
 		}
 	case viewSend:
 		modal = m.box("send", m.sendView(w), w)
+	case viewWizard:
+		// The wizard draws its own box (ntm's).
+		if m.wizard != nil {
+			modal = m.wizard.View()
+		}
 	default:
 		return main
 	}

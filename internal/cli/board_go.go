@@ -18,6 +18,7 @@ import (
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
@@ -185,6 +186,8 @@ func runGoBoard(stderr io.Writer) int {
 		// space a: the palette popup on the board's frozen selection; the
 		// palette sends to exactly those targets (nhm-qbi.6, 0531e21).
 		OpenPalette: func(ctx context.Context, pc ui.Context) error { return ui.Open(ctx, h, "palette", pc) },
+		// ctrl+w: ntm's spawn wizard (the menu's), for nhm add here.
+		Kinds: kinds.All(),
 		// The read view reads as nhm read --source recent does.
 		Read: func(ctx context.Context, pane string, lines int) (string, error) {
 			strip := true

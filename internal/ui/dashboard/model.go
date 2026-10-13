@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/actions"
@@ -67,6 +68,9 @@ type Config struct {
 	// OpenPalette opens the palette popup on a context that carries the
 	// board's frozen selection (space a); nil leaves space a out.
 	OpenPalette func(ctx context.Context, c ui.Context) error
+	// Kinds are the kinds ctrl+w's spawn wizard offers (kinds.All()); none
+	// leaves ctrl+w out.
+	Kinds []kinds.Adapter
 	// Now is time.Now in production.
 	Now func() time.Time
 	// CallTimeout bounds each call a key starts (default 5 s).
@@ -86,6 +90,7 @@ const (
 	viewForm
 	viewRead
 	viewSend
+	viewWizard
 )
 
 // tickEvery is how often the program lets the feeds start the reads that
@@ -129,6 +134,8 @@ type Model struct {
 	menuTargets board.Targets
 	guard       *actions.Guard
 	form        *forms.AgentForm
+	// wizard is ctrl+w's spawn wizard while it is open.
+	wizard *forms.SpawnWizard
 
 	// The side panels and the focus between them (focus.go). The board
 	// runs no animations: dashboardSprings stays nil.
@@ -205,7 +212,10 @@ func New(cfg Config) (*Model, error) {
 		}
 	}
 	m.keys.Actions.SetEnabled(len(m.menu) > 0)
-	for _, k := range []*key.Binding{&m.keys.SpawnWizard, &m.keys.Num1, &m.keys.Num2, &m.keys.Num3, &m.keys.Num4,
+	// ctrl+w: ntm's spawn wizard, for nhm add into this workspace.
+	spawnAdd, ok := actions.ByID(spawnActionID)
+	m.keys.SpawnWizard.SetEnabled(ok && spawnAdd.Visible() && m.guard != nil && cfg.Core.Spawn != nil && len(cfg.Kinds) > 0)
+	for _, k := range []*key.Binding{&m.keys.Num1, &m.keys.Num2, &m.keys.Num3, &m.keys.Num4,
 		&m.keys.Num5, &m.keys.Num6, &m.keys.Num7, &m.keys.Num8, &m.keys.Num9} {
 		k.SetEnabled(false)
 	}
@@ -344,12 +354,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layoutChanged()
-		if m.view == viewSend {
+		switch m.view {
+		case viewSend:
 			return m, m.sendUpdate(msg)
+		case viewWizard:
+			return m, m.wizardUpdate(msg)
 		}
 		return m, nil
 	case sentMsg, palette.ComposedMsg, palette.ComposeCanceledMsg:
 		return m, m.sendUpdate(msg)
+	case forms.SpawnWizardDoneMsg:
+		return m, m.wizardUpdate(msg)
 	case tickMsg:
 		now := time.Time(msg)
 		m.b.Tick(now)
@@ -401,9 +416,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
-	if m.view == viewSend {
+	switch m.view {
+	case viewSend:
 		// The composer's own messages (its cursor, its memory preview).
 		return m, m.sendUpdate(msg)
+	case viewWizard:
+		// The wizard's own messages (its fields, its review and spawn).
+		return m, m.wizardUpdate(msg)
 	}
 	return m, nil
 }
@@ -424,6 +443,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.readKey(msg)
 	case viewSend:
 		return m, m.sendUpdate(msg)
+	case viewWizard:
+		return m, m.wizardUpdate(msg)
 	case viewForm:
 		cmd := m.form.Update(msg)
 		m.track(m.form)
@@ -534,6 +555,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// The menu's targets freeze now: a refresh while it is open never
 		// swaps the cursor's agent for the row now in its place.
 		m.menuTargets, m.view = m.b.Sel.Targets(), viewActions
+	case key.Matches(msg, m.keys.SpawnWizard):
+		return m, m.openWizard()
 	case key.Matches(msg, m.keys.Mark):
 		m.b.Sel.Toggle()
 	case key.Matches(msg, m.keys.Filter):

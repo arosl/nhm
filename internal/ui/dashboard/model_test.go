@@ -17,9 +17,11 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/snapshot"
+	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/store/history"
 	"github.com/arosl/nhm/internal/ui"
@@ -154,6 +156,8 @@ func press(m *Model, keys ...string) tea.Cmd {
 			msg = tea.KeyMsg{Type: tea.KeyRight}
 		case "ctrl+c":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlC}
+		case "ctrl+w":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlW}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -903,7 +907,51 @@ func TestNoDeadKeys(t *testing.T) {
 	if cmd := press(m, "space"); cmd != nil || m.view != viewMain {
 		t.Fatal("space did something")
 	}
+	if cmd := press(m, "ctrl+w"); cmd != nil || m.view != viewMain {
+		t.Fatal("ctrl+w did something with no spawn")
+	}
 	if strings.Contains(before, "actions") || strings.Contains(before, "spawn") {
 		t.Fatalf("the help shows keys that do nothing:\n%s", before)
+	}
+}
+
+// ctrl+w opens ntm's spawn wizard for this workspace; esc closes it and
+// spawns nothing.
+func TestSpawnWizardFromTheBoard(t *testing.T) {
+	var spawns []actions.SpawnRequest
+	core := actions.Core{Spawn: func(_ context.Context, req actions.SpawnRequest, _ string) (spawn.Result, error) {
+		spawns = append(spawns, req)
+		return spawn.Result{}, nil
+	}}
+	m := newModel(t, Config{Core: core, NewOperationID: opIDs(), Kinds: kinds.All()})
+	press(m, "?")
+	if !strings.Contains(plain(m), "spawn wizard") {
+		t.Fatalf("the help does not show ctrl+w:\n%s", plain(m))
+	}
+	press(m, "esc")
+	runAll(m, press(m, "ctrl+w"))
+	if m.view != viewWizard || !strings.Contains(plain(m), "Spawn Wizard") {
+		t.Fatalf("ctrl+w: view %d\n%s", m.view, plain(m))
+	}
+	runAll(m, press(m, "esc"))
+	if m.view != viewMain || m.wizard != nil || len(spawns) != 0 {
+		t.Fatalf("esc: view %d, %d spawns\n%s", m.view, len(spawns), plain(m))
+	}
+}
+
+// The wizard's spawn checks the binary at the call: a frozen board's
+// spawn is refused and never reaches the core; its dry run still runs.
+func TestFrozenSpawnRefusesTheSpawn(t *testing.T) {
+	calls := 0
+	run := func(context.Context, actions.SpawnRequest, string) (spawn.Result, error) {
+		calls++
+		return spawn.Result{}, nil
+	}
+	wrapped := frozenSpawn(board.Unwatched(errors.New("no launch path")), run)
+	if _, err := wrapped(context.Background(), actions.SpawnRequest{}, "op-1"); !errors.Is(err, board.ErrUnwatched) || calls != 0 {
+		t.Fatalf("spawn on a frozen board: %v, %d calls", err, calls)
+	}
+	if _, err := wrapped(context.Background(), actions.SpawnRequest{DryRun: true}, ""); err != nil || calls != 1 {
+		t.Fatalf("dry run on a frozen board: %v, %d calls", err, calls)
 	}
 }
