@@ -76,7 +76,9 @@ var agentName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // checkName applies herdr's name rules to agent.start and agent.rename,
 // before their handler. A rename's target is a pane id or a name. A
-// null or empty name clears, and no rule applies.
+// null or empty name clears, and no rule applies. herdr checks a
+// rename's target before its name; the stub knows no targets, so a
+// rename with a bad target and a bad name gets invalid_agent_name here.
 func (s *Server) checkName(req Request) *Error {
 	if req.Method != "agent.start" && req.Method != "agent.rename" {
 		return nil
@@ -108,7 +110,9 @@ func (s *Server) checkName(req Request) *Error {
 
 // liveNames are the agent names the test's agent.list gives, name ->
 // pane: herdr's list is its truth. Without an agent.list handler the stub
-// knows no names, and no name is taken.
+// knows no names, and no name is taken. It calls that handler once more
+// for each start and rename, so a handler that counts its own calls sees
+// these too.
 func (s *Server) liveNames() map[string]string {
 	s.mu.Lock()
 	list := s.handlers["agent.list"]
