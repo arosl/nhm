@@ -134,8 +134,7 @@ func Adopt(ctx context.Context, env Env, req AdoptRequest) (AdoptResult, error) 
 		}
 		req.MailName, req.ProjectKey, req.ProjectID = source.MailName, source.MailProjectKey, source.ProjectID
 	}
-	alias, err := Alias(req.MailName)
-	if err != nil {
+	if _, err := Alias(req.MailName); err != nil {
 		return AdoptResult{}, err
 	}
 	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: "adopt", Scope: map[string]string{
@@ -147,7 +146,7 @@ func Adopt(ctx context.Context, env Env, req AdoptRequest) (AdoptResult, error) 
 	if claim.Existing {
 		return AdoptResult{}, fmt.Errorf("bindings: operation %s exists (status %s); nothing was done again", opID, claim.Operation.Status)
 	}
-	res, err := adopt(ctx, env, req, source, alias, opID)
+	res, err := adopt(ctx, env, req, source, opID)
 	status := "done"
 	switch {
 	case errors.Is(err, ErrAgentChanged), errors.Is(err, ErrBoardPane):
@@ -164,7 +163,7 @@ func Adopt(ctx context.Context, env Env, req AdoptRequest) (AdoptResult, error) 
 	return res, err
 }
 
-func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, alias, opID string) (AdoptResult, error) {
+func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, opID string) (AdoptResult, error) {
 	res := AdoptResult{Warnings: []string{}}
 	snap, err := env.Herdr.Snapshot(ctx)
 	if err != nil {
@@ -201,6 +200,18 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, alias
 		res.Warnings = append(res.Warnings, "the workspace's projects: "+err.Error())
 	} else if others != nil {
 		res.Warnings = append(res.Warnings, MixedWorkspaceWarning(pane.WorkspaceID, req.ProjectKey, others))
+	}
+	// The herdr name: the one the agent shows when it fits, else a
+	// handoff's source alias, when it is free; else the bare alias or the
+	// first free suffix. A same-name agent of another project may hold
+	// the bare name (nhm-4xt).
+	prefer := agent.Name
+	if !AliasFits(prefer, req.MailName) {
+		prefer = source.HerdrAlias
+	}
+	alias, err := FreeAlias(req.MailName, snap.Agents, prefer, req.PaneID, source.PaneID)
+	if err != nil {
+		return res, err
 	}
 	occ := occupantOf(ctx, env.Herdr, pane, agent, alias, req.Model)
 	occ.Kind = kind

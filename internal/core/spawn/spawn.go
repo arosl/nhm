@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -355,8 +354,11 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 
 	// 4. Start the agent and wait until it is ready for input.
 	if err := startAgent(ctx, env, req, t, a); err != nil {
-		if herdr.ErrorCode(err) == codeAgentPaneBusy {
-			// herdr started nothing: the pane holds only its shell.
+		switch herdr.ErrorCode(err) {
+		case codeAgentPaneBusy, herdr.CodeInvalidAgentName, herdr.CodeAgentNameTaken:
+			// herdr started nothing: it refuses a busy pane and a name
+			// before it launches anything, so the pane holds only its
+			// shell (nhm-4xt).
 			t.Cleanup = cleanupBinding(ctx, env, req, t, b)
 			return fail(StatusFailed, err)
 		}
@@ -475,34 +477,20 @@ func waitShell(ctx context.Context, env Env, pane string) bool {
 	return false
 }
 
-var aliasPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-
 // freeAlias is the lowercase mail name, or with a short suffix when that
 // name is live elsewhere (another project). The pane label keeps the
 // exact mail name.
 func freeAlias(ctx context.Context, h Herdr, name string) (string, error) {
-	base := strings.ToLower(name)
-	if !aliasPattern.MatchString(base) {
-		return "", fmt.Errorf("the Agent Mail name %q makes no valid herdr name", name)
+	if _, err := bindings.Alias(name); err != nil {
+		return "", err
 	}
 	agents, err := h.AgentList(ctx)
 	if err != nil {
 		return "", err
 	}
-	live := map[string]bool{}
-	for _, a := range agents {
-		live[a.Name] = true
-	}
-	if !live[base] {
-		return base, nil
-	}
-	for i := 2; i <= 9; i++ {
-		c := fmt.Sprintf("%s-%d", base, i)
-		if len(c) <= 32 && !live[c] {
-			return c, nil
-		}
-	}
-	return "", fmt.Errorf("the herdr name %s and its suffixes are taken", base)
+	// The one rule that adopt, import and the hooks' bind use too
+	// (nhm-4xt). A new pane holds no agent of its own yet.
+	return bindings.FreeAlias(name, agents, "")
 }
 
 // startAgent runs agent.start and waits until the agent is ready (idle
