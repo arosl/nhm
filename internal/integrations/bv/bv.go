@@ -769,8 +769,12 @@ func ClaimBeadForAssignmentWithOperatorGatedLabels(ctx context.Context, dir, bea
 // A label, dependency, status, defer or assignee change moves updated_at, so
 // br writes nothing when the read went stale (exit 6), and br refuses a
 // blocked issue itself. The lock serializes nhm claimers, so a later claimer
-// sees an earlier mutex holder, as ntm's transaction did; direct tracker edits
-// are not fenced, as in ntm.
+// sees an earlier mutex holder, as ntm's transaction did. Direct tracker edits
+// are not fenced, as in ntm, with one narrower window: ntm's IMMEDIATE
+// transaction also kept a direct `br update --claim` of a mutex peer out of
+// the time between its check and its write; here such a claim can land
+// between the holder read (br list) and the write. The states anyone can
+// reach are ntm's (a direct claim can always add a second holder later).
 func claimBeadForAssignmentAttempt(ctx context.Context, normalizedDir, beadID, actor string, gatedLabels []string) (BeadClaimResult, error) {
 	unlock, err := lockProjectClaims(ctx, normalizedDir)
 	if err != nil {

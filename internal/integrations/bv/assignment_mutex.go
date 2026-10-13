@@ -75,6 +75,13 @@ func requireAssignmentMutexes(ctx context.Context, normalizedDir, beadID string,
 	if err != nil {
 		return fmt.Errorf("inspect assignment mutex holders: %w", err)
 	}
+	// Every holder must be seen: a page that says more follow fails closed.
+	var page struct {
+		HasMore bool `json:"has_more"`
+	}
+	if json.Unmarshal([]byte(output), &page) == nil && page.HasMore {
+		return fmt.Errorf("%w: mutex holders cannot all be read (br list reports more than one page)", ErrBeadAssignmentIneligible)
+	}
 	type holder struct {
 		ID       string          `json:"id"`
 		Status   string          `json:"status"`

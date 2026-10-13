@@ -224,6 +224,15 @@ func TestClaimMutexHoldersFromBrList(t *testing.T) {
 			},
 		},
 		{
+			name: "holders on more than one page",
+			list: `{"issues":[{"id":"nhm-h1","status":"closed","labels":["mutex:db"]}],"has_more":true}`,
+			check: func(t *testing.T, err error) {
+				if !errors.Is(err, ErrBeadAssignmentIneligible) || errors.Is(err, ErrAssignmentMutexHeld) {
+					t.Fatalf("error=%v", err)
+				}
+			},
+		},
+		{
 			name: "holder without a status",
 			list: `[{"id":"nhm-h1","status":"","labels":["mutex:db"]}]`,
 			check: func(t *testing.T, err error) {
