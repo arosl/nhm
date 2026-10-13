@@ -517,6 +517,12 @@ What a form starts runs on when the menu closes: recent operations (o)
 shows how it ended. Closing the menu is not cancelling.
 `
 
+// wrap removes terminal controls from s (forms.Clean) and wraps it to
+// width columns: for a reason that must be read whole.
+func wrap(s string, width int) string {
+	return lipgloss.NewStyle().Width(max(10, width)).Render(forms.Clean(s))
+}
+
 // clip removes terminal controls from s (forms.Clean) and shortens it to
 // width columns. Every line of outside text the menu shows (labels,
 // statuses, reasons, errors) passes it.

@@ -188,9 +188,12 @@ func (s *killScreen) View(width, _ int) string {
 		}
 		b.WriteString("\nctrl+b: the agents worked no beads · esc: close\n")
 	case forms.Refused:
-		b.WriteString("kill refuses; nothing was closed:\n" + targetsText(s.f.Review(), width))
-		if err := s.f.Err(); err != nil {
-			b.WriteString(clip("  "+err.Error(), width) + "\n")
+		r := s.f.Review()
+		b.WriteString("kill refuses; nothing was closed:\n" + targetsText(r, width))
+		// The error repeats the review's refusals; it is the reason only
+		// when the review has none (a label that cannot be typed).
+		if err := s.f.Err(); err != nil && len(r.Lines) == 0 && len(r.Targets) == 0 {
+			b.WriteString(wrap(err.Error(), width-2) + "\n")
 		}
 		b.WriteString("\nr: check again · ctrl+b: the agents worked no beads · enter or esc: close\n")
 	case forms.Running:

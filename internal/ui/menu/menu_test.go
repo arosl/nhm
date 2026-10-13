@@ -92,12 +92,19 @@ func press(m *Model, keys ...string) {
 type fakeCore struct {
 	kills []lifecycle.KillRequest
 	woken [][]ui.Target
+	// working makes kill's checks refuse IcyKnoll.
+	working bool
 }
 
 func (f *fakeCore) core() actions.Core {
 	return actions.Core{
 		Kill: func(_ context.Context, r lifecycle.KillRequest) (lifecycle.KillResult, error) {
 			f.kills = append(f.kills, r)
+			if f.working {
+				return lifecycle.KillResult{WorkspaceID: r.WorkspaceID, Refusals: []string{"IcyKnoll: it is working"},
+						Agents: []lifecycle.RetireResult{{MailName: "IcyKnoll", Refusals: []string{"it is working"}}}},
+					fmt.Errorf("%w: IcyKnoll: it is working", lifecycle.ErrRefused)
+			}
 			if !r.Yes {
 				return lifecycle.KillResult{WorkspaceID: r.WorkspaceID, Refusals: []string{},
 					Agents: []lifecycle.RetireResult{{MailName: "IcyKnoll", DryRun: true}}}, fmt.Errorf("%w: give --yes", lifecycle.ErrRefused)
@@ -223,6 +230,24 @@ func TestKillThroughTheMenu(t *testing.T) {
 	press(m, "enter")
 	if m.open != nil {
 		t.Fatal("enter after the result did not close the form")
+	}
+}
+
+// A refused kill shows each refusal once, on its agent's row; a label
+// that cannot be typed shows that reason.
+func TestKillRefusedView(t *testing.T) {
+	m := newMenu(ctxW, &fakeCore{working: true})
+	press(m, "w", "k")
+	if v := m.View(); strings.Count(v, "it is working") != 1 || !strings.Contains(v, "kill refuses") {
+		t.Fatalf("refused review:\n%s", v)
+	}
+	c := ctxW
+	c.WorkspaceLabel = "proj\x1b[31m-a"
+	m = newMenu(c, &fakeCore{})
+	press(m, "w", "k")
+	// The reason is wrapped, not cut: all of it shows.
+	if v := m.View(); !strings.Contains(strings.Join(strings.Fields(v), " "), "cannot be typed: rename the workspace in herdr, then kill it") {
+		t.Fatalf("a label with controls:\n%s", v)
 	}
 }
 
