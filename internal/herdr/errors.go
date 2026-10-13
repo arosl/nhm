@@ -82,7 +82,7 @@ func (e *TransportError) Unwrap() error { return e.Err }
 // down.
 func ServerDown(err error) bool {
 	var te *TransportError
-	return errors.As(err, &te) && (errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED))
+	return errors.As(err, &te) && (errors.Is(te.Err, syscall.ENOENT) || errors.Is(te.Err, syscall.ECONNREFUSED))
 }
 
 // ErrStreamLost ends every event stream. herdr 0.9.3 has no events_lost

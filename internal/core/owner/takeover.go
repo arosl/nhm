@@ -248,7 +248,10 @@ func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.Session
 			return nil, refused("herdr is not running, and the Bash keeps %d tokens and %d wake entries: start herdr, "+
 				"so the takeover can import its agents", len(st.Tokens), len(st.Wake))
 		}
-		imp, err = bindings.ImportReport{DryRun: rep.DryRun, Items: []bindings.ImportItem{}, Warnings: []string{}}, nil
+		// The empty snapshot is the herdr state this decided on: the real
+		// pass imports from it and never dials again (acfs-9hkh.85).
+		imp, err = bindings.ImportReport{DryRun: rep.DryRun, Items: []bindings.ImportItem{}, Warnings: []string{},
+			Snapshot: &herdr.SessionSnapshot{}}, nil
 		rep.Notes = append(rep.Notes, "herdr is not running: no pane to import, and the Bash keeps no token or wake state")
 	}
 	rep.Bindings = &imp

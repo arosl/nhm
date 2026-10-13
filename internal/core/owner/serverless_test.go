@@ -53,7 +53,22 @@ func TestTakeoverWithNoServerAndNothingToImport(t *testing.T) {
 		t.Fatalf("a dry run changed the owner: %+v", o)
 	}
 
+	// The real pass imports from the empty snapshot the check decided on
+	// and does not dial herdr again (acfs-9hkh.85).
+	var redialed bool
+	w.env.ImportBindings = func(ctx context.Context, dry bool, snap *herdr.SessionSnapshot) (bindings.ImportReport, error) {
+		if snap == nil {
+			if !dry {
+				redialed = true
+			}
+			return serverDownImport(ctx, dry, snap)
+		}
+		return bindings.ImportReport{DryRun: dry, Items: []bindings.ImportItem{}, Warnings: []string{}, Snapshot: snap}, nil
+	}
 	rep, err = Takeover(ctx, w.env, false)
+	if redialed {
+		t.Fatal("the real pass read herdr again instead of the checked snapshot")
+	}
 	if err != nil || rep.Owner.Owner != core.OwnerNhm || rep.Bindings == nil || len(rep.Bindings.Items) != 0 ||
 		len(rep.Tokens) != 0 || len(rep.Wake) != 0 {
 		t.Fatalf("takeover = %+v %v", rep, err)
