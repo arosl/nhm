@@ -158,6 +158,11 @@ func (m *Model) sendUpdate(msg tea.Msg) tea.Cmd {
 
 // submitSend submits the composed text to the frozen targets.
 func (m *Model) submitSend(text string) tea.Cmd {
+	if m.send.running || m.send.done {
+		// One submission per composer: a second ctrl+s that the editor
+		// passed on before the first was taken sends nothing.
+		return nil
+	}
 	if err := m.Frozen(); err != nil {
 		m.say(true, err.Error())
 		return nil
@@ -182,11 +187,15 @@ func (m *Model) submitSend(text string) tea.Cmd {
 	req.OperationID = id
 	m.send.opID, m.send.running = id, true
 	_ = m.b.Results.Begin(id, a.ID, m.send.targets, m.send.names, m.cfg.Now())
-	core := m.cfg.Core
+	core, guard := m.cfg.Core, m.guard
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), forms.RunTimeout)
 		defer cancel()
 		res, err := a.Do(ctx, core, req)
+		// The answer is in: the same text may be sent again, as a new
+		// operation (a lost answer keeps the guard's hold). Settled here,
+		// so it is settled when the view was closed too.
+		guard.Settle(key, err)
 		return sentMsg{opID: id, res: res, err: err}
 	}
 }

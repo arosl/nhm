@@ -850,6 +850,30 @@ func TestSendFromTheBoard(t *testing.T) {
 	}
 }
 
+// Two ctrl+s before the first is taken send once. Once the answer is in,
+// the guard lets the same text be sent again, as a new operation.
+func TestSendSubmitsOnceAndSettles(t *testing.T) {
+	sc := &sendCore{}
+	m := newModel(t, Config{Core: sc.core(), NewOperationID: opIDs()})
+	press(m, "space", "s", "h", "i")
+	_, first := m.Update(palette.ComposedMsg{Text: "hi"})
+	_, second := m.Update(palette.ComposedMsg{Text: "hi"})
+	if first == nil || second != nil {
+		t.Fatalf("submits: first %v, second %v", first != nil, second != nil)
+	}
+	m.Update(first())
+	press(m, "enter")
+	press(m, "space", "s", "h", "i")
+	_, again := m.Update(palette.ComposedMsg{Text: "hi"})
+	if again == nil {
+		t.Fatalf("the same text after its answer was refused:\n%s", plain(m))
+	}
+	m.Update(again())
+	if len(sc.reqs) != 2 || sc.reqs[0].OperationID != "op-1" || sc.reqs[1].OperationID != "op-2" {
+		t.Fatalf("sends = %+v", sc.reqs)
+	}
+}
+
 // space a opens the palette on exactly the board's frozen selection, an
 // explicit one; with no agent it opens nothing.
 func TestPaletteFromTheBoard(t *testing.T) {
