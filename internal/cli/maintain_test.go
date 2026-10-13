@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,11 +35,7 @@ func TestMaintainOnceIsQuietWhenThereIsNothingToServe(t *testing.T) {
 		t.Setenv("XDG_STATE_HOME", t.TempDir())
 		t.Setenv("HERDR_SOCKET_PATH", "")
 		quiet(t, "this herdr server is not enrolled", "--socket", filepath.Join(t.TempDir(), "herdr.sock"))
-		// --loop keeps failing loudly: it is no timer's pass.
-		code, _, errOut := runVerb(runMaintain, "--loop", "--socket", filepath.Join(t.TempDir(), "herdr.sock"))
-		if code != exitError || !strings.Contains(errOut, "not enrolled") {
-			t.Fatalf("--loop not enrolled = %d %q", code, errOut)
-		}
+		// --loop waits instead: TestMaintainLoopWaitsForTheServer.
 	})
 
 	t.Run("no server", func(t *testing.T) {
@@ -91,6 +89,45 @@ func TestMaintainOnceFailsWhenItCannotTell(t *testing.T) {
 	code, out, errOut := runVerb(runMaintain, "--once", "--socket", long)
 	if code != exitError || strings.Contains(out, "nothing to do") || !strings.Contains(errOut, "cannot tell whether a herdr server runs") {
 		t.Fatalf("maintain --once on a %d-byte socket path = %d %q %q", len(long), code, out, errOut)
+	}
+	// --loop does not wait for what waiting cannot fix.
+	code, out, errOut = runVerb(runMaintain, "--loop", "--interval", "1ms", "--socket", long)
+	if code != exitError || strings.Contains(out, "waiting") || !strings.Contains(errOut, "cannot tell whether a herdr server runs") {
+		t.Fatalf("maintain --loop on a %d-byte socket path = %d %q %q", len(long), code, out, errOut)
+	}
+}
+
+// --loop waits for a server that is not enrolled or does not run yet
+// (nhm-wmn): it says why once per reason, tries again every interval,
+// stops quietly when its context ends, and fails on an error.
+func TestMaintainLoopWaitsForTheServer(t *testing.T) {
+	notEnrolled, noServer := "this herdr server is not enrolled", "no herdr server runs on /s"
+	answers := []string{notEnrolled, notEnrolled, noServer, noServer, ""}
+	tries := 0
+	ready := func() (*instanceEnv, string, error) {
+		why := answers[tries]
+		tries++
+		if why == "" {
+			return &instanceEnv{}, "", nil
+		}
+		return nil, why, nil
+	}
+	var out strings.Builder
+	ie, err := waitForServer(context.Background(), ready, time.Millisecond, &out)
+	want := "nhm maintain: waiting: " + notEnrolled + "\nnhm maintain: waiting: " + noServer + "\n"
+	if ie == nil || err != nil || tries != len(answers) || out.String() != want {
+		t.Fatalf("waitForServer = %v %v after %d tries, said %q", ie, err, tries, out.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	never := func() (*instanceEnv, string, error) { return nil, notEnrolled, nil }
+	if ie, err := waitForServer(ctx, never, time.Hour, &out); ie != nil || err != nil {
+		t.Fatalf("an ended context = %v %v", ie, err)
+	}
+	broken := func() (*instanceEnv, string, error) { return nil, "", errors.New("store: open: permission denied") }
+	if _, err := waitForServer(context.Background(), broken, time.Millisecond, &out); err == nil {
+		t.Fatal("an error was waited out")
 	}
 }
 

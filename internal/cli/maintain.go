@@ -40,7 +40,8 @@ runner per herdr server: a second one exits 0 and says so. nhm doctor
 shows the last pass and its runner. Under ACFS's Bash, the pass does
 nothing. With --once, a herdr server that is not enrolled or does not
 run is nothing to do too: exit 0, the reason on one stdout line, nothing
-on stderr.
+on stderr. --loop waits for such a server: it says why once, then tries
+again every --interval until a pass can run.
 `
 
 // maintainLockFile is the singleton lock in the instance directory.
@@ -72,23 +73,26 @@ func runMaintain(args []string, stdout, stderr io.Writer) int {
 		env.Result = maintainResult{Skipped: why, Names: []string{}, Limits: []limitReport{}, Warnings: []string{}}
 		return output(stdout, stderr, *asJSON, env, nil, exitOK, func(w io.Writer) { fmt.Fprintf(w, "nothing to do: %s\n", why) })
 	}
-	ie, err := openInstance(*socket)
-	if err != nil {
-		if !*loop && errors.Is(err, store.ErrNotEnrolled) {
-			return skip("this herdr server is not enrolled (nhm admin instance enroll)")
-		}
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
-	}
-	defer ie.db.Close()
-	if !*loop {
-		up, err := serverRuns(ie.herdr.SocketPath)
-		if err != nil {
+	ready := func() (*instanceEnv, string, error) { return maintainReady(*socket) }
+	var ie *instanceEnv
+	if *loop {
+		// --loop waits for a server to enrol and run (nhm-wmn).
+		if ie, err = waitForServer(ctx, ready, *interval, stdout); err != nil {
 			return output(stdout, stderr, *asJSON, env, err, exitError, nil)
 		}
-		if !up {
-			return skip("no herdr server runs on " + ie.herdr.SocketPath)
+		if ie == nil {
+			return exitOK
+		}
+	} else {
+		var why string
+		if ie, why, err = ready(); err != nil {
+			return output(stdout, stderr, *asJSON, env, err, exitError, nil)
+		}
+		if why != "" {
+			return skip(why)
 		}
 	}
+	defer ie.db.Close()
 	unlock, err := tryLock(filepath.Join(ie.inst.Dir, maintainLockFile))
 	if errors.Is(err, errLocked) {
 		env.Result = maintainResult{Skipped: "another nhm maintain runs for this herdr server"}
@@ -126,6 +130,51 @@ func runMaintain(args []string, stdout, stderr io.Writer) int {
 		case <-ctx.Done():
 			return exitOK
 		case <-time.After(*interval):
+		}
+	}
+}
+
+// maintainReady opens the instance for a pass. why, when not "", says
+// why there is nothing to do: the server is not enrolled, or none runs.
+func maintainReady(socket string) (ie *instanceEnv, why string, err error) {
+	ie, err = openInstance(socket)
+	if errors.Is(err, store.ErrNotEnrolled) {
+		return nil, "this herdr server is not enrolled (nhm admin instance enroll)", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	up, err := serverRuns(ie.herdr.SocketPath)
+	if err != nil || !up {
+		_ = ie.db.Close()
+		if err != nil {
+			return nil, "", err
+		}
+		return nil, "no herdr server runs on " + ie.herdr.SocketPath, nil
+	}
+	return ie, "", nil
+}
+
+// waitForServer is --loop's start: it tries ready every interval until a
+// pass can run, and says on out why it waits, once per reason. It returns
+// nil and no error when ctx ends first, and fails on what waiting cannot
+// fix (a socket path the kernel will not take, a database it cannot open).
+func waitForServer(ctx context.Context, ready func() (*instanceEnv, string, error), interval time.Duration,
+	out io.Writer) (*instanceEnv, error) {
+	said := ""
+	for {
+		ie, why, err := ready()
+		if err != nil || why == "" {
+			return ie, err
+		}
+		if why != said {
+			fmt.Fprintf(out, "nhm maintain: waiting: %s\n", why)
+			said = why
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-time.After(interval):
 		}
 	}
 }
