@@ -2,12 +2,7 @@
 # from nhm bind, the diagnostics and views rows, a small client, and keys
 # typed into a popup. tests/surfaces_e2e.sh runs it.
 sleep 2
-note dismiss herdr's first-run welcome (continue) and settings screen (esc)
-key enter
-sleep 1.5
-key esc
-sleep 1.5
-note prefix+m: nhm bind's key opens the Go menu in a popup
+note prefix+m: nhm bind's key opens the Go menu in a popup (herdr_lib.sh turns off herdr's first-run screens)
 key ctrl+b m
 expect 8 diagnostics ›
 expect 2 views ›

@@ -8,8 +8,12 @@
 #                              (HERDR_BIN, else the pinned release, its
 #                              SHA256 checked); nhm and nhm-hook (NHM_BIN and
 #                              NHM_HOOK_BIN, else built) beside nhm's plugin
-#                              as install.sh lays it out ($NHM_DATA); the
-#                              server started and the plugin linked
+#                              as install.sh lays it out ($NHM_DATA); herdr's
+#                              first-run screens off; the server started and
+#                              the plugin linked. A test may define
+#                              herdr_private_before_server: it runs just
+#                              before the server starts, so the server
+#                              inherits what it exports
 #   herdr_private_stop         stop the server and remove $HERDR_WORK
 #
 # It never touches a herdr server it did not start.
@@ -70,6 +74,12 @@ herdr_private_start() {
   cp "$HERDR_LIB_ROOT/plugin/herdr-plugin.toml" "$NHM_DATA/plugin/"
   ln -sf "$NHM_DATA/nhm" "$HERDR_WORK/bin/nhm"
 
+  # No welcome or settings screen for an attached client. herdr's config:
+  # "Missing also shows onboarding; set false after you've chosen".
+  printf 'onboarding = false\n' >"$HERDR_CONFIG_PATH"
+  if declare -F herdr_private_before_server >/dev/null; then
+    herdr_private_before_server
+  fi
   herdr server >"$HERDR_WORK/server.log" 2>&1 &
   HERDR_SERVER=$!
   local _

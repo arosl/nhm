@@ -2,7 +2,8 @@
 # nhm's Go surfaces in a real herdr (nhm-qbi.11, plan-v4 section 10, the
 # automated cases that need herdr): a private herdr server
 # (tests/herdr_lib.sh) with nhm's plugin, [ui] set to the Go surfaces,
-# nhm's keys bound, and a fake claude adopted as IcyKnoll. Each script in
+# nhm's keys bound, a fake Agent Mail (tests/fake_agentmail.py), and a
+# fake claude adopted as IcyKnoll. Each script in
 # tests/surfaces/ drives an attached herdr client in a pty
 # (tests/ptyclient.py) and checks its screen; a track adds its script with
 # its surface.
@@ -17,7 +18,35 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tests/herdr_lib.sh
 source "$root/tests/herdr_lib.sh"
 herdr_private_guard
-trap herdr_private_stop EXIT
+
+# A fake Agent Mail (tests/fake_agentmail.py): IcyKnoll's inbox has one
+# unread message, and each call goes to $HERDR_WORK/agentmail.jsonl.
+# herdr_private_start calls this hook before the server starts, so the
+# server, and nhm's surfaces under it, get AGENT_MAIL_URL.
+mail_pid=""
+herdr_private_before_server() {
+  python3 -I "$root/tests/fake_agentmail.py" "$HERDR_WORK/agentmail.port" "$HERDR_WORK/agentmail.jsonl" &
+  mail_pid=$!
+  local _
+  for _ in $(seq 1 50); do
+    [[ -s "$HERDR_WORK/agentmail.port" ]] && break
+    sleep 0.1
+  done
+  if [[ ! -s "$HERDR_WORK/agentmail.port" ]]; then
+    echo "surfaces_e2e: the fake Agent Mail did not start" >&2
+    return 1
+  fi
+  AGENT_MAIL_URL="http://127.0.0.1:$(cat "$HERDR_WORK/agentmail.port")/mcp/"
+  export AGENT_MAIL_URL
+}
+surfaces_stop() {
+  if [[ -n "$mail_pid" ]]; then
+    kill "$mail_pid" 2>/dev/null || true
+    wait "$mail_pid" 2>/dev/null || true
+  fi
+  herdr_private_stop
+}
+trap surfaces_stop EXIT
 herdr_private_start
 
 # nhm owns the server. The takeover needs ACFS's Bash and Agent Mail, which
