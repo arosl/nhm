@@ -429,6 +429,9 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	occ := occupant(ctx, env, st, name, c.Facts.Model)
 	occ.Evidence = append([]bindings.Evidence{{Kind: "posttooluse",
 		Detail: fmt.Sprintf("%s returned %s for %s in session %s", c.Facts.ToolName, name, root, c.Session)}}, occ.Evidence...)
+	// A shell that names another agent goes into the binding's evidence:
+	// nhm resolve shows it, and nhm-hook's own output reaches no one.
+	envWarning := bindings.WithMailAgentWarning(name, &occ)
 	b, err := env.Bindings.Create(ctx, bindings.New{MailName: name, MailProjectKey: root, ProjectID: core.ProjectID(root),
 		Provenance: bindings.Adopted, Occupant: occ})
 	if errors.Is(err, bindings.ErrIdentityBusy) || errors.Is(err, bindings.ErrPaneBusy) {
@@ -443,8 +446,8 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	for _, w := range bindings.Label(ctx, env.Herdr, b) {
 		r.warn("%s", w)
 	}
-	if w := bindings.MailAgentWarning(b); w != "" {
-		r.warn("%s", w)
+	if envWarning != "" {
+		r.warn("%s", envWarning)
 	}
 	if !kept {
 		// The binding stands; the candidate stays pending until its token

@@ -49,14 +49,25 @@ func TestMailAgentWarning(t *testing.T) {
 		{999, 0, ""}, // gone
 		{0, 0, ""},
 	} {
-		got := MailAgentWarning(Binding{MailName: "NewOwl", ForegroundPID: c.pid, ForegroundStart: c.start})
+		got := MailAgentWarning("NewOwl", Occupant{ForegroundPID: c.pid, ForegroundStart: c.start})
 		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
 			t.Errorf("pid %d start %d: %q, want %q", c.pid, c.start, got, c.want)
 		}
 	}
-	got := MailAgentWarning(Binding{MailName: "NewOwl", ForegroundPID: 100, ForegroundStart: 7})
+	got := MailAgentWarning("NewOwl", Occupant{ForegroundPID: 100, ForegroundStart: 7})
 	if !strings.Contains(got, "act as OldFox, not NewOwl") || !strings.Contains(got, "nhm add") {
 		t.Fatalf("warning = %q", got)
+	}
+	// WithMailAgentWarning puts the warning in the evidence, which nhm
+	// resolve shows; no warning, no evidence.
+	occ := Occupant{ForegroundPID: 100, ForegroundStart: 7, Evidence: []Evidence{{Kind: "adopt"}}}
+	if w := WithMailAgentWarning("NewOwl", &occ); w != got || len(occ.Evidence) != 2 ||
+		occ.Evidence[1] != (Evidence{Kind: EvidencePaneEnv, Detail: got}) {
+		t.Fatalf("evidence = %+v, warning %q", occ.Evidence, w)
+	}
+	occ = Occupant{ForegroundPID: 101, ForegroundStart: 7}
+	if w := WithMailAgentWarning("NewOwl", &occ); w != "" || len(occ.Evidence) != 0 {
+		t.Fatalf("own name: evidence = %+v, warning %q", occ.Evidence, w)
 	}
 }
 

@@ -29,22 +29,29 @@ var ProcEnviron = func(pid int64) (map[string]string, error) {
 	return env, nil
 }
 
-// MailAgentWarning warns when the bound agent's process names another
-// agent to ACFS's Agent Mail hook and am: a pane that spawn made for one
-// agent, reused by hand for another, keeps the first agent's
-// AGENT_MAIL_AGENT in its shell (nhm-a73). It reads the first of the
-// variables that is set, as they do. "" when none names another agent,
-// or when the process cannot be read or is no longer the bound one.
-func MailAgentWarning(b Binding) string {
-	if b.ForegroundPID <= 0 {
+// EvidencePaneEnv is the evidence kind of a MailAgentWarning on a new
+// binding: nhm-hook prints nothing an operator sees, and nhm resolve
+// shows a binding's evidence.
+const EvidencePaneEnv = "pane_env"
+
+// MailAgentWarning warns when the agent process of an occupant, about to
+// be bound as mailName, names another agent to ACFS's Agent Mail hook
+// and am: a pane that spawn made for one agent, reused by hand for
+// another, keeps the first agent's AGENT_MAIL_AGENT in its shell
+// (nhm-a73). It reads the first of the variables that is set, as they
+// do. "" when none names another agent, or when the process cannot be
+// read or its start time shows another process; an unknown start time
+// trusts the pid.
+func MailAgentWarning(mailName string, occ Occupant) string {
+	if occ.ForegroundPID <= 0 {
 		return ""
 	}
-	env, err := ProcEnviron(b.ForegroundPID)
+	env, err := ProcEnviron(occ.ForegroundPID)
 	if err != nil {
 		return ""
 	}
-	if b.ForegroundStart != 0 {
-		if start, err := ProcStart(b.ForegroundPID); err != nil || start != b.ForegroundStart {
+	if occ.ForegroundStart != 0 {
+		if start, err := ProcStart(occ.ForegroundPID); err != nil || start != occ.ForegroundStart {
 			return ""
 		}
 	}
@@ -53,11 +60,21 @@ func MailAgentWarning(b Binding) string {
 		if v == "" {
 			continue
 		}
-		if strings.EqualFold(v, b.MailName) {
+		if strings.EqualFold(v, mailName) {
 			return ""
 		}
 		return fmt.Sprintf("this pane's shell sets %s=%s: ACFS's mail hook and am will act as %s, not %s; "+
-			"start %s in a fresh pane (nhm add), or unset %s before you start it", key, v, v, b.MailName, b.MailName, key)
+			"start %s in a fresh pane (nhm add), or unset %s before you start it", key, v, v, mailName, mailName, key)
 	}
 	return ""
+}
+
+// WithMailAgentWarning adds the occupant's MailAgentWarning to its
+// evidence, and returns the warning ("" when there is none).
+func WithMailAgentWarning(mailName string, occ *Occupant) string {
+	w := MailAgentWarning(mailName, *occ)
+	if w != "" {
+		occ.Evidence = append(occ.Evidence, Evidence{Kind: EvidencePaneEnv, Detail: w})
+	}
+	return w
 }
