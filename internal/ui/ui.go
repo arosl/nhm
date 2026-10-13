@@ -19,6 +19,9 @@ import (
 	"strings"
 
 	"github.com/arosl/nhm/internal/herdr"
+	// Pins Lip Gloss's background before bubbletea's init asks the
+	// terminal for it: see package termbg.
+	_ "github.com/arosl/nhm/internal/ui/tui/termbg"
 )
 
 // PluginID is the id of nhm's herdr plugin.

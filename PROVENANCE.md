@@ -66,6 +66,58 @@ The same rules apply to code from pt and dcg.
 | `internal/core/snapshot/robot.go` | `internal/robot/robot.go` (derived: `statusOverall`, `statusHealthScore`, the summary counting) | they read nhm's model and its attention severities instead of ntm's alert and state stores |
 | `internal/redaction/LICENSE` | `LICENSE` | none |
 | `internal/redaction/redaction.go` | `internal/redaction/patterns.go`, `types.go` (derived) | the built-in pattern table, its categories and the literal prefilter only; `Redact` writes `[REDACTED:<CATEGORY>]`, as ACFS's Bash does, without ntm's hash suffix, allowlist, extra patterns and line info; a deliberate strengthening: a private key's whole PEM block is redacted (also one cut off before its END line), where ntm redacts only the header line, and the PEM patterns run before every other; `Find` returns the secrets as spans, for text checked in a folded form, and `Redact` is built on it |
+| `internal/ui/tui/agent/LICENSE` | `LICENSE` | none |
+| `internal/ui/tui/agent/types.go` | `internal/agent/types.go` (in part) | provenance header; package comment; only `AgentType`, its constants, `String`, `Canonical`, `DisplayName`, `ProfileName` and `IsValid`, for the UI's colours, icons and names; ntm's detection engine (state, recommendations, parser types) and its Grok and delivery checks left out |
+| `internal/ui/tui/agent/types_test.go` | `internal/agent/types_test.go` (in part) | provenance header; the tests of the kept functions; `TestNhmKindsAreKnown` is nhm's |
+| `internal/ui/tui/theme/LICENSE` | `LICENSE` | none |
+| `internal/ui/tui/theme/theme.go` | `internal/tui/theme/theme.go` | provenance header |
+| `internal/ui/tui/theme/semantic.go` | `internal/tui/theme/semantic.go` | provenance header; import path |
+| `internal/ui/tui/theme/huh.go` | `internal/tui/theme/huh.go` | provenance header |
+| `internal/ui/tui/theme/theme_test.go` | `internal/tui/theme/theme_test.go` | provenance header |
+| `internal/ui/tui/theme/semantic_test.go` | `internal/tui/theme/semantic_test.go` | provenance header |
+| `internal/ui/tui/theme/huh_test.go` | `internal/tui/theme/huh_test.go` | provenance header |
+| `internal/ui/tui/theme/configured_test.go` | `internal/tui/theme/configured_test.go` | provenance header |
+| `internal/ui/tui/styles/LICENSE` | `LICENSE` | none |
+| `internal/ui/tui/styles/styles.go` | `internal/tui/styles/styles.go` | provenance header; import paths; behaviour: `AnimationsEnabled` is false inside herdr (`HERDR_ENV` or `HERDR_SOCKET_PATH`), as in tmux and screen |
+| `internal/ui/tui/styles/badges.go` | `internal/tui/styles/badges.go`, `internal/util/text.go` (`FormatBytes`) | provenance header; import paths; `util.FormatBytes` copied in as `formatBytes` |
+| `internal/ui/tui/styles/tokens.go` | `internal/tui/styles/tokens.go` | provenance header |
+| `internal/ui/tui/styles/styles_test.go` | `internal/tui/styles/styles_test.go` | provenance header; `TestAnimationsEnabledAutoDisablesInHerdr` is nhm's |
+| `internal/ui/tui/styles/styles_theme_test.go` | `internal/tui/styles/styles_theme_test.go` | provenance header; import path |
+| `internal/ui/tui/styles/styles_branches_test.go` | `internal/tui/styles/styles_branches_test.go` | provenance header |
+| `internal/ui/tui/styles/badges_test.go` | `internal/tui/styles/badges_test.go` | provenance header |
+| `internal/ui/tui/styles/tokens_test.go` | `internal/tui/styles/tokens_test.go` | provenance header |
+| `internal/ui/tui/styles/tokens_extra_test.go` | `internal/tui/styles/tokens_extra_test.go` | provenance header |
+| `internal/ui/tui/icons/LICENSE` | `LICENSE` | none |
+| `internal/ui/tui/icons/icons.go` | `internal/tui/icons/icons.go` | provenance header; import path |
+| `internal/ui/tui/icons/icons_test.go` | `internal/tui/icons/icons_test.go` | provenance header |
+| `internal/ui/tui/icons/env_detection_test.go` | `internal/tui/icons/env_detection_test.go` | provenance header |
+| `internal/ui/tui/layout/LICENSE` | `LICENSE` | none |
+| `internal/ui/tui/layout/layout.go` | `internal/tui/layout/layout.go` | provenance header |
+| `internal/ui/tui/layout/layout_test.go` | `internal/tui/layout/layout_test.go` | provenance header |
+| `internal/ui/tui/terminal/LICENSE` | `LICENSE` | none |
+| `internal/ui/tui/terminal/caps.go` | `internal/tui/terminal/caps.go` | provenance header |
+| `internal/ui/tui/components/LICENSE` | `LICENSE` | none |
+| `internal/ui/tui/components/banner.go` | `internal/tui/components/banner.go` | provenance header; import paths |
+| `internal/ui/tui/components/freshness.go` | `internal/tui/components/freshness.go` | provenance header; import path |
+| `internal/ui/tui/components/help.go` | `internal/tui/components/help.go` | provenance header; import paths |
+| `internal/ui/tui/components/pane_table.go` | `internal/tui/components/pane_table.go` | provenance header; import path |
+| `internal/ui/tui/components/progress.go` | `internal/tui/components/progress.go` | provenance header; import paths |
+| `internal/ui/tui/components/scroll.go` | `internal/tui/components/scroll.go` | provenance header; import path |
+| `internal/ui/tui/components/scrollable_panel.go` | `internal/tui/components/scrollable_panel.go` | provenance header; import path |
+| `internal/ui/tui/components/sparkline.go` | `internal/tui/components/sparkline.go` | provenance header; import path |
+| `internal/ui/tui/components/spring_manager.go` | `internal/tui/components/spring_manager.go` | provenance header; import path |
+| `internal/ui/tui/components/state.go` | `internal/tui/components/state.go` | provenance header; import paths |
+| `internal/ui/tui/components/statusbar.go` | `internal/tui/components/statusbar.go` | provenance header; import paths |
+| `internal/ui/tui/components/tabbar.go` | `internal/tui/components/tabbar.go` | provenance header; import paths |
+| `internal/ui/tui/components/components_test.go` | `internal/tui/components/components_test.go` | provenance header; import paths |
+| `internal/ui/tui/components/freshness_test.go` | `internal/tui/components/freshness_test.go` | provenance header; `status.StripANSI` is `ansi.Strip` (charmbracelet/x/ansi) |
+| `internal/ui/tui/components/pane_table_test.go` | `internal/tui/components/pane_table_test.go` | provenance header; import path |
+| `internal/ui/tui/components/progress_test.go` | `internal/tui/components/progress_test.go` | provenance header; import path |
+| `internal/ui/tui/components/scroll_test.go` | `internal/tui/components/scroll_test.go` | provenance header |
+| `internal/ui/tui/components/scrollable_panel_test.go` | `internal/tui/components/scrollable_panel_test.go` | provenance header |
+| `internal/ui/tui/components/spring_manager_test.go` | `internal/tui/components/spring_manager_test.go` | provenance header |
+| `internal/ui/tui/components/state_test.go` | `internal/tui/components/state_test.go` | provenance header |
+| `internal/ui/tui/components/statusbar_test.go` | `internal/tui/components/statusbar_test.go` | provenance header |
 
 ## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
 
