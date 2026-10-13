@@ -16,6 +16,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/lifecycle"
 	"github.com/arosl/nhm/internal/core/snapshot"
+	"github.com/arosl/nhm/internal/core/uilaunch"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
@@ -106,7 +107,29 @@ func (r *reader) build(ctx context.Context, projectKey string, withBeads bool) *
 	if path, err := limitsSeenPath(r.inst); err == nil {
 		deps.LimitsFile = path
 	}
+	if r.inst != nil {
+		deps.Boards = boardsIn(r.inst.Dir, r.herdr)
+	}
 	return snapshot.Build(ctx, deps, snapshot.Options{ProjectKey: projectKey})
+}
+
+// boardsIn is snapshot.Deps.Boards for an instance: nhm's live boards
+// (uilaunch.Boards). A reader waits at most a second for a workspace's
+// lock; a check that fails keeps the rows and degrades the source.
+func boardsIn(instanceDir string, h uilaunch.Herdr) func(context.Context, string) (map[string]bool, error) {
+	env := uilaunch.Env{InstanceDir: instanceDir, LockWait: time.Second}
+	return func(ctx context.Context, workspace string) (map[string]bool, error) {
+		var only []string
+		if workspace != "" {
+			only = []string{workspace}
+		}
+		found, err := uilaunch.Boards(ctx, env, h, only...)
+		out := make(map[string]bool, len(found))
+		for pane := range found {
+			out[pane] = true
+		}
+		return out, err
+	}
 }
 
 // selectWorkspace narrows the model to one session (a workspace label or

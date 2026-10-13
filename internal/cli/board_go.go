@@ -141,7 +141,7 @@ func runGoBoard(stderr io.Writer) int {
 		}()
 	}
 
-	deps := snapshot.Deps{Herdr: ie.herdr, DB: ie.db, Beads: beadsInProgress,
+	deps := snapshot.Deps{Herdr: ie.herdr, DB: ie.db, Beads: beadsInProgress, Boards: boardsIn(ie.inst.Dir, ie.herdr),
 		Guards: func(kind, projectRoot string) []guards.Result {
 			return guards.Check(kind, guards.Env{ProjectRoot: projectRoot})
 		}}

@@ -49,6 +49,7 @@ const (
 	SourceMail     = "agent_mail"
 	SourceQuota    = "quota"
 	SourceBeads    = "beads"
+	SourceBoards   = "boards"
 )
 
 // SourceHealth is how one source did in this build.
@@ -85,6 +86,10 @@ type Deps struct {
 	// Beads lists the beads in progress in a project's bead databases,
 	// by assignee (an Agent Mail name); nil skips the beads.
 	Beads func(ctx context.Context, projectRoot string) (map[string][]string, error)
+	// Boards lists nhm's live boards by pane id (uilaunch.Boards) in a
+	// workspace, or in all for "": a board's pane is no agent, even when
+	// herdr names one in it (plan-v4 section 7). nil skips the check.
+	Boards func(ctx context.Context, workspace string) (map[string]bool, error)
 }
 
 // Options select and bound a build.
@@ -235,6 +240,8 @@ type Model struct {
 	// herdrOK is false when the herdr stage failed: agent data is then
 	// the bindings' last word, not herdr's.
 	herdrOK bool
+	// boards are nhm's live boards by pane id: no agent rows.
+	boards map[string]bool
 }
 
 // HerdrOK reports whether herdr answered.
@@ -275,6 +282,15 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 	} else {
 		// A failed call contributes nothing, whatever it returned.
 		snap = herdr.SessionSnapshot{}
+	}
+	if deps.Boards != nil && m.herdrOK {
+		// A check that failed for one workspace still leaves out the
+		// boards it found in the others.
+		m.stage(SourceBoards, now, orDefault(opts.LocalTimeout, defaultLocalTimeout), ctx, func(c context.Context) error {
+			var err error
+			m.boards, err = deps.Boards(c, opts.Workspace)
+			return err
+		})
 	}
 
 	// Stage 2: local state.
@@ -529,7 +545,7 @@ func (m *Model) join(snap herdr.SessionSnapshot, all []bindings.Binding, opts Op
 	agentCount := map[string]int{}
 	seen := map[string]bool{}
 	for _, a := range snap.Agents {
-		if a.Agent == "" || (opts.Workspace != "" && a.WorkspaceID != opts.Workspace) {
+		if a.Agent == "" || m.boards[a.PaneID] || (opts.Workspace != "" && a.WorkspaceID != opts.Workspace) {
 			continue
 		}
 		b, bound := byPane[a.PaneID]

@@ -17,6 +17,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/spawn"
+	"github.com/arosl/nhm/internal/core/uilaunch"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -720,8 +721,8 @@ func KillWith(ctx context.Context, env Env, req KillRequest) (KillResult, error)
 }
 
 // uncheckedPanes names the workspace's panes, other than the checked
-// ones, that hold an agent or a job in the foreground: closing the
-// workspace would end them with no retire check.
+// ones and nhm's live board, that hold an agent or a job in the
+// foreground: closing the workspace would end them with no retire check.
 func uncheckedPanes(ctx context.Context, env Env, workspaceID string, checked map[string]bool) ([]string, error) {
 	snap, err := env.Herdr.Snapshot(ctx)
 	if err != nil {
@@ -731,9 +732,10 @@ func uncheckedPanes(ctx context.Context, env Env, workspaceID string, checked ma
 	for _, a := range snap.Agents {
 		agents[a.PaneID] = a
 	}
+	boards := liveBoards(ctx, env, workspaceID)
 	var out []string
 	for _, p := range snap.Panes {
-		if p.WorkspaceID != workspaceID || checked[p.PaneID] {
+		if p.WorkspaceID != workspaceID || checked[p.PaneID] || boards[p.PaneID] {
 			continue
 		}
 		if a, ok := agents[p.PaneID]; ok {
@@ -749,4 +751,21 @@ func uncheckedPanes(ctx context.Context, env Env, workspaceID string, checked ma
 		}
 	}
 	return out, nil
+}
+
+// liveBoards are the workspace's live nhm boards by pane id, by their
+// verified launch records (uilaunch.Boards), never by label or pane
+// kind: nhm's own panes, which kill closes with the workspace. A board
+// that cannot be checked is not left out: kill checks its pane as it
+// checks any other.
+func liveBoards(ctx context.Context, env Env, workspaceID string) map[string]bool {
+	out := map[string]bool{}
+	if env.InstanceDir == "" {
+		return out
+	}
+	found, _ := uilaunch.Boards(ctx, uilaunch.Env{InstanceDir: env.InstanceDir, Now: env.Now}, env.Herdr, workspaceID)
+	for pane := range found {
+		out[pane] = true
+	}
+	return out
 }

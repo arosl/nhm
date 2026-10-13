@@ -214,6 +214,47 @@ func TestHerdrDownKeepsLocalTruth(t *testing.T) {
 	}
 }
 
+// nhm's live board is no agent, even when herdr names one in its pane
+// (plan-v4 section 7): no row, no count, no "adopt it". A check that
+// failed in part still leaves out what it found, and the source says it
+// failed. No check without herdr, and no source without a check.
+func TestBoardsAreNoAgents(t *testing.T) {
+	db, h := setup(t)
+	var asked []string
+	boards := func(_ context.Context, ws string) (map[string]bool, error) {
+		asked = append(asked, ws)
+		return map[string]bool{"w1:p3": true}, nil
+	}
+	m := Build(context.Background(), Deps{Herdr: h, DB: db, Boards: boards}, Options{Workspace: "w1"})
+	if len(m.Agents) != 2 || m.Workspaces[0].AgentCount != 2 || len(m.Degraded()) != 0 || m.Sources[SourceBoards].Status != Fresh {
+		t.Fatalf("agents %+v, workspaces %+v, sources %+v", m.Agents, m.Workspaces, m.Sources)
+	}
+	if len(asked) != 1 || asked[0] != "w1" {
+		t.Fatalf("Boards asked for %q", asked)
+	}
+	for _, it := range Attention(m) {
+		if it.PaneID == "w1:p3" {
+			t.Fatalf("attention names the board: %+v", it)
+		}
+	}
+	m = Build(context.Background(), Deps{Herdr: h, DB: db, Boards: func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{"w1:p3": true}, errors.New("w2: the workspace lock is busy")
+	}}, Options{})
+	if len(m.Agents) != 3 || m.Sources[SourceBoards].Status != Unavailable || !strings.Contains(m.Sources[SourceBoards].Error, "w2") {
+		t.Fatalf("agents %d, boards source %+v", len(m.Agents), m.Sources[SourceBoards])
+	}
+	if m = Build(context.Background(), Deps{Herdr: h, DB: db}, Options{}); len(m.Agents) != 4 {
+		t.Fatalf("no check: %d agents", len(m.Agents))
+	}
+	if _, ok := m.Sources[SourceBoards]; ok {
+		t.Fatalf("a boards source without a check: %+v", m.Sources)
+	}
+	h.err, asked = errors.New("dial unix: no such file"), nil
+	if Build(context.Background(), Deps{Herdr: h, DB: db, Boards: boards}, Options{}); len(asked) != 0 {
+		t.Fatal("Boards ran while herdr did not answer")
+	}
+}
+
 func TestMailFailuresAreUnknownNotZero(t *testing.T) {
 	db, h := setup(t)
 	mail := fakeMail{fail: map[string]error{"BlueLake": errors.New("connection refused")}}

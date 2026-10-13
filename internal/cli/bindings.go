@@ -70,7 +70,7 @@ func openInstance(socket string) (*instanceEnv, error) {
 }
 
 func (e *instanceEnv) env() bindings.Env {
-	return bindings.Env{DB: e.db, Bindings: bindings.NewStore(e.db), Herdr: e.herdr}
+	return bindings.Env{DB: e.db, Bindings: bindings.NewStore(e.db), Herdr: e.herdr, InstanceDir: e.inst.Dir}
 }
 
 // callerPane is the calling pane as the bindings know it: HERDR_PANE_ID,
@@ -319,8 +319,9 @@ func adoptUnderOwner(ctx context.Context, ie *instanceEnv, req bindings.AdoptReq
 		return aerr
 	})
 	switch {
-	case errors.Is(err, bindings.ErrAgentChanged):
-		// Another agent is in the pane since the review: a refusal.
+	case errors.Is(err, bindings.ErrAgentChanged), errors.Is(err, bindings.ErrBoardPane):
+		// Another agent is in the pane since the review, or the pane is
+		// nhm's board: a refusal.
 		code = exitRefused
 	case err != nil && code == exitOK:
 		code = exitError

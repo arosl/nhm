@@ -178,6 +178,11 @@ func importOne(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequ
 	if !ok {
 		return skip("the pane is not in herdr's snapshot")
 	}
+	if board, err := boardPane(ctx, env, pane); err != nil {
+		return skip("cannot check that the pane is not nhm's board: " + err.Error())
+	} else if board {
+		return skip("the pane is nhm's board, not an agent")
+	}
 	cwd := firstNonEmpty(pane.ForegroundCwd, pane.Cwd, a.ForegroundCwd, a.Cwd)
 	if cwd == "" {
 		return skip("herdr reports no working directory for the pane")

@@ -21,7 +21,7 @@ const autoImportLockWait = 500 * time.Millisecond
 // any owner. It never fails its caller: what goes wrong comes back as
 // warnings, and the hooks import each pane again.
 func autoImport(ctx context.Context, inst store.Instance, db *store.DB, h *herdr.Client) bindings.AutoImportResult {
-	env := bindings.Env{DB: db, Bindings: bindings.NewStore(db), Herdr: h}
+	env := bindings.Env{DB: db, Bindings: bindings.NewStore(db), Herdr: h, InstanceDir: inst.Dir}
 	lctx, cancel := context.WithTimeout(ctx, autoImportLockWait)
 	defer cancel()
 	var res bindings.AutoImportResult

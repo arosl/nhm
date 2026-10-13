@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/uilaunch"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
@@ -26,6 +27,10 @@ type Env struct {
 	// agentmail.ConfigHome().
 	ConfigHome string
 	Now        func() time.Time
+	// InstanceDir is the instance's directory. Its board launch records
+	// (uilaunch) name nhm's own panes, which adopt and the import refuse;
+	// "" checks none.
+	InstanceDir string
 }
 
 func (e Env) now() time.Time {
@@ -37,6 +42,20 @@ func (e Env) now() time.Time {
 
 // ErrNoAgent means the pane holds no agent: adopt binds a live agent.
 var ErrNoAgent = errors.New("bindings: the pane holds no agent")
+
+// ErrBoardPane means the pane is nhm's own live board: never an agent to
+// bind, whatever herdr names in it (plan-v4 section 7).
+var ErrBoardPane = errors.New("bindings: the pane is nhm's board, not an agent")
+
+// boardPane says whether a pane is nhm's live board, by its verified
+// launch record (uilaunch.IsBoard), never by its label or kind. An error
+// means the record could not be checked.
+func boardPane(ctx context.Context, env Env, pane herdr.PaneInfo) (bool, error) {
+	if env.InstanceDir == "" {
+		return false, nil
+	}
+	return uilaunch.IsBoard(ctx, uilaunch.Env{InstanceDir: env.InstanceDir, Now: env.Now}, env.Herdr, pane.WorkspaceID, pane.PaneID)
+}
 
 var aliasPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
@@ -131,9 +150,9 @@ func Adopt(ctx context.Context, env Env, req AdoptRequest) (AdoptResult, error) 
 	res, err := adopt(ctx, env, req, source, alias, opID)
 	status := "done"
 	switch {
-	case errors.Is(err, ErrAgentChanged):
-		// Not the reviewed agent: refused before anything was bound, as
-		// nhm adopt's exit 2 says.
+	case errors.Is(err, ErrAgentChanged), errors.Is(err, ErrBoardPane):
+		// Not the reviewed agent, or nhm's board: refused before anything
+		// was bound, as nhm adopt's exit 2 says.
 		status = "refused"
 	case err != nil:
 		status = "failed"
@@ -158,6 +177,11 @@ func adopt(ctx context.Context, env Env, req AdoptRequest, source Binding, alias
 	agent, ok := findAgent(snap, req.PaneID)
 	if !ok || agent.Agent == "" {
 		return res, fmt.Errorf("%w: %s", ErrNoAgent, req.PaneID)
+	}
+	if board, err := boardPane(ctx, env, pane); err != nil {
+		return res, fmt.Errorf("bindings: adopt cannot check that pane %s is not nhm's board: %w", req.PaneID, err)
+	} else if board {
+		return res, fmt.Errorf("%w: %s", ErrBoardPane, req.PaneID)
 	}
 	// The session first: another agent in the pane since the review, of
 	// any kind, is the reviewed agent changed (refused).

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/store"
 )
 
 var t0 = time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC)
@@ -30,6 +32,7 @@ type fakeHerdr struct {
 	openErr    error
 	snapErr    error
 	tabErr     error
+	snaps      int // session.snapshot calls
 	// onOpen runs as the pane opens (a board that starts at once).
 	onOpen func(paneID string, p herdr.PluginPaneOpenParams)
 	// onTabFocus runs as herdr brings a tab in front.
@@ -43,6 +46,7 @@ func newFake(workspaces ...string) *fakeHerdr {
 func (f *fakeHerdr) Snapshot(context.Context) (herdr.SessionSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.snaps++
 	if f.snapErr != nil {
 		return herdr.SessionSnapshot{}, f.snapErr
 	}
@@ -444,6 +448,101 @@ func TestConcurrentOpensOpenOne(t *testing.T) {
 	}
 	if opened != 1 || len(h.opened) != 1 {
 		t.Fatalf("opened %d boards (%d herdr opens)", opened, len(h.opened))
+	}
+}
+
+// Boards lists only verified live boards, by pane id: not a starting
+// launch, not a restored shell in a board's old pane. Other files in the
+// directory are not records. A record that cannot be read is named, and
+// the others are still listed. One snapshot serves every record.
+func TestBoardsListsLiveBoards(t *testing.T) {
+	env, _ := testEnv(t)
+	h := newFake("w1", "w2", "w3", "w4")
+	ctx := context.Background()
+	if b, err := Boards(ctx, env, h); err != nil || len(b) != 0 || h.snaps != 0 {
+		t.Fatalf("Boards with no records = %v, %v (%d snapshots)", b, err, h.snaps)
+	}
+	live, _ := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"})
+	if _, err := Register(ctx, env, h, "w1", live.Token, Self{PID: h.shell(live.PaneID)}); err != nil {
+		t.Fatal(err)
+	}
+	starting, _ := Open(ctx, env, h, OpenRequest{WorkspaceID: "w2"})
+	restored, _ := Open(ctx, env, h, OpenRequest{WorkspaceID: "w3"})
+	if _, err := Register(ctx, env, h, "w3", restored.Token, Self{PID: h.shell(restored.PaneID)}); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	h.shells[restored.PaneID] = 4242
+	h.mu.Unlock()
+	for name, data := range map[string]string{"board-w4.json": "{", "notes.txt": "x", "board-.json": "x", "board-w..json": "x"} {
+		if err := os.WriteFile(filepath.Join(env.InstanceDir, Dir, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.snaps = 0
+	boards, err := Boards(ctx, env, h)
+	if len(boards) != 1 || boards[live.PaneID].Token != live.Token {
+		t.Fatalf("Boards = %v (starting %s, restored %s)", boards, starting.PaneID, restored.PaneID)
+	}
+	if err == nil || !strings.HasPrefix(err.Error(), "w4: ") || strings.Contains(err.Error(), "w1") {
+		t.Fatalf("Boards error = %v", err)
+	}
+	if h.snaps != 1 {
+		t.Fatalf("%d snapshots for four records", h.snaps)
+	}
+	// Named workspaces: only theirs; one with no record, or no valid id,
+	// is not an error.
+	if b, err := Boards(ctx, env, h, "w2", "w1", "w9", "bad/"); err != nil || len(b) != 1 || b[live.PaneID].Token != live.Token {
+		t.Fatalf("Boards(w2, w1, w9) = %v, %v", b, err)
+	}
+	// IsBoard answers as Boards does, and asks herdr only for the
+	// record's own pane.
+	h.snaps = 0
+	for _, c := range []struct {
+		ws, pane string
+		want     bool
+		err      bool
+	}{
+		{"w1", live.PaneID, true, false}, {"w1", starting.PaneID, false, false}, {"w2", starting.PaneID, false, false},
+		{"w3", restored.PaneID, false, false}, {"w4", "pz", false, true}, {"w9", live.PaneID, false, false},
+	} {
+		got, err := IsBoard(ctx, env, h, c.ws, c.pane)
+		if got != c.want || (err != nil) != c.err {
+			t.Errorf("IsBoard(%s, %s) = %v, %v", c.ws, c.pane, got, err)
+		}
+	}
+	if h.snaps != 3 {
+		t.Fatalf("IsBoard took %d snapshots, want 3 (w1, w2, w3 name their pane)", h.snaps)
+	}
+}
+
+// Boards reads a record under its workspace's lock: while another
+// process holds it, that workspace's board is named, not listed. herdr
+// not answering lists nothing.
+func TestBoardsTakesTheWorkspaceLock(t *testing.T) {
+	env, _ := testEnv(t)
+	env.LockWait = 100 * time.Millisecond
+	h := newFake("w1")
+	ctx := context.Background()
+	res, _ := Open(ctx, env, h, OpenRequest{WorkspaceID: "w1"})
+	if _, err := Register(ctx, env, h, "w1", res.Token, Self{PID: h.shell(res.PaneID)}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := store.LockWorkspace(ctx, env.InstanceDir, "w1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boards, err := Boards(ctx, env, h)
+	unlock()
+	if len(boards) != 0 || err == nil || !strings.Contains(err.Error(), store.ErrWorkspaceBusy.Error()) {
+		t.Fatalf("Boards under another's lock = %v, %v", boards, err)
+	}
+	if boards, err := Boards(ctx, env, h); err != nil || len(boards) != 1 {
+		t.Fatalf("Boards = %v, %v", boards, err)
+	}
+	h.snapErr = errors.New("timeout")
+	if boards, err := Boards(ctx, env, h); err == nil || len(boards) != 0 {
+		t.Fatalf("Boards without herdr = %v, %v", boards, err)
 	}
 }
 

@@ -78,9 +78,16 @@ func quotaReport(args []string, stdout, stderr io.Writer, save bool) int {
 		if agents, err := r.herdr.AgentList(ctx); err != nil {
 			env.Warnings = append(env.Warnings, "live agents not counted: "+err.Error())
 		} else {
+			// nhm's own board is no agent, whatever herdr names in it.
+			var boards map[string]bool
+			if r.inst != nil {
+				if boards, err = boardsIn(r.inst.Dir, r.herdr)(ctx, ""); err != nil {
+					env.Warnings = append(env.Warnings, "nhm's boards not left out of the count: "+err.Error())
+				}
+			}
 			counts = map[string]int{}
 			for _, a := range agents {
-				if a.Agent != "" {
+				if a.Agent != "" && !boards[a.PaneID] {
 					counts[a.Agent]++
 				}
 			}

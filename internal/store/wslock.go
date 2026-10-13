@@ -34,10 +34,11 @@ const workspaceLockPoll = 20 * time.Millisecond
 // ErrWorkspaceBusy when it ends.
 //
 // Who takes it: internal/core/uilaunch, around every read and write of
-// the workspace's board launch record (open, register, unregister); no
-// other verb takes it yet. Hold it briefly: it is not the owner lock,
-// and it does not exclude herdr or a human. Take it inside the owner
-// lock, never around it.
+// the workspace's board launch record: open, register, unregister, and
+// the board checks (Boards, IsBoard) of the verbs that leave nhm's board
+// out (the read model, adopt, the import, kill's review). Hold it
+// briefly: it is not the owner lock, and it does not exclude herdr or a
+// human. Take it inside the owner lock, never around it.
 func LockWorkspace(ctx context.Context, instanceDir, workspaceID string) (func(), error) {
 	if !ValidWorkspaceID(workspaceID) {
 		return nil, fmt.Errorf("store: workspace id %q cannot name a lock file", workspaceID)

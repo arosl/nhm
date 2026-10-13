@@ -17,6 +17,8 @@
 //     time). A pane label or tab name is never evidence.
 //  4. Unregister (the board, at its end) removes the record if it is
 //     still the board's own.
+//  5. Boards and IsBoard name the live boards, by Verify: the panes that
+//     agent counts, targets, adopt, maintain and kill's review leave out.
 package uilaunch
 
 import (
@@ -28,6 +30,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -509,6 +512,118 @@ func Unregister(ctx context.Context, env Env, workspaceID, token string) error {
 		return env.remove(workspaceID)
 	})
 }
+
+// Boards lists the instance's live boards by pane id: nhm's own panes,
+// which agent counts, targets, adopt, maintain and kill's review leave
+// out (plan-v4 section 7). Only a verified launch is listed, never a
+// pane by its label or kind. workspaces limits it to those workspaces;
+// none means all. It reads each workspace's record under that
+// workspace's lock (a caller that holds the owner lock calls it inside
+// that lock, as store.LockWorkspace says), and checks each record
+// against one snapshot. A record that cannot be read or checked is left
+// out of the list and named in the error, with the boards that could be
+// checked.
+func Boards(ctx context.Context, env Env, h Herdr, workspaces ...string) (map[string]Launch, error) {
+	if len(workspaces) == 0 {
+		var err error
+		if workspaces, err = env.recorded(); err != nil {
+			return nil, err
+		}
+	} else {
+		workspaces = slices.DeleteFunc(slices.Clone(workspaces), func(ws string) bool {
+			_, err := os.Stat(env.path(ws))
+			return !store.ValidWorkspaceID(ws) || os.IsNotExist(err)
+		})
+	}
+	out := map[string]Launch{}
+	if len(workspaces) == 0 {
+		return out, nil
+	}
+	snap, err := h.Snapshot(ctx)
+	if err != nil {
+		return out, fmt.Errorf("uilaunch: herdr: %w", err)
+	}
+	one := snapshotHerdr{Herdr: h, snap: snap}
+	var failed []string
+	for _, ws := range workspaces {
+		err := env.locked(ctx, ws, func() error {
+			l, err := env.read(ws)
+			if err != nil || l == nil {
+				return err
+			}
+			st, err := Verify(ctx, env, one, *l)
+			if err != nil {
+				return err
+			}
+			if st.State == Live {
+				out[l.PaneID] = *l
+			}
+			return nil
+		})
+		if err != nil {
+			failed = append(failed, ws+": "+err.Error())
+		}
+	}
+	if len(failed) > 0 {
+		return out, errors.New(strings.Join(failed, "; "))
+	}
+	return out, nil
+}
+
+// recorded lists the workspaces that have a record file.
+func (e Env) recorded() ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(e.InstanceDir, Dir))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("uilaunch: %w", err)
+	}
+	var out []string
+	for _, entry := range entries {
+		ws, ok := strings.CutPrefix(entry.Name(), "board-")
+		if !ok {
+			continue
+		}
+		ws, ok = strings.CutSuffix(ws, ".json")
+		if ok && store.ValidWorkspaceID(ws) {
+			out = append(out, ws)
+		}
+	}
+	return out, nil
+}
+
+// IsBoard says whether a pane of a workspace is that workspace's live
+// board, as Boards would. It asks herdr only when the record names the
+// pane. An error means the record could not be read or checked: the pane
+// may be the board.
+func IsBoard(ctx context.Context, env Env, h Herdr, workspaceID, paneID string) (bool, error) {
+	if paneID == "" || !store.ValidWorkspaceID(workspaceID) {
+		return false, nil
+	}
+	if _, err := os.Stat(env.path(workspaceID)); os.IsNotExist(err) {
+		return false, nil
+	}
+	live := false
+	err := env.locked(ctx, workspaceID, func() error {
+		l, err := env.read(workspaceID)
+		if err != nil || l == nil || l.PaneID != paneID {
+			return err
+		}
+		st, err := Verify(ctx, env, h, *l)
+		live = st.State == Live
+		return err
+	})
+	return live, err
+}
+
+// snapshotHerdr answers Snapshot with one snapshot taken before.
+type snapshotHerdr struct {
+	Herdr
+	snap herdr.SessionSnapshot
+}
+
+func (s snapshotHerdr) Snapshot(context.Context) (herdr.SessionSnapshot, error) { return s.snap, nil }
 
 func newToken() (string, error) {
 	b := make([]byte, 12)

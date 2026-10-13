@@ -21,7 +21,8 @@ func importPane(ctx context.Context, env Env, pane string, r *Reconcile) {
 		r.warn("import: %v", err)
 		return
 	}
-	benv := bindings.Env{DB: env.DB, Bindings: env.Bindings, Herdr: env.Herdr, ConfigHome: env.ConfigHome, Now: env.Now}
+	benv := bindings.Env{DB: env.DB, Bindings: env.Bindings, Herdr: env.Herdr, ConfigHome: env.ConfigHome, Now: env.Now,
+		InstanceDir: env.InstanceDir}
 	res, err := bindings.AutoImport(ctx, benv, projectOf, bindings.ImportRequest{PaneID: pane, AcfsHome: env.AcfsHome})
 	for _, w := range res.Warnings {
 		r.warn("import: %s", w)
