@@ -1,0 +1,70 @@
+# Section 10's automated cases that need a real herdr (nhm-qbi.11,
+# plan-v4 sections 4 and 10), through the Go menu: a repeated submit sends
+# once; a popup closed during a send leaves the send running, and its
+# result shows in recent operations; a target picked before a hand-off
+# (nhm adopt --handoff-from: the same binding, a new generation) is
+# refused by the core, and nothing reaches the agent; the agent picked
+# after the hand-off is interrupted. tests/surfaces_e2e.sh runs it.
+sleep 2
+note the fake agent has no hooks: a watcher reports its turn 2 s after the prompt is in its log, then touches cases.reported
+run (for _ in $(seq 150); do grep -q CASES-SEND "$HERDR_WORK/fake.log" && break; sleep 0.1; done; sleep 2; r() { herdr pane report-agent --source e2e --agent claude --state "$1" w1:p1; }; r working; sleep 1; r idle; herdr pane release-agent --source e2e --agent claude w1:p1; touch "$HERDR_WORK/cases.reported") </dev/null >/dev/null 2>&1 &
+note prefix+m, s: pick IcyKnoll, compose, then ctrl+s twice in one write
+key ctrl+b m
+expect 8 diagnostics ›
+key s
+expect 5 pick agents to send
+key space
+key enter
+expect 5 Compose
+send CASES-SEND once
+send \x13\x13
+expect 5 sending…
+note esc twice: the popup closes while the send waits for the agent's turn
+key esc esc
+refute 1 nhm  workspace proj
+check test ! -e "$HERDR_WORK/cases.reported"
+note the watcher reports; recent operations shows the send's result, and the agent got the text once
+run for _ in $(seq 100); do test -e "$HERDR_WORK/cases.reported" && break; sleep 0.1; done
+key ctrl+b m
+expect 8 diagnostics ›
+key o
+expect 10 completed
+key enter
+expect 5 IcyKnoll: submitted
+check test "$(grep -c '"event":"submit","data":"CASES-SEND once"' "$HERDR_WORK/fake.log")" = 1
+key esc esc esc
+refute 1 recent operations
+note g x: interrupt; pick IcyKnoll; the confirm screen shows the generation picked
+key ctrl+b m
+expect 8 diagnostics ›
+key g
+key x
+expect 5 pick agents to interrupt
+key space
+key enter
+expect 5 (generation 1, pane w1:p1)
+note a hand-off while the confirm screen is open: the same binding, generation 2
+run cd "$HOME/proj" && nhm adopt IcyKnoll --pane w1:p1 --handoff-from "$(nhm resolve IcyKnoll --json | jq -r .result.binding.binding_id)"
+run grep -c '"data":"escape"' "$HERDR_WORK/fake.log" >"$HERDR_WORK/cases.esc"
+note tab, enter: confirm; the core refuses generation 1, and no key reaches the agent
+key tab
+key enter
+expect 10 IcyKnoll: refused: expected generation 1
+note the fake agent keeps a lone ESC until more input comes (it may start a sequence): a left arrow (ESC [ D) makes it log one that waits
+run sleep 0.5; herdr pane send-keys w1:p1 left >/dev/null
+check sleep 0.5; test "$(grep -c '"data":"escape"' "$HERDR_WORK/fake.log")" = "$(cat "$HERDR_WORK/cases.esc")"
+note enter closes the result; x again: generation 2, and the interrupt reaches the agent
+key enter
+key x
+expect 5 pick agents to interrupt
+key space
+key enter
+expect 5 (generation 2, pane w1:p1)
+key tab
+key enter
+expect 10 IcyKnoll: sent: esc
+run herdr pane send-keys w1:p1 left >/dev/null
+check for _ in $(seq 50); do test "$(grep -c '"data":"escape"' "$HERDR_WORK/fake.log")" -gt "$(cat "$HERDR_WORK/cases.esc")" && exit 0; sleep 0.1; done; exit 1
+key enter
+key esc esc
+refute 1 nhm  workspace proj
