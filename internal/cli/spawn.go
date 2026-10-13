@@ -21,6 +21,7 @@ import (
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
+	"github.com/arosl/nhm/internal/core/spawnassign"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
@@ -630,6 +631,7 @@ type robotSpawnFlags struct {
 	counts                                     map[string]*int
 	readyTimeout                               *time.Duration
 	dryRun, assign                             *bool
+	assignFlags                                robotAssignFlags
 }
 
 // addRobotSpawnFlags registers ntm's robot spawn flags, then a
@@ -646,6 +648,7 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	fs.Duration("timeout", 60*time.Second, "")
 	f.dryRun = fs.Bool("dry-run", false, "")
 	f.assign = fs.Bool("spawn-assign-work", false, "")
+	f.assignFlags = addRobotAssignFlags(fs)
 	f.prompt = fs.String("spawn-prompt", "", "")
 	f.opID = fs.String("op-id", "", "")
 	f.socket = fs.String("socket", "", "")
@@ -672,7 +675,7 @@ func hasRobotSpawn(args []string) bool {
 // The robot form: --robot-spawn=S --spawn-dir=R --spawn-cc=N
 // --spawn-cod=N [--spawn-agy=N] --spawn-no-user --spawn-safety
 // --spawn-wait [--ready-timeout=Ns] --timeout=60s --robot-format=json
-// [--dry-run] [--spawn-assign-work] [--spawn-prompt=T].
+// [--dry-run] [--spawn-assign-work [--strategy=S]] [--spawn-prompt=T].
 func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
@@ -694,10 +697,15 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
 			"use --robot-format=json", "json", robotError, now)
 	}
-	// A robot spawn sends no kickoff unless --spawn-prompt; with
-	// --spawn-assign-work the caller's screen asked for the yes.
-	req := spawn.Request{Session: *session, Prompt: *prompt, NoKickoff: *prompt == "" && !*assign, Assign: *assign,
+	// A robot spawn sends no kickoff unless --spawn-prompt. With
+	// --spawn-assign-work (the caller's consent) the assignment phase
+	// sends each agent its work, with --spawn-prompt ahead of it, so the
+	// spawn itself sends nothing.
+	req := spawn.Request{Session: *session, Prompt: *prompt, NoKickoff: *prompt == "",
 		ReadyTimeout: *readyTimeout, RequireObservations: true, DryRun: *dryRun, OperationID: *opID}
+	if *assign {
+		req.Prompt, req.NoKickoff = "", true
+	}
 	for flagName, n := range counts {
 		if *n == 0 {
 			continue
@@ -711,13 +719,27 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotUnavailable, now)
 	}
 	defer ie.db.Close()
-	res, _, err := spawnUnderOwner(context.Background(), ie, &req, *dir)
+	ctx := context.Background()
+	// ntm's assignment preflight runs before anything is created, in a dry
+	// run too.
+	var plan spawnassign.Plan
+	var scope core.Scope
+	if *assign {
+		var refusal *robot.RobotResponse
+		if plan, scope, refusal = robotAssignPreflight(ctx, ie, rf.assignFlags, *dir); refusal != nil {
+			return robotWrite(stdout, robotAssignRefusal(refusal, req.Session, *dir, *format, now), robotError)
+		}
+	}
+	res, _, err := spawnUnderOwner(ctx, ie, &req, *dir)
 	if res.Session == "" {
 		res.Session, res.ProjectRoot = req.Session, req.ProjectRoot
 	}
 	out := spawn.SpawnOutput(res, err, *format, now)
 	if errors.Is(err, core.ErrNotOwner) {
 		out.ErrorCode = robot.ErrCodeNotOwner
+	}
+	if *assign && !*dryRun && out.Success {
+		robotAssignPhase(ctx, ie, res, scope, plan, *prompt, &out)
 	}
 	if !out.Success {
 		return robotWrite(stdout, out, robotError)
