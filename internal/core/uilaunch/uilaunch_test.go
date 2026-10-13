@@ -521,19 +521,26 @@ func TestBoardsListsLiveBoards(t *testing.T) {
 	if h.snaps != 3 {
 		t.Fatalf("IsBoard took %d snapshots, want 3 (w1, w2, w3 name their pane)", h.snaps)
 	}
-	// IsBoardPane finds the record that names the pane. A pane no record
-	// it can read names is an error while w4's record cannot be read.
+	// IsBoardPane finds the record that names the pane. w4's record
+	// cannot be read: that is an error only for a pane in w4, the one
+	// workspace whose record could make the pane a board; herdr says
+	// where the pane is.
+	h.mu.Lock()
+	h.panes["p1x"], h.panes["p4x"] = "w1", "w4"
+	h.mu.Unlock()
 	if got, err := IsBoardPane(ctx, env, h, live.PaneID); !got || err != nil {
 		t.Fatalf("IsBoardPane(live) = %v, %v", got, err)
 	}
 	if got, err := IsBoardPane(ctx, env, h, starting.PaneID); !got || err != nil {
 		t.Fatalf("IsBoardPane(starting) = %v, %v", got, err)
 	}
-	if got, err := IsBoardPane(ctx, env, h, "pz"); got || err == nil || !strings.Contains(err.Error(), "board-w4.json") {
-		t.Fatalf("IsBoardPane(pz) = %v, %v", got, err)
+	if got, err := IsBoardPane(ctx, env, h, "p4x"); got || err == nil || !strings.Contains(err.Error(), "board-w4.json") {
+		t.Fatalf("IsBoardPane(a pane of w4) = %v, %v", got, err)
 	}
-	if got, err := IsBoardPane(ctx, env, h, ""); got || err != nil {
-		t.Fatalf("IsBoardPane(\"\") = %v, %v", got, err)
+	for _, pane := range []string{"p1x", "pz", ""} {
+		if got, err := IsBoardPane(ctx, env, h, pane); got || err != nil {
+			t.Fatalf("IsBoardPane(%q) = %v, %v", pane, got, err)
+		}
 	}
 	// A launch that never registered is no board after StartGrace.
 	c.add(StartGrace)

@@ -637,8 +637,10 @@ func IsBoard(ctx context.Context, env Env, h Herdr, workspaceID, paneID string) 
 // pane (a record is written by a rename, so a read sees a whole one);
 // IsBoard then checks that record under its workspace's lock. herdr is
 // asked only when a record names the pane, and another workspace's lock
-// is never waited for. A record that cannot be read is an error: it may
-// name the pane.
+// is never waited for. A record that cannot be read may name the pane,
+// but only the pane's own workspace's record can make it a board
+// (Verify): so then herdr is asked once where the pane is, and only an
+// unreadable record of that workspace is an error.
 func IsBoardPane(ctx context.Context, env Env, h Herdr, paneID string) (bool, error) {
 	if paneID == "" {
 		return false, nil
@@ -647,15 +649,30 @@ func IsBoardPane(ctx context.Context, env Env, h Herdr, paneID string) (bool, er
 	if err != nil {
 		return false, err
 	}
+	unreadable := map[string]error{}
 	for _, ws := range workspaces {
 		l, err := env.read(ws)
 		if err != nil {
-			return false, err
+			unreadable[ws] = err
+			continue
 		}
 		if l != nil && l.PaneID == paneID {
 			return IsBoard(ctx, env, h, ws, paneID)
 		}
 	}
+	if len(unreadable) == 0 {
+		return false, nil
+	}
+	snap, err := h.Snapshot(ctx)
+	if err != nil {
+		return false, fmt.Errorf("uilaunch: herdr: %w", err)
+	}
+	for _, p := range snap.Panes {
+		if p.PaneID == paneID {
+			return false, unreadable[p.WorkspaceID]
+		}
+	}
+	// herdr has no such pane: no board runs in it.
 	return false, nil
 }
 
