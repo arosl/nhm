@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -143,13 +144,19 @@ func (f *fakeHerdr) PaneSplit(_ context.Context, p herdr.PaneSplitParams) (herdr
 	f.n++
 	pane := fmt.Sprintf("%s:p%d", ws, f.n)
 	f.envs[pane] = p.Env
+	// The ratio is the target's share, rounded to whole cells, as herdr
+	// 0.9.3 splits (nhm-cxh).
+	ratio := 0.5
+	if p.Ratio != nil {
+		ratio = *p.Ratio
+	}
 	r := f.rects[p.TargetPaneID]
 	kept, made := r, r
 	if p.Direction == "right" {
-		kept.Width = r.Width / 2
+		kept.Width = uint16(math.Round(float64(r.Width) * ratio))
 		made.X, made.Width = r.X+kept.Width, r.Width-kept.Width
 	} else {
-		kept.Height = r.Height / 2
+		kept.Height = uint16(math.Round(float64(r.Height) * ratio))
 		made.Y, made.Height = r.Y+kept.Height, r.Height-kept.Height
 	}
 	f.rects[p.TargetPaneID], f.rects[pane], f.tabOf[pane] = kept, made, tab

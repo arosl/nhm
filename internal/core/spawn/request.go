@@ -74,7 +74,8 @@ type Request struct {
 	// PerTab is the most agents of the project that share one tab, a
 	// pane each (pane.split); DefaultPerTab when 0. A later spawn fills a
 	// tab of the project that has room before it opens one; 1 gives each
-	// agent its own tab.
+	// agent its own tab. The panes fill a grid of PerTab cells in reading
+	// order (grid, splitTarget): 6 is 2 rows of 3.
 	PerTab int
 	// Prompt is the kickoff; empty means ACFS's default_new_agent
 	// palette prompt, unless NoKickoff.

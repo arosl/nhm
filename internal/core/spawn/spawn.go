@@ -131,8 +131,9 @@ type Target struct {
 	// DelayMS is the stagger offset from the first start.
 	DelayMS int64 `json:"delay_ms"`
 	// newTab: the target opens a tab. Otherwise its pane is split from
-	// the biggest pane of its tab: a tab that exists (anchor is one of
-	// its panes) or the one target tabFirst opened.
+	// a pane of its tab, at the tab's next grid cell (splitTarget): a tab
+	// that exists (anchor is one of its panes) or the one target tabFirst
+	// opened.
 	newTab   bool
 	anchor   string
 	tabFirst int
@@ -458,9 +459,9 @@ func createPane(ctx context.Context, env Env, req Request, res *Result, t *Targe
 		if anchor == "" {
 			anchor = res.Targets[t.tabFirst].PaneID
 		}
-		target, dir := splitTarget(ctx, env.Herdr, anchor)
+		target, dir, ratio := splitTarget(ctx, env.Herdr, anchor, req.PerTab)
 		p, err := env.Herdr.PaneSplit(ctx, herdr.PaneSplitParams{Direction: dir, TargetPaneID: target,
-			WorkspaceID: res.WorkspaceID, Cwd: req.ProjectRoot, Env: paneEnv, Focus: ptr(false)})
+			WorkspaceID: res.WorkspaceID, Cwd: req.ProjectRoot, Env: paneEnv, Focus: ptr(false), Ratio: ptr(ratio)})
 		if err != nil {
 			return err
 		}

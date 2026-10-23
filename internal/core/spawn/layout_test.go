@@ -3,6 +3,8 @@ package spawn
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -43,9 +45,9 @@ func TestSpawnsOfOneProjectShareATab(t *testing.T) {
 	if w.h.tabLabel["w1:t1"] != "acme" || len(w.h.tabs) != 1 {
 		t.Fatalf("tabs %v, labels %v", w.h.tabs, w.h.tabLabel)
 	}
-	// The first split cuts the wide pane to the right; the next cuts the
-	// biggest pane left, now as tall as it is wide, down.
-	if strings.Join(w.h.splits, ",") != "w1:p1 right,w1:p1 down" {
+	// The first row of the 3x2 grid fills from left to right: the first
+	// split leaves a third, and the next cuts the rest in two (nhm-cxh).
+	if strings.Join(w.h.splits, ",") != "w1:p1 right,w1:p2 right" {
 		t.Fatalf("splits = %v", w.h.splits)
 	}
 	for _, p := range []string{"w1:p1", "w1:p2", "w1:p3"} {
@@ -196,26 +198,130 @@ type layoutHerdr struct {
 
 func (h layoutHerdr) PaneLayout(context.Context, string) (herdr.PaneLayout, error) { return h.l, h.err }
 
-func TestSplitTarget(t *testing.T) {
-	pane := func(id string, w, h uint16) herdr.LayoutPane {
-		return herdr.LayoutPane{PaneID: id, Rect: herdr.LayoutRect{Width: w, Height: h}}
+func TestGrid(t *testing.T) {
+	for perTab, want := range map[int]string{0: "1x1", 1: "1x1", 2: "2x1", 3: "3x1", 4: "2x2", 5: "3x2", 6: "3x2",
+		7: "4x2", 8: "4x2", 9: "3x3", 10: "4x3", 12: "4x3", 16: "4x4"} {
+		if c, r := grid(perTab); fmt.Sprintf("%dx%d", c, r) != want {
+			t.Errorf("grid(%d) = %dx%d, want %s", perTab, c, r, want)
+		}
 	}
+}
+
+func TestSplitTarget(t *testing.T) {
+	pane := func(id string, x, y, w, h uint16) herdr.LayoutPane {
+		return herdr.LayoutPane{PaneID: id, Rect: herdr.LayoutRect{X: x, Y: y, Width: w, Height: h}}
+	}
+	// A 2x3 grid of 240x60 with b, the middle of the top row, closed:
+	// herdr gave its room to e, below it.
+	gap := []herdr.LayoutPane{pane("a", 0, 0, 80, 30), pane("d", 0, 30, 80, 30), pane("e", 80, 0, 80, 60),
+		pane("c", 160, 0, 80, 30), pane("f", 160, 30, 80, 30)}
+	// A tab of 3 that nhm 0.1.8 made: the biggest pane cut in half.
+	old := []herdr.LayoutPane{pane("a", 0, 0, 76, 26), pane("c", 0, 26, 76, 26), pane("b", 76, 0, 76, 52)}
+	full := []herdr.LayoutPane{pane("a", 0, 0, 80, 30), pane("b", 80, 0, 80, 30), pane("c", 160, 0, 80, 30),
+		pane("d", 0, 30, 80, 30), pane("e", 80, 30, 80, 30), pane("f", 160, 30, 80, 30)}
 	for _, c := range []struct {
 		name      string
 		panes     []herdr.LayoutPane
+		perTab    int
 		err       error
 		pane, dir string
+		ratio     float64
 	}{
-		{"wide", []herdr.LayoutPane{pane("a", 240, 60)}, nil, "a", "right"},
-		{"square cell area", []herdr.LayoutPane{pane("a", 120, 60), pane("b", 120, 60)}, nil, "a", "down"},
-		{"biggest", []herdr.LayoutPane{pane("a", 120, 30), pane("b", 120, 60), pane("c", 120, 30)}, nil, "b", "down"},
-		{"tall", []herdr.LayoutPane{pane("a", 80, 50)}, nil, "a", "down"},
-		{"no layout", nil, errors.New("down"), "anchor", "right"},
-		{"empty layout", nil, nil, "anchor", "right"},
+		{"first row: a third", []herdr.LayoutPane{pane("a", 0, 0, 240, 60)}, 6, nil, "a", "right", 1.0 / 3},
+		{"first row: the rest in two", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 160, 60)}, 6, nil, "b", "right", 0.5},
+		{"second row", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 80, 60), pane("c", 160, 0, 80, 60)}, 6, nil, "a", "down", 0.5},
+		{"second row, middle", []herdr.LayoutPane{pane("a", 0, 0, 80, 30), pane("d", 0, 30, 80, 30), pane("b", 80, 0, 80, 60),
+			pane("c", 160, 0, 80, 60)}, 6, nil, "b", "down", 0.5},
+		{"a closed pane's gap", gap, 6, nil, "e", "down", 0.5},
+		{"an older tab", old, 6, nil, "b", "right", (152.0/3*2 - 76) / 76},
+		{"origin not 0", []herdr.LayoutPane{pane("a", 10, 5, 240, 60)}, 6, nil, "a", "right", 1.0 / 3},
+		{"2x2", []herdr.LayoutPane{pane("a", 0, 0, 120, 60), pane("b", 120, 0, 120, 60)}, 4, nil, "a", "down", 0.5},
+		{"one row of 3", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 160, 60)}, 3, nil, "b", "right", 0.5},
+		{"3x3: the second row", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 80, 60), pane("c", 160, 0, 80, 60)}, 9,
+			nil, "a", "down", 1.0 / 3},
+		{"3x3: the third row", []herdr.LayoutPane{pane("a", 0, 0, 80, 20), pane("d", 0, 20, 80, 40), pane("b", 80, 0, 80, 20),
+			pane("e", 80, 20, 80, 40), pane("c", 160, 0, 80, 20), pane("f", 160, 20, 80, 40)}, 9, nil, "d", "down", 0.5},
+		// Every cell has a pane of its own: the biggest pane is cut in
+		// half along its longer side, a cell about twice as tall as wide.
+		{"full: wide", full, 6, nil, "a", "right", 0.5},
+		{"full: square cell area", []herdr.LayoutPane{pane("a", 0, 0, 120, 60), pane("b", 120, 0, 120, 60)}, 2, nil, "a", "down", 0.5},
+		{"full: biggest", []herdr.LayoutPane{pane("a", 0, 0, 120, 30), pane("b", 0, 30, 120, 60), pane("c", 0, 90, 120, 30)}, 1,
+			nil, "b", "down", 0.5},
+		{"full: tall", []herdr.LayoutPane{pane("a", 0, 0, 80, 50)}, 1, nil, "a", "down", 0.5},
+		{"no layout", nil, 6, errors.New("down"), "anchor", "right", 0.5},
+		{"empty layout", nil, 6, nil, "anchor", "right", 0.5},
 	} {
-		got, dir := splitTarget(context.Background(), layoutHerdr{l: herdr.PaneLayout{Panes: c.panes}, err: c.err}, "anchor")
-		if got != c.pane || dir != c.dir {
-			t.Errorf("%s: split %s %s, want %s %s", c.name, got, dir, c.pane, c.dir)
+		got, dir, ratio := splitTarget(context.Background(), layoutHerdr{l: herdr.PaneLayout{Panes: c.panes}, err: c.err}, "anchor", c.perTab)
+		if got != c.pane || dir != c.dir || math.Abs(ratio-c.ratio) > 1e-9 {
+			t.Errorf("%s: split %s %s %.4f, want %s %s %.4f", c.name, got, dir, ratio, c.pane, c.dir, c.ratio)
+		}
+	}
+}
+
+// rectOf is the place of the pane that holds slot in the fake's tab.
+func rectOf(t *testing.T, w *world, res Result, slot string) herdr.LayoutRect {
+	t.Helper()
+	for _, tg := range res.Targets {
+		if tg.Slot == slot {
+			return w.h.rects[tg.PaneID]
+		}
+	}
+	t.Fatalf("no slot %s in %+v", slot, res.Targets)
+	return herdr.LayoutRect{}
+}
+
+// A full tab of 6 is 2 rows of 3 even panes, the slots in reading order
+// (nhm-cxh). The fake's tab is 240x60.
+func TestSixAgentsMakeA2x3Grid(t *testing.T) {
+	w := newWorld(t)
+	w.mail.names = []string{"A1", "A2", "A3", "A4", "A5", "A6"}
+	r := one("/srv/work/acme")
+	r.Agents[0].Count = 6
+	res, err := Spawn(context.Background(), w.env, r)
+	if err != nil || slots(res) != "0.1,0.2,0.3,0.4,0.5,0.6" {
+		t.Fatalf("spawn = %s %v", slots(res), err)
+	}
+	for k := 0; k < 6; k++ {
+		want := herdr.LayoutRect{X: uint16(k%3) * 80, Y: uint16(k/3) * 30, Width: 80, Height: 30}
+		if got := rectOf(t, w, res, fmt.Sprintf("0.%d", k+1)); got != want {
+			t.Errorf("slot 0.%d at %+v, want %+v", k+1, got, want)
+		}
+	}
+}
+
+// Agents added one at a time grow the same grid (nhm-cxh). A tab of 2 is
+// a third and two thirds of the width; a tab of 4 has the first column
+// cut in two beside two full-height columns. No pane is narrower than a
+// third.
+func TestAddsGrowTheGrid(t *testing.T) {
+	w := newWorld(t)
+	w.mail.names = []string{"A1", "A2", "A3", "A4", "A5", "A6"}
+	ctx := context.Background()
+	var all Result
+	for i := 0; i < 6; i++ {
+		r := one("/srv/work/acme")
+		r.Add = i > 0
+		res, err := Spawn(ctx, w.env, r)
+		if err != nil || len(res.Targets) != 1 || res.Targets[0].Slot != fmt.Sprintf("0.%d", i+1) {
+			t.Fatalf("add %d = %+v %v", i, res.Targets, err)
+		}
+		all.Targets = append(all.Targets, res.Targets...)
+		switch i {
+		case 1:
+			if a, b := rectOf(t, w, all, "0.1"), rectOf(t, w, all, "0.2"); a.Width != 80 || b.X != 80 || b.Width != 160 || b.Height != 60 {
+				t.Fatalf("a tab of 2: %+v %+v", a, b)
+			}
+		case 3:
+			if a, d := rectOf(t, w, all, "0.1"), rectOf(t, w, all, "0.4"); a.Height != 30 || d.X != 0 || d.Y != 30 ||
+				rectOf(t, w, all, "0.2").Height != 60 || rectOf(t, w, all, "0.3").Height != 60 {
+				t.Fatalf("a tab of 4: %+v %+v", a, d)
+			}
+		}
+	}
+	for k := 0; k < 6; k++ {
+		want := herdr.LayoutRect{X: uint16(k%3) * 80, Y: uint16(k/3) * 30, Width: 80, Height: 30}
+		if got := rectOf(t, w, all, fmt.Sprintf("0.%d", k+1)); got != want {
+			t.Errorf("slot 0.%d at %+v, want %+v", k+1, got, want)
 		}
 	}
 }

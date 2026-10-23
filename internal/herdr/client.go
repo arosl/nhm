@@ -77,7 +77,8 @@ var methodResults = map[string][]string{
 	"plugin.list":    {"plugin_list"},
 	// nhm-qbi.5: the board's tab brought in front of an attached client.
 	"tab.focus": {"tab_info"},
-	// nhm-4c4: spawn splits the biggest pane of a project's tab.
+	// nhm-4c4, nhm-cxh: spawn reads a project's tab to place a new pane
+	// in its grid.
 	"pane.layout": {"pane_layout"},
 	// nhm-hae: the reconcile reads a pane's label and tokens (observed in
 	// the sandbox on herdr 0.9.3).

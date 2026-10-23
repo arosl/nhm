@@ -3,6 +3,7 @@ package spawn
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"sort"
 
 	"github.com/arosl/nhm/internal/core/bindings"
@@ -152,16 +153,36 @@ func markedSpawn(ctx context.Context, env Env, opID string) bool {
 	return v
 }
 
-// splitTarget picks the pane to split for a new pane in anchor's tab, and
-// the direction: the biggest pane, cut in half along its longer side. A
-// cell counts as about twice as tall as it is wide, so a pane is wider
-// than it is tall when its width is more than twice its height; a square
-// pane is cut down. When the layout cannot be read, anchor is cut to the
-// right, as spawn did before nhm-4c4.
-func splitTarget(ctx context.Context, h Herdr, anchor string) (string, string) {
+// grid is the shape of a tab of perTab panes: rows of cols cells. A
+// terminal is wider than it is tall, so a tab has at least as many
+// columns as rows: rows is the integer square root of perTab, and cols
+// is perTab/rows rounded up. 6 is 2 rows of 3 (the operator, nhm-cxh); 2
+// and 3 are one row; 4 is 2x2; 5 is 2 rows of 3, the last cell empty; 8
+// is 2 rows of 4; 9 is 3x3.
+func grid(perTab int) (cols, rows int) {
+	rows = 1
+	for (rows+1)*(rows+1) <= perTab {
+		rows++
+	}
+	return max(1, (perTab+rows-1)/rows), rows
+}
+
+// splitTarget picks how a new pane goes into anchor's tab: the pane to
+// split, the direction and the ratio, which is the share the split pane
+// keeps (herdr's pane.split). The tab is a grid of perTab cells (grid),
+// filled in reading order (nhm-cxh): see gridSplit. When every cell has
+// a pane of its own, the biggest pane is cut in half along its longer
+// side. A cell counts as about twice as tall as it is wide, so a pane is
+// wider than it is tall when its width is more than twice its height; a
+// square pane is cut down. When the layout cannot be read, anchor is cut
+// in half to the right, as spawn did before nhm-4c4.
+func splitTarget(ctx context.Context, h Herdr, anchor string, perTab int) (string, string, float64) {
 	l, err := h.PaneLayout(ctx, anchor)
 	if err != nil || len(l.Panes) == 0 {
-		return anchor, "right"
+		return anchor, "right", 0.5
+	}
+	if pane, dir, ratio, ok := gridSplit(l.Panes, perTab); ok {
+		return pane, dir, ratio
 	}
 	best := l.Panes[0]
 	for _, p := range l.Panes[1:] {
@@ -170,9 +191,69 @@ func splitTarget(ctx context.Context, h Herdr, anchor string) (string, string) {
 		}
 	}
 	if int(best.Rect.Width) > 2*int(best.Rect.Height) {
-		return best.PaneID, "right"
+		return best.PaneID, "right", 0.5
 	}
-	return best.PaneID, "down"
+	return best.PaneID, "down", 0.5
+}
+
+// gridSplit places a new pane in the first free cell of the tab's grid,
+// in reading order. A pane holds the cells whose centres it covers; the
+// first in reading order is its own, and every later one is free. The
+// pane that covers the first free cell lies to the cell's left in the
+// same row, and is split right at the cell's left edge, or above it in
+// the same column, and is split down at the cell's top edge. So the
+// first row fills from left to right, its last pane holding the room of
+// the cells still empty, and each later row splits the panes above it: 6
+// panes are 2 rows of 3, with the slots in reading order. Grown this way,
+// no pane of a partial tab is narrower than a column: 2 panes of 6 are
+// one third and two thirds of the width, and 4 are the first column cut
+// in two beside two full-height columns. A tab laid out otherwise (by an
+// older nhm, or by hand) keeps its panes, and the new one fills the first
+// free cell all the same.
+//
+// herdr's panes tile the tab, so their bounds are the tab. pane.layout
+// gives the rects of the split tree in a zoomed tab too, and a closed
+// pane's room goes to its neighbour, so a tab with a closed pane gets
+// its gap filled first. ok is false when no cell is free.
+func gridSplit(panes []herdr.LayoutPane, perTab int) (pane, dir string, ratio float64, ok bool) {
+	x0, y0, x1, y1 := math.MaxInt, math.MaxInt, 0, 0
+	for _, p := range panes {
+		x0, y0 = min(x0, int(p.Rect.X)), min(y0, int(p.Rect.Y))
+		x1, y1 = max(x1, int(p.Rect.X)+int(p.Rect.Width)), max(y1, int(p.Rect.Y)+int(p.Rect.Height))
+	}
+	cols, rows := grid(perTab)
+	cw, ch := float64(x1-x0)/float64(cols), float64(y1-y0)/float64(rows)
+	first := map[string]int{} // a pane's own cell: its row
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			left, top := float64(x0)+float64(c)*cw, float64(y0)+float64(r)*ch
+			p, found := paneAt(panes, left+cw/2, top+ch/2)
+			if !found {
+				continue
+			}
+			row, held := first[p.PaneID]
+			switch {
+			case !held:
+				first[p.PaneID] = r
+			case row == r:
+				return p.PaneID, "right", (left - float64(p.Rect.X)) / float64(p.Rect.Width), true
+			default:
+				return p.PaneID, "down", (top - float64(p.Rect.Y)) / float64(p.Rect.Height), true
+			}
+		}
+	}
+	return "", "", 0, false
+}
+
+// paneAt is the pane whose rect holds the point (x, y).
+func paneAt(panes []herdr.LayoutPane, x, y float64) (herdr.LayoutPane, bool) {
+	for _, p := range panes {
+		r := p.Rect
+		if x >= float64(r.X) && x < float64(r.X)+float64(r.Width) && y >= float64(r.Y) && y < float64(r.Y)+float64(r.Height) {
+			return p, true
+		}
+	}
+	return herdr.LayoutPane{}, false
 }
 
 func area(r herdr.LayoutRect) int {

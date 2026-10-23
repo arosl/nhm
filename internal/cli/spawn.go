@@ -71,13 +71,23 @@ the exit 1; a delivery whose outcome is unknown is never sent again. A
 rerun of the same --op-id assigns nothing.
 
 Agents of one project share a tab, a pane each, up to --per-tab (6): a new
-agent splits the biggest pane of a tab of its project that has room, or
-opens a tab. A tab with one agent has the agent's name; with more, the
-project's directory name. --label or --group always opens new tabs, and a
-tab from before this rule is never joined. --per-tab 1 gives each agent
-its own tab. A --label that is the project's directory name reads as the
-shared label: a later spawn may join that tab, and nhm maintain gives it
-its last agent's name.
+agent joins a tab of its project that has room, or opens a tab. A tab with
+one agent has the agent's name; with more, the project's directory name.
+--label or --group always opens new tabs, and a tab from before this rule
+is never joined. --per-tab 1 gives each agent its own tab. A --label that
+is the project's directory name reads as the shared label: a later spawn
+may join that tab, and nhm maintain gives it its last agent's name.
+
+The panes of a tab fill an even grid in reading order, also across adds:
+--per-tab 6 is 2 rows of 3, slots N.1 to N.3 on top and N.4 to N.6 below.
+The top row fills from left to right, and its last pane keeps the room of
+the columns still empty: a tab of 2 is a third and two thirds of the
+width. Then each pane of the next row splits the pane above it: a tab of 4
+has the first column cut in two. --per-tab N has the integer square root
+of N rows and as many columns as N needs: 2 and 3 are one row, 4 is 2x2,
+8 is 2 rows of 4, 9 is 3x3. A new pane takes the first cell of the grid
+that no pane holds as its own, so after a retire it fills the gap. When
+every cell is held, the biggest pane is cut in half.
 
 Admission runs first: a quota at 90 % or a known limit refuses (--force
 overrides the quota only); unknown quota is a warning (refused with
