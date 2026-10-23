@@ -290,6 +290,10 @@ func TestOnGrid(t *testing.T) {
 		// herdr 0.9.3 in a 383x106 tab, as nhm's splits leave it.
 		{"herdr's rounding", []herdr.LayoutPane{pane("a", 0, 0, 128, 106), pane("b", 128, 0, 127, 106), pane("c", 255, 0, 128, 106)},
 			6, nil, true},
+		{"an edge 2 cells off its line", []herdr.LayoutPane{pane("a", 0, 0, 82, 60), pane("b", 82, 0, 158, 60)}, 6, nil, true},
+		{"an edge 3 cells off its line", []herdr.LayoutPane{pane("a", 0, 0, 83, 60), pane("b", 83, 0, 157, 60)}, 6, nil, false},
+		{"a row of --per-tab 3", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 80, 60), pane("c", 160, 0, 80, 60)},
+			6, nil, true},
 		{"nhm 0.1.8 to 0.1.10: a tab of 2", []herdr.LayoutPane{pane("a", 0, 0, 76, 52), pane("b", 76, 0, 76, 52)}, 6, nil, false},
 		{"nhm 0.1.8 to 0.1.10: a tab of 3", []herdr.LayoutPane{pane("a", 0, 0, 76, 26), pane("c", 0, 26, 76, 26), pane("b", 76, 0, 76, 52)},
 			6, nil, false},

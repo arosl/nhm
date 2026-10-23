@@ -240,6 +240,13 @@ func gridSplit(panes []herdr.LayoutPane, perTab int) (pane, dir string, ratio fl
 	return "", "", 0, false
 }
 
+// gridSlack is how far, in terminal cells, a pane's edge may lie from its
+// grid line. gridSplit cuts within half a cell of the line, but herdr
+// lays a tab out again from the split ratios when it is resized, and the
+// rounding of nested splits adds up: about a cell more in a grid of 4
+// columns (ScarletOrchid's review, nhm-cxh).
+const gridSlack = 2
+
 // cells is the grid of perTab over the panes' tab: its origin, the size
 // of a cell, and the columns and rows.
 func cells(panes []herdr.LayoutPane, perTab int) (x0, y0, cw, ch float64, cols, rows int) {
@@ -253,23 +260,22 @@ func cells(panes []herdr.LayoutPane, perTab int) (x0, y0, cw, ch float64, cols, 
 }
 
 // onGrid reports whether the panes of anchor's tab lie on the grid of
-// perTab: each edge within a cell of a grid line, as gridSplit's splits
-// leave them once herdr rounds them, and each pane at least a cell wide
-// and tall. A tab off the grid, laid out by nhm 0.1.8 to 0.1.10, by hand,
-// or for another --per-tab, is not joined: a split there could leave a
-// pane narrower than a column (nhm-cxh). Nor is a tab whose layout
-// cannot be read.
+// perTab: each edge within gridSlack terminal cells of a grid line, and
+// each pane at least a grid cell wide and tall. A tab off the grid, laid
+// out by nhm 0.1.8 to 0.1.10, by hand, for another --per-tab, or resized
+// by hand, is not joined: a split there could leave a pane narrower than
+// a column (nhm-cxh). Nor is a tab whose layout cannot be read. A tab of
+// one row for --per-tab 3 lies on the lines of 6, and grows into it.
 func onGrid(ctx context.Context, h Herdr, anchor string, perTab int) bool {
 	l, err := h.PaneLayout(ctx, anchor)
 	if err != nil || len(l.Panes) == 0 {
 		return false
 	}
 	x0, y0, cw, ch, _, _ := cells(l.Panes, perTab)
-	// line is the grid line nearest to v, and whether v is within a cell
-	// of it.
+	// line is the grid line nearest to v, and whether v is near it.
 	line := func(v int, origin, size float64) (float64, bool) {
 		k := math.Round((float64(v) - origin) / size)
-		return k, math.Abs(float64(v)-origin-k*size) <= 1
+		return k, math.Abs(float64(v)-origin-k*size) <= gridSlack
 	}
 	for _, p := range l.Panes {
 		r := p.Rect
