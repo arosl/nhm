@@ -21,7 +21,7 @@ func envOf(vars map[string]string) func(string) string {
 	return func(k string) string { return vars[k] }
 }
 
-func TestCatalogPathsFollowTheFzfPalette(t *testing.T) {
+func TestCatalogPathsOrder(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	dir := filepath.Join(root, "sub")
 	cfg := filepath.Join(home, "cfg")

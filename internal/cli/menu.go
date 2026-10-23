@@ -29,9 +29,6 @@ func runGoMenu(stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm menu: %v\n", err)
 		return code
 	}
-	if err := checkUIConfig(); err != nil {
-		return fail(exitError, err)
-	}
 	c, err := popupContext()
 	if err != nil {
 		return fail(exitError, err)

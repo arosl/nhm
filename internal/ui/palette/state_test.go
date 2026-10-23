@@ -24,9 +24,8 @@ func TestStateDir(t *testing.T) {
 	}
 }
 
-// The fzf palette's files carry over: one key per line, other lines
-// skipped.
-func TestStoreReadsTheFzfPalettesFiles(t *testing.T) {
+// The state files hold one key per line; other lines are skipped.
+func TestStoreReadsItsFiles(t *testing.T) {
 	s := Store{Dir: t.TempDir()}
 	writeFile(t, filepath.Join(s.Dir, PinsFile), "review\n\nnot a key\nfix\nreview\n")
 	writeFile(t, filepath.Join(s.Dir, FavoritesFile), "review\nfix\nplan\n")
@@ -44,7 +43,7 @@ func TestStoreReadsTheFzfPalettesFiles(t *testing.T) {
 	}
 }
 
-func TestStoreWritesWhatTheFzfPaletteReads(t *testing.T) {
+func TestStoreWritesItsFiles(t *testing.T) {
 	s := Store{Dir: filepath.Join(t.TempDir(), "new", "palette")}
 	if st, err := s.Load(); err != nil || len(st.Pinned) != 0 || len(st.Favorites) != 0 {
 		t.Fatalf("missing files = %+v %v", st, err)

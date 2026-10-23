@@ -10,9 +10,7 @@ import (
 	"strings"
 )
 
-// State file names in the state directory: one key per line. nhm's
-// former fzf palette (scripts/nhm-palette) kept the same files, so its
-// pins, favorites and recents carry over.
+// State file names in the state directory: one key per line.
 const (
 	PinsFile      = "pins"
 	FavoritesFile = "favorites"
@@ -20,11 +18,10 @@ const (
 )
 
 // RecentsMax is how many recent keys the recents file keeps, newest
-// first (the fzf palette's PALETTE_RECENTS_MAX, ntm's maxRecents).
+// first (ntm's maxRecents).
 const RecentsMax = 8
 
-// stateKey is a key the state files keep; other lines are skipped, as
-// the fzf palette skips them.
+// stateKey is a key the state files keep; other lines are skipped.
 var stateKey = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // StateDir is where the palette keeps its state:

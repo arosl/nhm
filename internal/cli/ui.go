@@ -72,7 +72,6 @@ func holdOnFailure(code int, stderr io.Writer) int {
 // openPopup is a plugin action: capture the context, check the server is
 // enrolled, and open the popup.
 func openPopup(name string, stderr io.Writer) int {
-	// The popup checks [ui] in nhm's config, and shows what is wrong.
 	c, err := ui.Capture(os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm ui %s: %v\n", name, err)
@@ -163,8 +162,8 @@ func runMenu(args []string, stdout, stderr io.Writer) int {
 	return runGoMenu(stderr)
 }
 
-// withoutGo is args without --go, which chose a Go surface while the
-// fzf ones were the default; it now does nothing.
+// withoutGo is args without --go, which is accepted for old callers and
+// does nothing.
 func withoutGo(args []string) []string {
 	var out []string
 	for _, a := range args {

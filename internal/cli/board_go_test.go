@@ -228,8 +228,8 @@ func TestGoBoardZoomBringsItsTabInFront(t *testing.T) {
 	}
 }
 
-// prefix+d opens the Go board in a tab, by default and with [ui] board =
-// "go"; "fzf" says the fzf board is gone (nhm-qbi.12).
+// prefix+d opens the board in a tab. An old [ui] block in nhm's config
+// (aro-acf has one) is ignored.
 func TestUIBoardOpensTheGoBoard(t *testing.T) {
 	s, _ := cliInstance(t)
 	boardHerdr(t, s)
@@ -260,16 +260,7 @@ func TestUIBoardOpensTheGoBoard(t *testing.T) {
 	// The board of the first call is starting: the second finds it and
 	// opens none.
 	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitOK || len(requests(s, "plugin.pane.open")) != opens {
-		t.Fatalf("go: code %d, %d opens: %s", code, len(requests(s, "plugin.pane.open")), stderr.String())
-	}
-	for value, want := range map[string]string{"fzf": "no longer has the fzf palette, menu and board", "gogo": "ui.board"} {
-		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[ui]\nboard = \""+value+"\"\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		stderr.Reset()
-		if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitError || !strings.Contains(stderr.String(), want) {
-			t.Fatalf("%s: code %d: %s", value, code, stderr.String())
-		}
+		t.Fatalf("[ui]: code %d, %d opens: %s", code, len(requests(s, "plugin.pane.open")), stderr.String())
 	}
 }
 
@@ -293,10 +284,8 @@ func TestGoBoardValidatesItsContext(t *testing.T) {
 	}
 }
 
-// --go chose the Go board and menu while the fzf ones were the default:
-// it is accepted and does nothing. spawn --interactive ran the gum
-// wizard: it says where the spawn wizard is (nhm-qbi.12).
-func TestRemovedSurfacesFlags(t *testing.T) {
+// --go on board and menu is accepted for old callers and does nothing.
+func TestBoardAndMenuAcceptGo(t *testing.T) {
 	s, _ := zoomServer(t)
 	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
 	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", "")
@@ -306,9 +295,5 @@ func TestRemovedSurfacesFlags(t *testing.T) {
 	}
 	if code, _, errOut := run("menu", "--go", "stray"); code != exitRefused || !strings.Contains(errOut, "Usage: nhm palette") {
 		t.Errorf("menu --go stray = %d %q", code, errOut)
-	}
-	if code, _, errOut := run("spawn", "swarm", "--cc=1", "--interactive"); code != exitRefused ||
-		!strings.Contains(errOut, "nhm menu (prefix+m) has the spawn wizard") {
-		t.Errorf("spawn --interactive = %d %q", code, errOut)
 	}
 }

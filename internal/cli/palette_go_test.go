@@ -174,8 +174,7 @@ func TestPaletteMemoryFollowsTheConfig(t *testing.T) {
 	}
 }
 
-// --go chose this palette while the fzf one was the default: it is
-// accepted and does nothing (nhm-qbi.12).
+// --go is accepted for old callers and does nothing.
 func TestPaletteUsage(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"--go", "--help"}} {
 		var out, errOut bytes.Buffer
@@ -188,14 +187,6 @@ func TestPaletteUsage(t *testing.T) {
 		if code := runPalette(args, &out, &errOut); code != exitRefused || !strings.Contains(errOut.String(), "Usage: nhm palette") {
 			t.Fatalf("%v = %d %q", args, code, errOut.String())
 		}
-	}
-	// [ui] palette = "fzf" says the fzf palette is gone.
-	cfg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", cfg)
-	writeTestFile(t, filepath.Join(cfg, "nhm", "config.toml"), "[ui]\npalette = \"fzf\"\n")
-	var out, errOut bytes.Buffer
-	if code := runPalette([]string{"--go"}, &out, &errOut); code != exitError || !strings.Contains(errOut.String(), "no longer has the fzf") {
-		t.Fatalf("fzf = %d %q", code, errOut.String())
 	}
 }
 

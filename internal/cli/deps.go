@@ -19,7 +19,7 @@ const depsUsage = `Usage: nhm deps [-v|--verbose] [--json]   (also nhm check)
 
 ntm's deps on herdr: check that the tools nhm needs are installed.
 Required: herdr (HERDR_BIN_PATH, else herdr on PATH), in tmux's place.
-AI agents: the CLI of each kind nhm spawns. Recommended: fzf and git.
+AI agents: the CLI of each kind nhm spawns. Recommended: git.
 Then the services (Agent Mail) and the flywheel tools. -v adds each
 tool's version and, for a missing one, how to install it. Exits 1 when a
 required tool is missing. --json gives nhm's envelope with ntm's fields
@@ -91,7 +91,6 @@ func depChecks() []depCheck {
 		checks = append(checks, d)
 	}
 	checks = append(checks,
-		depCheck{Name: "fzf", Commands: []string{"fzf"}, Category: depRecommended, InstallHint: "brew install fzf (macOS) / apt install fzf (Linux)"},
 		depCheck{Name: "git", Commands: []string{"git"}, Category: depRecommended, InstallHint: "brew install git (macOS) / apt install git (Linux)"})
 	for i := range checks {
 		checks[i].VersionArgs = []string{"--version"}

@@ -9,8 +9,8 @@
 //   - tmux's panes are the bound agents of the captured workspace, read
 //     from nhm's snapshot (Pane, PanesFrom);
 //   - config's palette types are filled from nhm's palette catalogs, and
-//     the pins, favorites and recents live in the fzf palette's state
-//     files, so they carry over (PaletteCmd, PaletteState, Store);
+//     the pins, favorites and recents live in nhm's state directory, one
+//     key per line (PaletteCmd, PaletteState, Store);
 //   - the kind number keys come from nhm's kinds (KindKeys).
 //
 // The palette never sends on its own. ntm's sendWith typed into tmux and

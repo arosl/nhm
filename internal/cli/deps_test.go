@@ -25,8 +25,9 @@ func depsPath(t *testing.T, tools map[string]string) string {
 }
 
 // nhm deps is ntm's deps with herdr for tmux: the required tool, the
-// agent CLIs of nhm's kinds, fzf and git, Agent Mail and the flywheel
-// tools, in ntm's report (the operator's ruling, nhm-k9d, 2026-10-23).
+// agent CLIs of nhm's kinds, git, Agent Mail and the flywheel tools, in
+// ntm's report (the operator's ruling, nhm-k9d, 2026-10-23). Not fzf,
+// which ntm recommends: nhm runs none (the operator, nhm-qbi.12).
 func TestDepsReportsAsNTM(t *testing.T) {
 	dir := depsPath(t, map[string]string{"herdr": "herdr 0.9.3", "claude": "2.1.0 (Claude Code)", "git": "git version 2.43.0", "br": "br 0.9.1"})
 	for _, verb := range []string{"deps", "check"} {
@@ -37,7 +38,7 @@ func TestDepsReportsAsNTM(t *testing.T) {
 		for _, want := range []string{
 			"\n nhm Dependency Check\n═══",
 			"Required:\n\n  ✓ herdr\n\nAI Agents:\n\n  ✓ Claude Code\n  ✗ OpenAI Codex\n  ✗ Antigravity CLI (agy)\n",
-			"  ✗ Grok Build (xAI)\n\nRecommended:\n\n  ✗ fzf\n  ✓ git\n\nServices:\n\n  ○ Agent Mail\n\nFlywheel Tools:\n\n  ○ bv *\n  ✓ bd\n  ○ caam\n",
+			"  ✗ Grok Build (xAI)\n\nRecommended:\n\n  ✓ git\n\nServices:\n\n  ○ Agent Mail\n\nFlywheel Tools:\n\n  ○ bv *\n  ✓ bd\n  ○ caam\n",
 			"✓ All required dependencies installed. 1 agent(s), 1 flywheel tool(s) available.\n\n",
 		} {
 			if !strings.Contains(out, want) {

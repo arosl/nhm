@@ -111,32 +111,32 @@ before anything started; 3 admission refused.
 
 // spawnFlags are the flags of spawn and add.
 type spawnFlags struct {
-	counts                   map[string]*string
-	agents                   listFlag
-	label, group             string
-	perTab                   int
-	prompt, promptFile       string
-	noKickoff, assign, yes   bool
-	strategy, initPrompt     string
-	limit                    int
-	assignAgent              string
-	assignVerbose            bool
-	assignQuiet              bool
-	assignCCOnly             bool
-	assignCodOnly            bool
-	assignGmiOnly            bool
-	assignAgyOnly            bool
-	assignTimeout            time.Duration
-	staggerMode              string
-	staggerDelay, readyWait  time.Duration
-	trustFolder, force       bool
-	allowUnguarded, require  bool
-	withMemory, withCASS     bool
-	noCASSContext            bool
-	project, opID, socket    string
-	effort                   string
-	role                     string
-	dryRun, asJSON, interact bool
+	counts                  map[string]*string
+	agents                  listFlag
+	label, group            string
+	perTab                  int
+	prompt, promptFile      string
+	noKickoff, assign, yes  bool
+	strategy, initPrompt    string
+	limit                   int
+	assignAgent             string
+	assignVerbose           bool
+	assignQuiet             bool
+	assignCCOnly            bool
+	assignCodOnly           bool
+	assignGmiOnly           bool
+	assignAgyOnly           bool
+	assignTimeout           time.Duration
+	staggerMode             string
+	staggerDelay, readyWait time.Duration
+	trustFolder, force      bool
+	allowUnguarded, require bool
+	withMemory, withCASS    bool
+	noCASSContext           bool
+	project, opID, socket   string
+	effort                  string
+	role                    string
+	dryRun, asJSON          bool
 }
 
 func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
@@ -177,7 +177,6 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.BoolVar(&f.withMemory, "with-memory", true, "CM rules in the kickoff (best-effort; the default)")
 	fs.BoolVar(&f.withCASS, "with-cass", false, "CASS context in the kickoff (best-effort)")
 	fs.BoolVar(&f.noCASSContext, "no-cass-context", false, "no CASS context in the kickoff")
-	fs.BoolVar(&f.interact, "interactive", false, "gone: nhm menu (prefix+m) has the spawn wizard")
 	fs.StringVar(&f.project, "project", "", "the project (default: the git work tree of the cwd)")
 	fs.StringVar(&f.opID, "op-id", "", "operation id, for an idempotent retry")
 	fs.StringVar(&f.socket, "socket", "", "herdr API socket")
@@ -300,9 +299,6 @@ func spawnVerb(verb string, args []string, stdout, stderr io.Writer) int {
 	if len(pos) != 1 {
 		fmt.Fprint(stderr, spawnUsage)
 		return exitRefused
-	}
-	if f.interact {
-		return refuse(errors.New("--interactive ran the gum wizard, which is gone: nhm menu (prefix+m) has the spawn wizard"))
 	}
 	req, err := f.request(pos[0], verb == "add")
 	if err != nil {

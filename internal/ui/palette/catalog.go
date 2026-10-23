@@ -2,7 +2,7 @@
 // at commit 9d5ed977: the PaletteCmd and PaletteState types; see LICENSE in
 // this directory and PROVENANCE.md. Local changes: PaletteCmd.Source; no
 // TOML tags; the commands come from nhm's palette catalogs
-// (templates.ReadCatalog) in the fzf palette's order, not from ntm's config,
+// (templates.ReadCatalog) in CatalogPaths' order, not from ntm's config,
 // without terminal controls.
 
 package palette
@@ -26,7 +26,7 @@ type PaletteCmd struct {
 }
 
 // PaletteState stores user palette preferences (favorites/pins).
-// nhm keeps it in the fzf palette's state files (Store).
+// nhm keeps it in the palette's state files (Store).
 type PaletteState struct {
 	Pinned    []string
 	Favorites []string
@@ -40,7 +40,7 @@ const CatalogName = "command_palette.md"
 // command_palette.md in dir and at the project root,
 // $XDG_CONFIG_HOME/nhm/command_palette.md, then ACFS's catalog under
 // ${ACFS_HOME:-~/.acfs}. Each existing file is listed once, by its
-// resolved path. These are the fzf palette's files, in its order.
+// resolved path.
 func CatalogPaths(getenv func(string) string, dir, root, file string) []string {
 	if file == "" {
 		file = getenv("NHM_PALETTE_FILE")

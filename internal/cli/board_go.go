@@ -41,10 +41,6 @@ const boardOpenWait = 15 * time.Second
 
 // openGoBoard is prefix+d.
 func openGoBoard(stderr io.Writer) int {
-	if err := checkUIConfig(); err != nil {
-		fmt.Fprintf(stderr, "nhm ui board: %v\n", err)
-		return exitError
-	}
 	c, err := ui.Capture(os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm ui board: %v\n", err)
@@ -103,10 +99,6 @@ func runGoBoard(session string, stderr io.Writer) int {
 	// The path the board was started by, before anything changes the
 	// working directory: an upgrade switches the links it resolves through.
 	launch, launchErr := board.LaunchPath()
-	if err := checkUIConfig(); err != nil {
-		fmt.Fprintf(stderr, "nhm board: %v\n", err)
-		return exitError
-	}
 	c, err := popupContext()
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm board: %v\n", err)

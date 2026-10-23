@@ -9,8 +9,8 @@
 //     instead of ntm's fixed cc/cod/gmi/agy; the quick and minimal
 //     methods keep ntm's mix, for the kinds the registry has.
 //   - behaviour: new steps after the counts: options (the session of a
-//     new one, tab label, group, kickoff, memory: the gum wizard's
-//     questions), then the review (the action's dry run: admission and
+//     new one, tab label, group, kickoff, memory: what nhm spawn's
+//     flags set), then the review (the action's dry run: admission and
 //     the plan), the confirm, and the result. The wizard runs its action
 //     (spawn.add or spawn.new) through the action table and its guard;
 //     ntm's dashboard ran `ntm add` itself. Going back drops the review;
@@ -75,7 +75,7 @@ type SpawnKeybinding struct {
 	Action      string      // Action identifier for dispatch
 }
 
-// Kickoff and memory choices (the gum wizard's).
+// Kickoff and memory choices.
 const (
 	kickoffDefault = "default"
 	kickoffOwn     = "own"

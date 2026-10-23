@@ -60,10 +60,10 @@ else
   fail "nhm-hook is linked and runs: $(readlink "$home/.local/bin/nhm-hook")"
 fi
 cur="$home/.local/share/nhm/current"
-if grep -q "^version = \"$version\"" "$cur/plugin/herdr-plugin.toml" && [[ ! -e "$cur/nhm-palette" ]]; then
-  pass "the release ships the herdr plugin, with its version, and no nhm-palette"
+if grep -q "^version = \"$version\"" "$cur/plugin/herdr-plugin.toml"; then
+  pass "the release ships the herdr plugin, with its version"
 else
-  fail "the release ships the herdr plugin and no nhm-palette: $(ls -R "$cur" 2>&1)"
+  fail "the release ships the herdr plugin: $(ls -R "$cur" 2>&1)"
 fi
 if [[ "$(readlink "$home/.local/share/nhm/current")" == "releases/$version" ]]; then
   pass "current points at the release"

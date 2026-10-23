@@ -30,8 +30,8 @@ import (
 // The palette (nhm-qbi.6, plan-v4 section 5): ntm's palette on nhm, in
 // this terminal. prefix+a runs it in the popup. Its sends are runner jobs
 // through uiCore, as the board's and the menu's are, so a send outlives
-// the popup. It took the place of the fzf palette, nhm-palette
-// (nhm-qbi.12), and keeps its flags, its files and ACFS's hand-off.
+// the popup. ACFS's acfs palette hands off to it (NHM_PALETTE_CWD), and
+// ACFS's lessons call --list and --show.
 
 const paletteUsage = `Usage: nhm palette [--workspace ID] [--file PATH]
        nhm palette --list [--json] [--file PATH]
@@ -75,7 +75,7 @@ func runPalette(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("palette", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, paletteUsage) }
-	// --go chose this palette while the fzf one was the default.
+	// --go is accepted for old callers.
 	fs.Bool("go", true, "accepted; it does nothing")
 	workspace := fs.String("workspace", "", "the workspace whose agents get prompts")
 	file := fs.String("file", "", "read prompts from this file only")
@@ -105,9 +105,6 @@ func runPalette(args []string, stdout, stderr io.Writer) int {
 	}
 	if *list || *show != "" {
 		return paletteCatalog(*file, *show, *asJSON, stdout, stderr)
-	}
-	if err := checkUIConfig(); err != nil {
-		return fail(exitError, err)
 	}
 	c, err := popupContext()
 	if err != nil {
