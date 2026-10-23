@@ -75,30 +75,32 @@ func runView(args []string, stdout, stderr io.Writer) int {
 	})
 }
 
-// viewWorkspace takes the zoom off in each tab of workspace ws, through
-// the tab's first pane (herdr zooms a tab by one of its panes), then
-// focuses ws.
+// viewWorkspace takes the zoom off in each zoomed tab of workspace ws,
+// as the snapshot's layouts show them, then focuses ws. herdr zooms a tab
+// by one of its panes: the zoom goes off through the tab's focused pane,
+// so the tab keeps its focus, as ntm's tiling keeps the active pane
+// (ScarletOrchid's review, nhm-k9d). A tab that is not zoomed is left as
+// it is.
 func viewWorkspace(ctx context.Context, h viewHerdr, ws string) (ViewResult, error) {
 	res := ViewResult{WorkspaceID: ws, Tabs: []string{}, Unzoomed: []string{}}
 	snap, err := h.Snapshot(ctx)
 	if err != nil {
 		return res, err
 	}
-	first := map[string]string{}
-	for _, p := range snap.Panes {
-		if p.WorkspaceID != ws || first[p.TabID] != "" {
+	for _, l := range snap.Layouts {
+		if l.WorkspaceID != ws {
 			continue
 		}
-		first[p.TabID] = p.PaneID
-		res.Tabs = append(res.Tabs, p.TabID)
-	}
-	for _, tab := range res.Tabs {
-		z, err := h.PaneZoom(ctx, first[tab], "off")
+		res.Tabs = append(res.Tabs, l.TabID)
+		if !l.Zoomed {
+			continue
+		}
+		z, err := h.PaneZoom(ctx, l.FocusedPaneID, "off")
 		if err != nil {
-			return res, fmt.Errorf("tab %s: %w", tab, err)
+			return res, fmt.Errorf("tab %s: %w", l.TabID, err)
 		}
 		if z.ZoomChanged {
-			res.Unzoomed = append(res.Unzoomed, tab)
+			res.Unzoomed = append(res.Unzoomed, l.TabID)
 		}
 	}
 	if err := h.WorkspaceFocus(ctx, ws); err != nil {

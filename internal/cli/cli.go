@@ -89,6 +89,9 @@ Usage:
   nhm mail inbox [--agent NAME] [--keep-unread] [--json]
                          list the agent's unread mail by thread; mark it read
   nhm doctor [--json]    check what nhm needs
+  nhm deps [-v] [--json] (also check)
+                         the tools and agent CLIs installed, as ntm's deps
+  nhm tutorial           where ACFS's lessons are (ntm's tutorial is about tmux)
   nhm capabilities [--json]
                          what this nhm answers, and why not
   nhm compatibility status [--json]
@@ -208,6 +211,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runHealth(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
+	case "deps", "check":
+		// ntm's deps, with its alias check (the operator's ruling,
+		// nhm-k9d, 2026-10-23).
+		return runDeps(args[1:], stdout, stderr)
+	case "tutorial":
+		return runTutorial(args[1:], stdout, stderr)
 	case "wake":
 		return runWake(args[1:], stdout, stderr)
 	case "maintain":

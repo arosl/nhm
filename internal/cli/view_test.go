@@ -11,8 +11,9 @@ import (
 )
 
 // viewServer is waitInstance's server with workspace w1 ("swarm") of two
-// tabs (w1:t1 holds w1:p1; w1:t2 holds w1:p2 and w1:p3, zoomed) and a
-// pane of another workspace. herdr's zoom and focus calls are recorded.
+// tabs (w1:t1 holds w1:p1; w1:t2 holds w1:p2 and w1:p3, zoomed, with
+// w1:p3 focused) and a zoomed tab of another workspace. herdr's zoom and
+// focus calls are recorded.
 func viewServer(t *testing.T) (*herdrtest.Server, func() []string) {
 	t.Helper()
 	s, _, _ := waitInstance(t, func(string) map[string]any { return nil })
@@ -20,10 +21,15 @@ func viewServer(t *testing.T) (*herdrtest.Server, func() []string) {
 		return map[string]any{"pane_id": id, "tab_id": tab, "workspace_id": ws, "terminal_id": "t-" + id,
 			"agent_status": "unknown", "focused": false, "revision": 1}
 	}
+	layout := func(ws, tab, focused string, zoomed bool) map[string]any {
+		return map[string]any{"workspace_id": ws, "tab_id": tab, "zoomed": zoomed, "focused_pane_id": focused,
+			"area": map[string]any{"x": 0, "y": 0, "width": 80, "height": 24}, "panes": []any{}, "splits": []any{}}
+	}
 	s.Handle("session.snapshot", func(herdrtest.Request) (any, *herdrtest.Error) {
 		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
-			"protocol": 22, "version": "0.9.3", "layouts": []any{}, "tabs": []any{}, "agents": []any{},
-			"panes": []any{pane("w2:p1", "w2:t1", "w2"), pane("w1:p1", "w1:t1", "w1"), pane("w1:p2", "w1:t2", "w1"), pane("w1:p3", "w1:t2", "w1")},
+			"protocol": 22, "version": "0.9.3", "tabs": []any{}, "agents": []any{},
+			"layouts": []any{layout("w2", "w2:t1", "w2:p1", true), layout("w1", "w1:t1", "w1:p1", false), layout("w1", "w1:t2", "w1:p3", true)},
+			"panes":   []any{pane("w2:p1", "w2:t1", "w2"), pane("w1:p1", "w1:t1", "w1"), pane("w1:p2", "w1:t2", "w1"), pane("w1:p3", "w1:t2", "w1")},
 			"workspaces": []any{map[string]any{"workspace_id": "w1", "number": 1, "label": "swarm", "focused": false,
 				"pane_count": 3, "tab_count": 2, "active_tab_id": "w1:t1", "agent_status": "idle"}},
 		}}, nil
@@ -39,7 +45,7 @@ func viewServer(t *testing.T) (*herdrtest.Server, func() []string) {
 		mu.Lock()
 		calls = append(calls, "pane.zoom "+p.PaneID+" "+p.Mode)
 		mu.Unlock()
-		changed := p.PaneID == "w1:p2"
+		changed := p.PaneID == "w1:p3"
 		reason := "already_unzoomed"
 		if changed {
 			reason = ""
@@ -67,9 +73,10 @@ func viewServer(t *testing.T) (*herdrtest.Server, func() []string) {
 	}
 }
 
-// nhm view, tile and v are ntm's view on herdr: the zoom off in each tab
-// of the workspace, then its focus (the operator's ruling, nhm-k9d,
-// 2026-10-23).
+// nhm view, tile and v are ntm's view on herdr: the zoom off in each
+// zoomed tab of the workspace, through the tab's focused pane so that its
+// focus stays, then the workspace's focus (the operator's ruling,
+// nhm-k9d, 2026-10-23).
 func TestViewTakesTheZoomOffAndFocuses(t *testing.T) {
 	s, calls := viewServer(t)
 	for _, verb := range []string{"view", "tile", "v"} {
@@ -77,7 +84,7 @@ func TestViewTakesTheZoomOffAndFocuses(t *testing.T) {
 		if code != 0 || out != "✓ Zoom off in every tab of 'swarm' (tabs: 2, zoomed before: 1); focused it; open herdr to see it\n" {
 			t.Fatalf("%s = %d %q %q", verb, code, out, errOut)
 		}
-		if got := strings.Join(calls(), ";"); got != "pane.zoom w1:p1 off;pane.zoom w1:p2 off;workspace.focus w1" {
+		if got := strings.Join(calls(), ";"); got != "pane.zoom w1:p3 off;workspace.focus w1" {
 			t.Fatalf("%s calls = %s", verb, got)
 		}
 	}

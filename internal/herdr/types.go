@@ -138,8 +138,8 @@ type WorkspaceInfo struct {
 	Tokens      map[string]string `json:"tokens,omitempty"`
 }
 
-// SessionSnapshot is session.snapshot's topology and agents. nhm does
-// not read the layouts.
+// SessionSnapshot is session.snapshot's topology and agents. Of the
+// layouts, nhm reads each tab's zoom and focused pane.
 type SessionSnapshot struct {
 	Protocol           int             `json:"protocol"`
 	Version            string          `json:"version"`
@@ -147,9 +147,19 @@ type SessionSnapshot struct {
 	Tabs               []TabInfo       `json:"tabs"`
 	Panes              []PaneInfo      `json:"panes"`
 	Agents             []AgentInfo     `json:"agents"`
+	Layouts            []TabLayout     `json:"layouts"`
 	FocusedWorkspaceID string          `json:"focused_workspace_id,omitempty"`
 	FocusedTabID       string          `json:"focused_tab_id,omitempty"`
 	FocusedPaneID      string          `json:"focused_pane_id,omitempty"`
+}
+
+// TabLayout is the part of a tab's layout (PaneLayoutSnapshot) that nhm
+// reads: whether the tab is zoomed, and its focused pane.
+type TabLayout struct {
+	WorkspaceID   string `json:"workspace_id"`
+	TabID         string `json:"tab_id"`
+	Zoomed        bool   `json:"zoomed"`
+	FocusedPaneID string `json:"focused_pane_id"`
 }
 
 // Pong is ping's answer.
