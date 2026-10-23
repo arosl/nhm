@@ -97,6 +97,10 @@ selector, every bound agent of the session. With --after-op, the targets
 are the operation's, and only a state reached after the operation's
 baseline counts.
 
+--until idle is ntm's idle, an agent at its prompt: herdr shows it idle,
+or done when nobody has viewed the pane since its turn ended. --until done
+is herdr's done only.
+
 --until complete waits for a completion after the baseline by the same
 binding generation. It is "complete" only when nhm also saw the turn
 start; otherwise it is "ambiguous". A blocked agent is never complete.

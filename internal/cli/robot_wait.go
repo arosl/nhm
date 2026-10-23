@@ -22,8 +22,8 @@ import (
 // idle or done comes from the agent's own hooks at the end of its turn,
 // so complete is idle.
 var robotWaitConditions = map[string]wait.Until{
-	robot.WaitConditionIdle:       wait.UntilWaiting,
-	robot.WaitConditionComplete:   wait.UntilWaiting,
+	robot.WaitConditionIdle:       wait.UntilIdle,
+	robot.WaitConditionComplete:   wait.UntilIdle,
 	robot.WaitConditionGenerating: wait.UntilGenerating,
 	robot.WaitConditionHealthy:    wait.UntilUnblocked,
 }

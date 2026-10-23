@@ -261,7 +261,7 @@ func robotInterruptWait(ctx context.Context, ie *instanceEnv, bs *bindings.Store
 		Inode: func() uint64 { return wait.SocketInode(ie.herdr.SocketPath) }}
 	wctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	results := wait.All(wctx, wenv, targets, wait.Request{Until: wait.UntilWaiting, Poll: interruptPoll}, 0)
+	results := wait.All(wctx, wenv, targets, wait.Request{Until: wait.UntilIdle, Poll: interruptPoll}, 0)
 	ready := make([]bool, len(results))
 	for i, r := range results {
 		ready[i] = r.Outcome.Met()

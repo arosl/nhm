@@ -269,6 +269,12 @@ func TestStateWaits(t *testing.T) {
 	if r.Outcome != Done || h.waits == 0 {
 		t.Fatalf("done = %s, %d agent.wait calls", r.Outcome, h.waits)
 	}
+	// idle is ntm's idle, an agent at its prompt: herdr's done meets it
+	// too, as an unviewed pane ends its turn there (nhm-y56).
+	h = script(agent(herdr.StatusWorking, 10, 0), agent(herdr.StatusWorking, 10, 0), agent(herdr.StatusDone, 11, 11))
+	if r = runOne(t, h, &fakeBindings{b: bound}, Target{Binding: bound}, Request{Until: UntilIdle}, time.Second); r.Outcome != Done || h.waits == 0 {
+		t.Fatalf("idle at done = %s, %d agent.wait calls", r.Outcome, h.waits)
+	}
 	// healthy is neither blocked nor unknown.
 	h = script(agent(herdr.StatusBlocked, 10, 0), agent(herdr.StatusWorking, 11, 0))
 	if r = runOne(t, h, &fakeBindings{b: bound}, Target{Binding: bound}, Request{Until: UntilHealthy}, time.Second); r.Outcome != Healthy {
@@ -280,6 +286,13 @@ func TestStateWaits(t *testing.T) {
 	r = runOne(t, h, &fakeBindings{b: bound}, tg, Request{Until: UntilIdle, AfterOp: true}, time.Second)
 	if r.Outcome != Idle || h.i < 4 {
 		t.Fatalf("idle after op = %s after %d reads", r.Outcome, h.i)
+	}
+	// A turn after the baseline that ends in done meets idle too; the
+	// done from before the baseline does not.
+	h = script(agent(herdr.StatusDone, 10, 10), agent(herdr.StatusWorking, 11, 10), agent(herdr.StatusDone, 12, 12))
+	tg = Target{Binding: bound, Baseline: baseAt(herdr.StatusDone, 10), Submission: Submitted}
+	if r = runOne(t, h, &fakeBindings{b: bound}, tg, Request{Until: UntilIdle, AfterOp: true}, time.Second); r.Outcome != Done || h.i < 3 {
+		t.Fatalf("idle after op at done = %s after %d reads", r.Outcome, h.i)
 	}
 	// A target that the operation never submitted to.
 	r = runOne(t, h, &fakeBindings{b: bound}, Target{Binding: bound, Submission: "refused"}, Request{Until: UntilIdle, AfterOp: true}, time.Second)

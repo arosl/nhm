@@ -21,13 +21,13 @@ func TestTransitionNeedsTheAgentToLeaveAndComeBack(t *testing.T) {
 		want   Outcome
 		reason string
 	}{
-		{"a read shows the turn", UntilWaiting,
+		{"a read shows the turn", UntilIdle,
 			[]herdr.AgentInfo{agent(idle, 5, 4), agent(idle, 5, 4), agent(working, 6, 4), agent(idle, 7, 7)}, Idle, ""},
-		{"a turn between two reads", UntilWaiting,
+		{"a turn between two reads", UntilIdle,
 			[]herdr.AgentInfo{agent(idle, 5, 4), agent(done, 7, 7)}, Done, ""},
-		{"not in the target at the start", UntilWaiting,
+		{"not in the target at the start", UntilIdle,
 			[]herdr.AgentInfo{agent(working, 5, 4), agent(idle, 6, 6)}, Idle, ""},
-		{"done to idle is no turn", UntilWaiting,
+		{"done to idle is no turn", UntilIdle,
 			[]herdr.AgentInfo{agent(done, 5, 5), agent(idle, 6, 5)}, Timeout, "did not leave the target state"},
 		{"a turn does not leave unblocked", UntilUnblocked,
 			[]herdr.AgentInfo{agent(idle, 5, 4), agent(idle, 7, 7)}, Timeout, "did not leave the target state"},
@@ -51,20 +51,22 @@ func TestTransitionNeedsTheAgentToLeaveAndComeBack(t *testing.T) {
 	}
 }
 
-// Without a transition, an agent already at its prompt meets the robot
-// form's idle, done included; herdr's unknown is healthy, as ntm's
-// UNKNOWN is.
+// Without a transition, an agent already at its prompt meets idle, done
+// included, in the robot form and in nhm wait (nhm-y56); done is herdr's
+// done alone. herdr's unknown is healthy, as ntm's UNKNOWN is.
 func TestRobotConditionsWithoutTransition(t *testing.T) {
 	for _, c := range []struct {
 		until Until
 		st    herdr.AgentStatus
 		want  Outcome
 	}{
-		{UntilWaiting, herdr.StatusDone, Done},
-		{UntilWaiting, herdr.StatusIdle, Idle},
+		{UntilIdle, herdr.StatusDone, Done},
+		{UntilIdle, herdr.StatusIdle, Idle},
+		{UntilDone, herdr.StatusDone, Done},
+		{UntilDone, herdr.StatusIdle, Timeout},
 		{UntilUnblocked, herdr.StatusUnknown, Healthy},
 		{UntilUnblocked, herdr.StatusBlocked, Timeout},
-		{UntilWaiting, herdr.StatusWorking, Timeout},
+		{UntilIdle, herdr.StatusWorking, Timeout},
 	} {
 		r := runOne(t, script(agent(c.st, 5, 4)), &fakeBindings{b: bound}, Target{Binding: bound},
 			Request{Until: c.until}, 50*time.Millisecond)
@@ -102,7 +104,7 @@ func TestFailFastEndsTheOtherWaits(t *testing.T) {
 		env := Env{Herdr: h, Bindings: multiBindings{a.ID: a, b.ID: b}}
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 		start := time.Now()
-		rs := All(ctx, env, []Target{{Binding: a}, {Binding: b}}, Request{Until: UntilWaiting, FailFast: failFast, Poll: time.Millisecond}, 0)
+		rs := All(ctx, env, []Target{{Binding: a}, {Binding: b}}, Request{Until: UntilIdle, FailFast: failFast, Poll: time.Millisecond}, 0)
 		cancel()
 		want := Timeout
 		if failFast {

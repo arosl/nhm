@@ -15,17 +15,17 @@ import (
 type Until string
 
 const (
+	// UntilIdle is ntm's idle, an agent at its prompt: herdr shows it
+	// idle, or done when nobody looked yet (nhm-y56). UntilDone is
+	// herdr's done alone.
 	UntilIdle       Until = "idle"
 	UntilDone       Until = "done"
 	UntilComplete   Until = "complete"
 	UntilGenerating Until = "generating"
 	UntilHealthy    Until = "healthy"
-	// The robot form's conditions, which nhm wait does not parse
-	// (nhm-hir). ntm's idle is an agent at its prompt: herdr shows it
-	// idle, or done when nobody looked yet. ntm's healthy is any state
-	// but an error or a stall: herdr has no error state, and blocked is
-	// ntm's stall.
-	UntilWaiting   Until = "waiting"
+	// The robot form's healthy, which nhm wait does not parse (nhm-hir).
+	// ntm's healthy is any state but an error or a stall: herdr has no
+	// error state, and blocked is ntm's stall.
 	UntilUnblocked Until = "unblocked"
 )
 
@@ -343,15 +343,13 @@ func (w *waiter) sleepInHerdr(ctx context.Context) {
 func statesFor(u Until) []herdr.AgentStatus {
 	switch u {
 	case UntilIdle:
-		return []herdr.AgentStatus{herdr.StatusIdle}
+		return []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone}
 	case UntilDone:
 		return []herdr.AgentStatus{herdr.StatusDone}
 	case UntilGenerating:
 		return []herdr.AgentStatus{herdr.StatusWorking}
 	case UntilHealthy:
 		return []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusWorking}
-	case UntilWaiting:
-		return []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone}
 	case UntilUnblocked:
 		return []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusWorking, herdr.StatusUnknown}
 	}
@@ -442,7 +440,7 @@ func (w *waiter) check(ctx context.Context) (Result, bool) {
 	if met && (!w.req.AfterOp || after) {
 		o := Outcome(w.req.Until)
 		switch w.req.Until {
-		case UntilIdle, UntilDone, UntilWaiting:
+		case UntilIdle, UntilDone:
 			o = Outcome(a.AgentStatus)
 		case UntilUnblocked:
 			o = Healthy

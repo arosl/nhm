@@ -122,6 +122,55 @@ func TestWaitVerbStateAndSelection(t *testing.T) {
 	}
 }
 
+// ntm's idle is an agent at its prompt, so --until idle is met by herdr's
+// done, where an unviewed pane ends its turn; --until done is herdr's done
+// alone (nhm-y56).
+func TestWaitIdleMeetsDone(t *testing.T) {
+	var mu sync.Mutex
+	state := "done"
+	var waitedFor []string
+	s, _, _ := waitInstance(t, func(pane string) map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		if pane == "w1:p1" {
+			return agentMap(pane, "claude", state, 4, 4)
+		}
+		return agentMap(pane, "codex", "working", 7, 0)
+	})
+	s.Handle("agent.wait", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			Until []string `json:"until"`
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		mu.Lock()
+		waitedFor = p.Until
+		mu.Unlock()
+		return nil, &herdrtest.Error{Code: "timeout", Message: "timed out"}
+	})
+	code, out, _ := runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "idle", "--timeout", "2s", "--socket", s.SocketPath)
+	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): done") || !strings.Contains(out, "idle: met") {
+		t.Fatalf("idle at done = %d %s", code, out)
+	}
+	if code, out, _ = runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "done", "--timeout", "2s", "--socket", s.SocketPath); code != 0 {
+		t.Fatalf("done at done = %d %s", code, out)
+	}
+	// herdr's agent.wait sleeps until either state.
+	code, out, _ = runVerb(runWait, "swarm", "--name", "BlueLake", "--until", "idle", "--timeout", "100ms", "--poll", "10ms", "--socket", s.SocketPath)
+	mu.Lock()
+	got := strings.Join(waitedFor, ",")
+	mu.Unlock()
+	if code != 1 || got != "idle,done" {
+		t.Fatalf("working = %d %s, agent.wait until %q", code, out, got)
+	}
+	mu.Lock()
+	state = "idle"
+	mu.Unlock()
+	code, out, _ = runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "done", "--timeout", "100ms", "--poll", "10ms", "--socket", s.SocketPath)
+	if code != 1 || !strings.Contains(out, "IcyKnoll (0.1): timeout") {
+		t.Fatalf("done at idle = %d %s", code, out)
+	}
+}
+
 // sendReceipt records a send operation with one receipt for b, as
 // nhm.send writes it.
 func sendReceipt(t *testing.T, inst store.Instance, opID, status string, b bindings.Binding, base *wait.Baseline) {
