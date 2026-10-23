@@ -160,7 +160,7 @@ func Collect(env Env, now time.Time, counts map[string]int) []Observation {
 	}
 	obs := []Observation{*claude, *codex,
 		{Pool: "agy", Kind: "agy", Note: "agy exposes no usage"},
-		{Pool: "pi", Kind: "pi", Note: "pi exposes no usage"},
+		{Pool: "pi", Kind: "pi", Note: "nhm does not read pi's usage: pi spends the quota of the provider it runs on"},
 	}
 	for i := range obs {
 		obs[i].Agents = counts[obs[i].Kind]

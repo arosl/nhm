@@ -310,7 +310,7 @@ func admitQuota(ad *Admission, req Request, env AdmissionEnv, obs []quota.Observ
 func admitGuards(ctx context.Context, ad *Admission, req Request, env AdmissionEnv, a kinds.Adapter, argv []string,
 	refuse, warn func(string, ...any)) {
 	if !a.GuardSupported {
-		warn("%s runs no hooks: DCG and the other guards do not protect it (F.9)", a.Name)
+		warn("%s has no guard that nhm sets up: DCG and the other guards do not protect it", a.Name)
 		return
 	}
 	if env.Guards == nil {

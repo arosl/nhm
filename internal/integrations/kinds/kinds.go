@@ -119,8 +119,8 @@ type Adapter struct {
 	// unless it is named (ACFS runs Codex for plan reviews only).
 	CodeReview bool `json:"code_review"`
 	// GuardSettings is the settings file (relative to home) that holds the
-	// kind's guard hooks; GuardSupported false means the kind runs no
-	// hooks and every spawn warns (pi, F.9).
+	// kind's guard hooks; GuardSupported false means nhm sets up no guard
+	// for the kind and every spawn warns (pi: nhm-dyr).
 	GuardSettings  string `json:"guard_settings,omitempty"`
 	GuardSupported bool   `json:"guard_supported"`
 	// Continue is the continuation rule for compaction and resume (2.7);
@@ -533,8 +533,23 @@ func builtins() []Adapter {
 				"its model: agy-locked pins it", "its session resume"},
 		},
 		{
-			Name: "pi", NTMType: "pi", QuotaPool: "pi", CodeReview: true, GuardSupported: false,
-			Cannot: []string{"any guard: pi runs no hooks (F.9)", "its usage", "its interrupt key", "its session resume"},
+			// pi 0.7.1 (pi_agent_rust): --model, --thinking, /exit and /new
+			// are in its help; esc is its "esc to abort" (nhm-y7q). No pi
+			// session ran for this, so the rest stays in Cannot. No --yolo:
+			// pi then asks before each tool call, and nothing guards it
+			// (nhm-dyr).
+			Name: "pi", NTMType: "pi", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
+			NewSession: "/new", ExitCommand: "/exit", InterruptKeys: []string{"esc"},
+			QuotaPool: "pi", CodeReview: true, GuardSupported: false,
+			Cannot: []string{"any guard: pi runs extension hooks, but nhm has no guard extension for pi (nhm-dyr)",
+				"unattended tool use: pi asks before each tool call, and nhm adds no --yolo while nothing guards pi",
+				"its usage: pi spends the quota of the provider it runs on, and nhm does not read `pi usage`",
+				"its session resume: pi resumes a session by its file path (--session), and nhm resumes by id",
+				"a SessionStart hook, so a name is not restored after a compaction",
+				"its workspace-trust question (\"Trust this workspace? [y/N]\", for a repo with .pi packages or extensions): not seen on a screen",
+				"its limit text on the screen (the generic recogniser applies)",
+				"its transcript layout under ~/.pi/agent/sessions",
+				"herdr's state reading of pi 0.7.1: herdr's pi support is written for the TypeScript pi"},
 		},
 		{
 			Name: "omp", NTMType: "omp", InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,

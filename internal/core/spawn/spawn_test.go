@@ -619,7 +619,7 @@ func TestAdmission(t *testing.T) {
 	}
 	// pi is admitted with a warning that nothing guards it.
 	ad := Decide(context.Background(), AdmissionEnv{Guards: missing}, req(Want{Kind: "pi", Count: 1}))
-	if ad.Decision != Admit || !strings.Contains(strings.Join(ad.Warnings, ";"), "pi runs no hooks") {
+	if ad.Decision != Admit || !strings.Contains(strings.Join(ad.Warnings, ";"), "pi has no guard that nhm sets up") {
 		t.Fatalf("pi = %+v", ad)
 	}
 	// A refusal creates nothing.

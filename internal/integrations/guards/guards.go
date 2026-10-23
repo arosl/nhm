@@ -100,7 +100,7 @@ func Check(kind string, env Env) []Result {
 	a := kinds.Lookup(kind)
 	if !a.GuardSupported {
 		return each(kind, func(g string) Result {
-			return Result{State: Unsupported, Detail: kind + " runs no hooks; every spawn warns (F.9)"}
+			return Result{State: Unsupported, Detail: kind + " has no guard that nhm sets up; every spawn warns"}
 		})
 	}
 	if check, ok := checkers[kind]; ok {
