@@ -24,8 +24,8 @@ const readUsage = `Usage: nhm read <name|herdr-name|pane-id> [--lines N] [--sour
 
 Print an agent's pane: the visible screen (agent.read), or the scrollback
 with --source recent (pane.read). The preview has no control sequences;
---raw-to FILE writes the raw text with them. nhm logs is the same verb,
-by ntm's name.
+--raw-to FILE writes the raw text with them. nhm logs <name> runs it
+too; nhm logs <session> is ntm's logs.
 `
 
 // ansiPattern matches CSI and OSC sequences and lone escapes.

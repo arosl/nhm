@@ -278,6 +278,44 @@ func runBoardBody(stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm board: %v\n", err)
 		return exitError
 	}
+	return runBoardIn(c, stderr)
+}
+
+// runBoardFor is ntm's dashboard <session>: the board for the session's
+// workspace, whichever pane runs it.
+func runBoardFor(session string, stderr io.Writer) int {
+	c, err := popupContext()
+	if err != nil {
+		fmt.Fprintf(stderr, "nhm board: %v\n", err)
+		return exitError
+	}
+	c, err = boardContextFor(context.Background(), herdr.New(c.SocketPath), c, session)
+	if err != nil {
+		fmt.Fprintf(stderr, "nhm board: %v (nhm list shows the sessions)\n", err)
+		return exitRefused
+	}
+	return runBoardIn(c, stderr)
+}
+
+// boardContextFor is c moved to session's workspace. The calling pane's
+// tab, pane and agent are another workspace's, so they are left out.
+func boardContextFor(ctx context.Context, h *herdr.Client, c ui.Context, session string) (ui.Context, error) {
+	ws, err := sessionWorkspace(ctx, h, session)
+	if err != nil {
+		return c, err
+	}
+	if ws != c.WorkspaceID {
+		c.TabID, c.PaneID, c.Agent = "", "", ""
+	}
+	c.WorkspaceID, c.WorkspaceLabel = ws, ""
+	if session != ws {
+		c.WorkspaceLabel = session
+	}
+	return c, nil
+}
+
+// runBoardIn is the board for c's workspace.
+func runBoardIn(c ui.Context, stderr io.Writer) int {
 	r, err := openReader(c.SocketPath, true)
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm board: %v\n", err)
@@ -403,17 +441,18 @@ func runMenuBody(stderr io.Writer) int {
 
 const paletteUsage = `Usage: nhm palette [--workspace ID] [nhm-palette's flags]
        nhm palette --go [--workspace ID] [--file PATH]
-       nhm board [--go]
+       nhm board [session] | nhm board --go
        nhm menu [--go]
 
 The palette, the agent board and the nhm menu, in this terminal, for the
-calling pane's workspace. In herdr, prefix+a, prefix+d and prefix+m open
+calling pane's workspace; nhm board <session> shows that session's
+workspace (an id or label). In herdr, prefix+a, prefix+d and prefix+m open
 them as popups (nhm bind). nhm board --go runs the new Go board; with
 [ui] board = "go" in nhm's config, prefix+d opens it in a tab of its own.
 nhm palette --go runs the new Go palette; with [ui] palette = "go",
 prefix+a opens it. nhm menu --go runs the new Go menu; with [ui] menu =
-"go", prefix+m opens it. nhm dashboard, or dash or d, is nhm board, by
-ntm's names.
+"go", prefix+m opens it. nhm dashboard [session], or dash or d, is nhm
+board, by ntm's names.
 `
 
 func runPalette(args []string, stdout, stderr io.Writer) int {
@@ -430,6 +469,9 @@ func runPalette(args []string, stdout, stderr io.Writer) int {
 func runBoard(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "--go" {
 		return runGoBoard(stderr)
+	}
+	if len(args) == 1 && !strings.HasPrefix(args[0], "-") {
+		return runBoardFor(args[0], stderr)
 	}
 	if len(args) > 0 {
 		fmt.Fprint(stderr, paletteUsage)

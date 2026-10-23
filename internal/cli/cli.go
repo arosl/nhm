@@ -56,7 +56,8 @@ Usage:
                          what needs a decision
   nhm read <name> [--lines N] [--source visible|recent] [--raw-to FILE]
                          print an agent's pane
-  nhm logs <name> …      ntm's name for nhm read
+  nhm logs <session> [--panes N.M,…] [-f] [--filter RE] [-n N] [-a] [--json]
+                         every agent's recent output, as ntm's logs (a name: nhm read)
   nhm watch <session> [name|slot ...]
                          follow the agents' output
   nhm wait [session] [selector] [--until idle|done|complete|generating|healthy] [--after-op OP] [--timeout D] [--json]
@@ -111,8 +112,8 @@ Usage:
                          the agents a usage limit stopped
   nhm palette | board | menu
                          the prompt palette, the agent board, the nhm menu
-  nhm dashboard | dash | d
-                         ntm's names for nhm board
+  nhm dashboard [session] | dash | d
+                         ntm's names for nhm board; a session shows its workspace
   nhm bind [--unbind | --force | --show | --print-client] [--dry-run]
                          herdr keys from [keys] in nhm's config (default prefix+a
                          palette, prefix+d board, prefix+m menu); --unbind opts out
@@ -183,9 +184,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runSnapshot(args[1:], stdout, stderr)
 	case "attention":
 		return runAttention(args[1:], stdout, stderr)
-	case "read", "logs":
-		// logs is ntm's name for read (the operator's F.7 ruling, nhm-k9d).
+	case "read":
 		return runRead(args[1:], stdout, stderr)
+	case "logs":
+		// ntm's logs <session>; an agent's name runs read (the operator's
+		// ruling, nhm-k9d, 2026-10-23).
+		return runLogs(args[1:], stdout, stderr)
 	case "watch":
 		return runWatch(args[1:], stdout, stderr)
 	case "activity":
@@ -212,7 +216,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPalette(args[1:], stdout, stderr)
 	case "board", "dashboard", "dash", "d":
 		// dashboard, with ntm's short names dash and d, is ntm's name for
-		// the board (the operator's F.7 ruling, nhm-k9d).
+		// the board (the operator's F.7 ruling, nhm-k9d); dashboard
+		// <session> shows that session's workspace (the operator's ruling,
+		// 2026-10-23).
 		return runBoard(args[1:], stdout, stderr)
 	case "menu":
 		return runMenu(args[1:], stdout, stderr)
