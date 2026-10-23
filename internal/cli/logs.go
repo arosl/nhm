@@ -322,16 +322,38 @@ func printLogs(w io.Writer, res LogsResult) {
 }
 
 // logsLiveLines is the bottom of a pane that a working agent redraws in
-// place: its prompt box, status line and spinner. logs -f prints a line
-// once it has scrolled above them, so a redrawn line never prints again
-// and the spinner never prints (ScarletOrchid's review, nhm-k9d).
+// place: its prompt box, status line and spinner. logs -f reads only the
+// lines above them, so the spinner never prints (ScarletOrchid's review,
+// nhm-k9d).
 const logsLiveLines = 10
+
+// freshLines is the lines of cur, in order, beyond the copies of each
+// text that prev already holds. An agent also redraws lines above its
+// live region (a task list, a subagent block), so comparing the two
+// reads by their overlap reprints the whole window; counting the texts
+// prints a redrawn line only when its text changes. A line whose exact
+// text is already in the window does not print again.
+func freshLines(prev, cur []string) []string {
+	seen := map[string]int{}
+	for _, l := range prev {
+		seen[l]++
+	}
+	var out []string
+	for _, l := range cur {
+		if seen[l] > 0 {
+			seen[l]--
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
 
 // followLogs is ntm's logs -f: a first read sets the baseline, then each
 // interval prints the lines that are new since the last read (the
 // filter's only, and none that is blank, as ntm), each with its pane and
-// time, or as one JSON object. A line is new once it has left the live
-// region at the bottom of the pane (logsLiveLines).
+// time, or as one JSON object. A line is new when its text is not in the
+// last read above the live region (logsLiveLines, freshLines).
 func followLogs(ctx context.Context, h *herdr.Client, session string, agents []snapshot.Agent, filterRe *regexp.Regexp, asJSON bool, stdout io.Writer) int {
 	if !asJSON {
 		fmt.Fprintf(stdout, "Following logs from session: %s\nPress Ctrl+C to stop\n\n", session)
@@ -368,7 +390,7 @@ func followLogs(ctx context.Context, h *herdr.Client, session string, agents []s
 			if !ok {
 				continue
 			}
-			for _, l := range newLines(last[a.PaneID], cur) {
+			for _, l := range freshLines(last[a.PaneID], cur) {
 				if strings.TrimSpace(l) == "" || (filterRe != nil && !filterRe.MatchString(l)) {
 					continue
 				}

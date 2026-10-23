@@ -193,7 +193,9 @@ func TestLogsNameRunsRead(t *testing.T) {
 // -f prints only the lines that come after the first read, each with its
 // prefix and time, or as one JSON object per line. The pane's last 10
 // lines are the agent's live region: a spinner redrawn in place never
-// prints, and nothing prints twice. Blank lines are left out, as ntm's.
+// prints. A line above it that the agent redraws (a task ticked) prints
+// once, with its new text, and nothing else prints again. Blank lines are
+// left out, as ntm's.
 func TestLogsFollowPrintsNewLines(t *testing.T) {
 	var mu sync.Mutex
 	reads := map[string]int{}
@@ -206,9 +208,14 @@ func TestLogsFollowPrintsNewLines(t *testing.T) {
 		if pane != "w1:p1" {
 			return "same\n"
 		}
-		// The scrollback grows by a line each read; the live region
-		// below it is the same box with a spinner that changes.
-		text := strings.Join(scroll[:min(r, len(scroll))], "\n") + "\n"
+		// A task list redrawn in place, the scrollback that grows by a
+		// line each read, and the live region: the same box with a
+		// spinner that changes.
+		task := "☐ task A"
+		if r >= 3 {
+			task = "☒ task A"
+		}
+		text := task + "\n" + strings.Join(scroll[:min(r, len(scroll))], "\n") + "\n"
 		text += strings.Repeat("│ box │\n", logsLiveLines-1)
 		return text + fmt.Sprintf("✻ Working… (%ds)\n", r)
 	})
@@ -218,7 +225,8 @@ func TestLogsFollowPrintsNewLines(t *testing.T) {
 	code, out, _ := run("logs", "swarm", "-f", "--socket", s.SocketPath)
 	slot := regexp.QuoteMeta(bs[0].Slot)
 	want := regexp.MustCompile(`^Following logs from session: swarm\nPress Ctrl\+C to stop\n\n` +
-		`\[cc:` + slot + `\] \d\d:\d\d:\d\d line 3\n\[cc:` + slot + `\] \d\d:\d\d:\d\d line 4\n$`)
+		`\[cc:` + slot + `\] \d\d:\d\d:\d\d ☒ task A\n\[cc:` + slot + `\] \d\d:\d\d:\d\d line 3\n` +
+		`\[cc:` + slot + `\] \d\d:\d\d:\d\d line 4\n$`)
 	if code != 0 || !want.MatchString(out) {
 		t.Fatalf("logs -f = %d %q", code, out)
 	}
@@ -231,6 +239,23 @@ func TestLogsFollowPrintsNewLines(t *testing.T) {
 	if _, terr := time.Parse(time.RFC3339, line.Timestamp); code != 0 || err != nil || terr != nil || line.Pane != bs[0].Slot ||
 		line.AgentType != "claude" || line.Line != "line 4" {
 		t.Fatalf("logs -f --json = %d %q %v", code, out, err)
+	}
+}
+
+// freshLines counts each text: a line moved up by the scroll is not new,
+// a changed line is, and a second copy of a text is new only beyond the
+// copies the last read held.
+func TestFreshLinesCountsTexts(t *testing.T) {
+	for _, c := range []struct{ prev, cur, want []string }{
+		{[]string{"a", "b", "c"}, []string{"b", "c", "d"}, []string{"d"}},
+		{[]string{"x", "a", "✻ 3s"}, []string{"x", "a", "✻ 4s"}, []string{"✻ 4s"}},
+		{[]string{"ok", "a"}, []string{"ok", "a", "ok"}, []string{"ok"}},
+		{nil, []string{"a"}, []string{"a"}},
+		{[]string{"a"}, nil, nil},
+	} {
+		if got := freshLines(c.prev, c.cur); fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Errorf("freshLines(%q, %q) = %q, want %q", c.prev, c.cur, got, c.want)
+		}
 	}
 }
 
