@@ -258,6 +258,7 @@ func TestUnionsMatchSchema(t *testing.T) {
 	}
 	dests := variants(t, "request", "PaneMoveDestination", "type")
 	checkVariant(t, "pane.move destination", dests, "new_tab", NewTabIn("w2"))
+	checkVariant(t, "pane.move destination", dests, "tab", IntoTab("w1:t2", "down", "w1:p3", 0.5))
 	outputs := variants(t, "request", "OutputMatch", "type")
 	for _, m := range []OutputMatch{{Type: "substring", Value: "x"}, {Type: "regex", Value: "x"}} {
 		checkVariant(t, "output match", outputs, m.Type, m)

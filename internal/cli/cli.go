@@ -132,6 +132,8 @@ Usage:
                          bind an identity to the agent in a pane, by hand
   nhm move <Name> --workspace W [--dry-run] [--json]
                          move an agent's pane to a new tab of W; its binding follows
+  nhm move <Name> --tab T [--per-tab N] [--dry-run] [--json]
+                         move an agent's pane into tab T's next grid cell
   nhm admin instance enroll [--session NAME] [--socket PATH] [--json]
                          enroll a herdr server (ACFS's install runs it)
   nhm admin recover reconcile --import-only [--dry-run] [--json]

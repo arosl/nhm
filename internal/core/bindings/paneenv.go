@@ -43,30 +43,39 @@ const EvidencePaneEnv = "pane_env"
 // read or its start time shows another process; an unknown start time
 // trusts the pid.
 func MailAgentWarning(mailName string, occ Occupant) string {
-	if occ.ForegroundPID <= 0 {
+	key, v, ok := MailAgentVar(occ)
+	if !ok || key == "" || strings.EqualFold(v, mailName) {
 		return ""
+	}
+	return fmt.Sprintf("this pane's shell sets %s=%s: ACFS's mail hook and am will act as %s, not %s; "+
+		"start %s in a fresh pane (nhm add), or unset %s before you start it", key, v, v, mailName, mailName, key)
+}
+
+// MailAgentVar is the first of the variables that name an agent to
+// ACFS's Agent Mail hook and am that the occupant's agent process set
+// when it started, and its value; key is "" when none is set, and the
+// hook then reads the tab label. ok is false when the process cannot be
+// read, or its start time shows another process; an unknown start time
+// trusts the pid.
+func MailAgentVar(occ Occupant) (key, value string, ok bool) {
+	if occ.ForegroundPID <= 0 {
+		return "", "", false
 	}
 	env, err := ProcEnviron(occ.ForegroundPID)
 	if err != nil {
-		return ""
+		return "", "", false
 	}
 	if occ.ForegroundStart != 0 {
 		if start, err := ProcStart(occ.ForegroundPID); err != nil || start != occ.ForegroundStart {
-			return ""
+			return "", "", false
 		}
 	}
 	for _, key := range mailAgentVars {
-		v := env[key]
-		if v == "" {
-			continue
+		if v := env[key]; v != "" {
+			return key, v, true
 		}
-		if strings.EqualFold(v, mailName) {
-			return ""
-		}
-		return fmt.Sprintf("this pane's shell sets %s=%s: ACFS's mail hook and am will act as %s, not %s; "+
-			"start %s in a fresh pane (nhm add), or unset %s before you start it", key, v, v, mailName, mailName, key)
 	}
-	return ""
+	return "", "", true
 }
 
 // WithMailAgentWarning adds the occupant's MailAgentWarning to its

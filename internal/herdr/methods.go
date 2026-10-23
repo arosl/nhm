@@ -80,12 +80,16 @@ type PaneMoveParams struct {
 	Destination PaneMoveDestination `json:"destination"`
 }
 
-// PaneMoveDestination is herdr's PaneMoveDestination. nhm sends only the
-// new_tab variant (NewTabIn).
+// PaneMoveDestination is herdr's PaneMoveDestination. nhm sends the
+// new_tab variant (NewTabIn) and the tab variant (IntoTab).
 type PaneMoveDestination struct {
-	Type        string `json:"type"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Label       string `json:"label,omitempty"`
+	Type         string   `json:"type"`
+	WorkspaceID  string   `json:"workspace_id,omitempty"`
+	Label        string   `json:"label,omitempty"`
+	TabID        string   `json:"tab_id,omitempty"`
+	Split        string   `json:"split,omitempty"`
+	TargetPaneID string   `json:"target_pane_id,omitempty"`
+	Ratio        *float64 `json:"ratio,omitempty"`
 }
 
 // paneSendKeysParams are pane.send_keys's parameters: keys in herdr's
@@ -104,6 +108,13 @@ type pluginListParams struct {
 // default label.
 func NewTabIn(workspaceID string) PaneMoveDestination {
 	return PaneMoveDestination{Type: "new_tab", WorkspaceID: workspaceID}
+}
+
+// IntoTab is the destination "tab T, beside target": herdr splits target
+// ("right" or "down"), as pane.split does, and the moved pane takes the
+// new part. ratio is the share target keeps.
+func IntoTab(tabID, split, target string, ratio float64) PaneMoveDestination {
+	return PaneMoveDestination{Type: "tab", TabID: tabID, Split: split, TargetPaneID: target, Ratio: &ratio}
 }
 
 // PaneReadParams are pane.read's parameters.

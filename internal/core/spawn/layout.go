@@ -171,7 +171,7 @@ func grid(perTab int) (cols, rows int) {
 // splitTarget picks how a new pane goes into anchor's tab: the pane to
 // split, the direction and the ratio, which is the share the split pane
 // keeps (herdr's pane.split). The tab is a grid of perTab cells (grid),
-// filled in reading order (nhm-cxh): see gridSplit. When every cell has
+// filled in reading order (nhm-cxh): see GridSplit. When every cell has
 // a pane of its own, the biggest pane is cut in half along its longer
 // side. A cell counts as about twice as tall as it is wide, so a pane is
 // wider than it is tall when its width is more than twice its height; a
@@ -182,7 +182,7 @@ func splitTarget(ctx context.Context, h Herdr, anchor string, perTab int) (strin
 	if err != nil || len(l.Panes) == 0 {
 		return anchor, "right", 0.5
 	}
-	if pane, dir, ratio, ok := gridSplit(l.Panes, perTab); ok {
+	if _, pane, dir, ratio, ok := GridSplit(l.Panes, perTab); ok {
 		return pane, dir, ratio
 	}
 	best := l.Panes[0]
@@ -197,26 +197,27 @@ func splitTarget(ctx context.Context, h Herdr, anchor string, perTab int) (strin
 	return best.PaneID, "down", 0.5
 }
 
-// gridSplit places a new pane in the first free cell of the tab's grid,
-// in reading order. A pane holds the cells whose centres it covers; the
-// first in reading order is its own, and every later one is free. The
-// pane that covers the first free cell lies to the cell's left in the
-// same row, and is split right at the cell's left edge, or above it in
-// the same column, and is split down at the cell's top edge. So the
-// first row fills from left to right, its last pane holding the room of
-// the cells still empty, and each later row splits the panes above it: 6
-// panes are 2 rows of 3, with the slots in reading order. Grown this way,
-// no pane of a partial tab is narrower than a column: 2 panes of 6 are
-// one third and two thirds of the width, and 4 are the first column cut
-// in two beside two full-height columns. joinable joins only a tab on
-// the grid (onGrid); should a tab leave it during a spawn, the new pane
-// still fills the first free cell.
+// GridSplit places a new pane in the first free cell of the tab's grid,
+// in reading order; cell is its number, from 1 in reading order. nhm
+// move --tab puts a moved pane there too. A pane holds the cells whose
+// centres it covers; the first in reading order is its own, and every
+// later one is free. The pane that covers the first free cell lies to
+// the cell's left in the same row, and is split right at the cell's left
+// edge, or above it in the same column, and is split down at the cell's
+// top edge. So the first row fills from left to right, its last pane
+// holding the room of the cells still empty, and each later row splits
+// the panes above it: 6 panes are 2 rows of 3, with the slots in reading
+// order. Grown this way, no pane of a partial tab is narrower than a
+// column: 2 panes of 6 are one third and two thirds of the width, and 4
+// are the first column cut in two beside two full-height columns.
+// joinable joins only a tab on the grid (OnGrid); should a tab leave it
+// during a spawn, the new pane still fills the first free cell.
 //
 // herdr's panes tile the tab, so their bounds are the tab. pane.layout
 // gives the rects of the split tree in a zoomed tab too, and a closed
 // pane's room goes to its neighbour, so a tab with a closed pane gets
 // its gap filled first. ok is false when no cell is free.
-func gridSplit(panes []herdr.LayoutPane, perTab int) (pane, dir string, ratio float64, ok bool) {
+func GridSplit(panes []herdr.LayoutPane, perTab int) (cell int, pane, dir string, ratio float64, ok bool) {
 	x0, y0, cw, ch, cols, rows := cells(panes, perTab)
 	first := map[string]int{} // a pane's own cell: its row
 	for r := 0; r < rows; r++ {
@@ -231,17 +232,17 @@ func gridSplit(panes []herdr.LayoutPane, perTab int) (pane, dir string, ratio fl
 			case !held:
 				first[p.PaneID] = r
 			case row == r:
-				return p.PaneID, "right", (left - float64(p.Rect.X)) / float64(p.Rect.Width), true
+				return r*cols + c + 1, p.PaneID, "right", (left - float64(p.Rect.X)) / float64(p.Rect.Width), true
 			default:
-				return p.PaneID, "down", (top - float64(p.Rect.Y)) / float64(p.Rect.Height), true
+				return r*cols + c + 1, p.PaneID, "down", (top - float64(p.Rect.Y)) / float64(p.Rect.Height), true
 			}
 		}
 	}
-	return "", "", 0, false
+	return 0, "", "", 0, false
 }
 
 // gridSlack is how far, in terminal cells, a pane's edge may lie from its
-// grid line. gridSplit cuts within half a cell of the line, but herdr
+// grid line. GridSplit cuts within half a cell of the line, but herdr
 // lays a tab out again from the split ratios when it is resized, and the
 // rounding of nested splits adds up: about a cell more in a grid of 4
 // columns (ScarletOrchid's review, nhm-cxh).
@@ -268,16 +269,25 @@ func cells(panes []herdr.LayoutPane, perTab int) (x0, y0, cw, ch float64, cols, 
 // one row for --per-tab 3 lies on the lines of 6, and grows into it.
 func onGrid(ctx context.Context, h Herdr, anchor string, perTab int) bool {
 	l, err := h.PaneLayout(ctx, anchor)
-	if err != nil || len(l.Panes) == 0 {
+	if err != nil {
 		return false
 	}
-	x0, y0, cw, ch, _, _ := cells(l.Panes, perTab)
+	return OnGrid(l.Panes, perTab)
+}
+
+// OnGrid is onGrid for a tab's layout that the caller has read (nhm
+// move --tab): false for no panes.
+func OnGrid(panes []herdr.LayoutPane, perTab int) bool {
+	if len(panes) == 0 {
+		return false
+	}
+	x0, y0, cw, ch, _, _ := cells(panes, perTab)
 	// line is the grid line nearest to v, and whether v is near it.
 	line := func(v int, origin, size float64) (float64, bool) {
 		k := math.Round((float64(v) - origin) / size)
 		return k, math.Abs(float64(v)-origin-k*size) <= gridSlack
 	}
-	for _, p := range l.Panes {
+	for _, p := range panes {
 		r := p.Rect
 		left, ok1 := line(int(r.X), x0, cw)
 		right, ok2 := line(int(r.X)+int(r.Width), x0, cw)
