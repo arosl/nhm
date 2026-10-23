@@ -3,8 +3,8 @@
 // this directory and PROVENANCE.md. Local changes: this header; the agent
 // import path, with ntm's tmux.AgentType and its tmux.Agent* constants
 // written as agent.AgentType and its agent.AgentType* constants, as in
-// capability.go; TestOmpCapabilityProfile leaves out its quality-assignment
-// half, which drives ntm's Matcher (internal/assign/matcher.go, not taken).
+// capability.go (nhm-cvw); TestOmpCapabilityProfile's quality-assignment
+// half, which drives ntm's Matcher, came with matcher.go (nhm-y55).
 
 package assign
 
@@ -74,6 +74,29 @@ func TestOmpCapabilityProfile(t *testing.T) {
 	}
 	if got := GetAgentScoreByString("oh-my-pi", "feature"); got != 0.88 {
 		t.Errorf("GetAgentScoreByString(oh-my-pi, feature) = %.2f, want 0.88", got)
+	}
+
+	// Quality assignment: omp is the best candidate over a non-frontier
+	// profile, and loses to the vendor that is strongest at the task.
+	matcher := NewMatcher()
+	pick := func(task TaskType, agents ...Agent) agent.AgentType {
+		t.Helper()
+		result := matcher.AssignTasks([]Bead{{ID: "b1", Title: string(task), TaskType: task, Priority: 2}}, agents, StrategyQuality)
+		if len(result) != 1 {
+			t.Fatalf("expected one assignment for %s, got %d", task, len(result))
+		}
+		return result[0].Agent.AgentType
+	}
+	omp := Agent{ID: "omp", AgentType: agent.AgentTypeOmp, Idle: true}
+	ollama := Agent{ID: "oll", AgentType: agent.AgentTypeOllama, Idle: true}
+	if got := pick(TaskFeature, ollama, omp); got != agent.AgentTypeOmp {
+		t.Errorf("feature: picked %s over omp, want omp", got)
+	}
+	if got := pick(TaskRefactor, omp, Agent{ID: "cc", AgentType: agent.AgentTypeClaudeCode, Idle: true}); got != agent.AgentTypeClaudeCode {
+		t.Errorf("refactor: picked %s, want claude (0.95 > omp 0.85)", got)
+	}
+	if got := pick(TaskRefactor, omp, Agent{ID: "cod", AgentType: agent.AgentTypeCodex, Idle: true}); got != agent.AgentTypeOmp {
+		t.Errorf("refactor: picked %s, want omp (0.85 > codex 0.75)", got)
 	}
 }
 
