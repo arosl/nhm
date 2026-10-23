@@ -29,6 +29,23 @@ func LimitPattern(kind string) *regexp.Regexp {
 	return kinds.Lookup(kind).LimitPattern()
 }
 
+// LastLines returns the last n lines of a screen that are not blank. A
+// short session's screen (Claude's) has its text at the top, then a gap of
+// blank lines above the prompt box at the bottom, so the screen's last n
+// lines can all be gap and box (nhm-1q7).
+func LastLines(text string, n int) string {
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) != "" {
+			kept = append(kept, line)
+		}
+	}
+	if n = max(n, 0); len(kept) > n {
+		kept = kept[len(kept)-n:]
+	}
+	return strings.Join(kept, "\n")
+}
+
 // FindLimit returns the last line of text that shows the kind's limit
 // message, trimmed to 200 bytes, or "".
 func FindLimit(kind, text string) string {

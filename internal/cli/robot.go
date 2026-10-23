@@ -20,8 +20,8 @@ import (
 	"github.com/arosl/nhm/internal/robot"
 )
 
-// healthLines is how many visible lines --robot-health reads of each agent
-// that is not working, as nhm limits does.
+// healthLines is how many visible lines that are not blank --robot-health
+// reads of each agent that is not working, as nhm limits does.
 const healthLines = 15
 
 // Robot exit codes, ntm's (ExitCodeForResponse): 0 success, 2 only for
@@ -137,19 +137,19 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		return robotWrite(stdout, snapshot.ActivityFor(one, *ws, *format, now), robotOK)
 	case *health != "":
 		// As ntm, read the screens now: each agent that is not working,
-		// its visible lines, for nhm's limit recogniser (nhm-8l6).
+		// its visible lines, for nhm's limit recogniser (nhm-8l6). The
+		// whole screen: its last lines can be blank (nhm-1q7).
 		reads, errs := map[string]herdr.PaneRead{}, map[string]error{}
 		for _, a := range one.Agents {
 			if a.WorkspaceID != ws.ID || a.State == herdr.StatusWorking {
 				continue
 			}
-			n := healthLines
-			read, err := r.herdr.AgentRead(ctx, herdr.AgentReadParams{Target: a.PaneID, Source: herdr.ReadVisible, Lines: &n})
+			read, err := r.herdr.AgentRead(ctx, herdr.AgentReadParams{Target: a.PaneID, Source: herdr.ReadVisible})
 			if err != nil {
 				errs[a.PaneID] = err
 				continue
 			}
-			read.Text = stripControl(read.Text)
+			read.Text = quota.LastLines(stripControl(read.Text), healthLines)
 			reads[a.PaneID] = read
 		}
 		// The quota sources nhm quota reads, live, for a rate limit's wait.

@@ -179,6 +179,35 @@ func TestLimits(t *testing.T) {
 	if got := FindLimit("pi", "HTTP 429 Too Many Requests"); got == "" {
 		t.Fatal("generic limit missed")
 	}
+	// A new agent's first reply on Claude's short-session screen (ACFS
+	// E13, nhm-1q7): the limit line at the top, then a gap of blank lines
+	// above the prompt box (the reply's ⎿ has a no-break space after it,
+	// as Claude prints it). The screen's last 15 lines miss it; its last
+	// 15 lines that are not blank hold it.
+	rule := strings.Repeat("─", 80)
+	rows := []string{"✻ Crunched for 1s · done 3:40 PM", "", "❯ Go on.", "  ⎿ \xc2\xa0You've hit your limit · resets 5pm (UTC)", "",
+		"✻ Churned for 1s · done 3:40 PM"}
+	rows = append(rows, make([]string, 13)...)
+	rows = append(rows, "   ", strings.Repeat(" ", 60)+"◉ xhigh · /effort", rule, "❯ ", rule, "  ⏵⏵ bypass permissions on (shift+tab to cycle)")
+	screen = strings.Join(rows, "\n") + "\n"
+	all := strings.Split(screen, "\n")
+	if got := FindLimit("claude", strings.Join(all[len(all)-15:], "\n")); got != "" {
+		t.Fatalf("the fixture's last 15 lines hold a limit: %q", got)
+	}
+	if got := FindLimit("claude", LastLines(screen, 15)); !strings.HasSuffix(got, "You've hit your limit · resets 5pm (UTC)") {
+		t.Fatalf("limit above the gap = %q", got)
+	}
+	// The window still counts lines: the limit is the 7th line from the
+	// bottom that is not blank (a line of spaces is blank).
+	if got := FindLimit("claude", LastLines(screen, 6)); got != "" {
+		t.Fatalf("6 lines = %q", got)
+	}
+	if got := FindLimit("claude", LastLines(screen, 7)); got == "" {
+		t.Fatal("7 lines missed the limit")
+	}
+	if got := LastLines("a\n\n  \nb\nc\n", 2); got != "b\nc" {
+		t.Fatalf("LastLines = %q", got)
+	}
 	s, err := LoadSeen(filepath.Join(t.TempDir(), "limits", "seen.json"))
 	if err != nil {
 		t.Fatal(err)

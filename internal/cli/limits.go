@@ -22,12 +22,12 @@ const limitsUsage = `Usage: nhm limits [session] [--once | --loop [--interval D]
                   [--mail-from NAME [--mail-to NAME]] [--dry-run] [--socket PATH] [--json]
 
 Report each agent that a usage or rate limit stopped: one that is not
-working and whose screen's last --lines lines (default 15) show its kind's
-limit message. Each message is reported once, until it leaves the screen.
-With --mail-from NAME, Agent Mail carries one message per limit event
-from NAME to --mail-to (default NAME itself, the operator's agent), in the
-agent's project. A match never starts an action: an agent can print a fake
-limit line. --once (the default) runs one pass; --loop repeats it.
+working and whose screen's last --lines lines that are not blank (default
+15) show its kind's limit message. Each message is reported once, until it
+leaves the screen. With --mail-from NAME, Agent Mail carries one message
+per limit event from NAME to --mail-to (default NAME itself, the
+operator's agent), in the agent's project. A match never starts an action:
+an agent can print a fake limit line. --once (the default) runs one pass; --loop repeats it.
 `
 
 // limitReport is one agent newly stopped at a limit.
@@ -48,7 +48,7 @@ func runLimits(args []string, stdout, stderr io.Writer) int {
 	fs.Bool("once", false, "one pass (the default)")
 	loop := fs.Bool("loop", false, "repeat every --interval")
 	interval := fs.Duration("interval", time.Minute, "time between passes with --loop")
-	lines := fs.Int("lines", 15, "screen lines to read")
+	lines := fs.Int("lines", 15, "screen lines to read, not counting blank ones")
 	mailFrom := fs.String("mail-from", "", "Agent Mail sender for the limit messages")
 	mailTo := fs.String("mail-to", "", "Agent Mail recipient (default: the sender)")
 	dryRun := fs.Bool("dry-run", false, "say what would be reported")
@@ -155,13 +155,13 @@ func limitsPass(ctx context.Context, r *reader, session string, lines int, seenP
 		if a.State == herdr.StatusWorking {
 			continue
 		}
-		n := lines
-		read, err := r.herdr.AgentRead(ctx, herdr.AgentReadParams{Target: a.PaneID, Source: herdr.ReadVisible, Lines: &n})
+		// The whole screen: its last lines can be blank (nhm-1q7).
+		read, err := r.herdr.AgentRead(ctx, herdr.AgentReadParams{Target: a.PaneID, Source: herdr.ReadVisible})
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("could not read %s: %v", a.PaneID, err))
 			continue
 		}
-		line := quota.FindLimit(a.Kind, stripControl(read.Text))
+		line := quota.FindLimit(a.Kind, quota.LastLines(stripControl(read.Text), lines))
 		if dryRun {
 			if line != "" && seen.Lines[a.PaneID] != line {
 				reports = append(reports, limitReport{PaneID: a.PaneID, Slot: a.Slot, Name: label(a), Kind: a.Kind, Line: line})

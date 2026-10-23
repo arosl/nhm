@@ -174,3 +174,49 @@ func TestLimitsVerb(t *testing.T) {
 		t.Fatalf("--mail-to without --mail-from = %d", code)
 	}
 }
+
+// shortScreen is a new Claude's screen at a limit (ACFS E13, nhm-1q7): the
+// limit reply at the top, then a gap of blank lines above the prompt box,
+// so the screen's last 15 lines show no limit.
+func shortScreen() string {
+	rule := strings.Repeat("─", 80)
+	rows := []string{"❯ Go on.", "  ⎿  You've hit your limit · resets 5pm (UTC)", "", "✻ Churned for 1s · done 3:40 PM"}
+	rows = append(rows, make([]string, 14)...)
+	rows = append(rows, rule, "❯ ", rule, "  ⏵⏵ bypass permissions on (shift+tab to cycle)")
+	return strings.Join(rows, "\n") + "\n"
+}
+
+// visibleRead answers agent.read with the screen as herdr does: a lines
+// value keeps only the screen's last lines.
+func visibleRead(r herdrtest.Request, screen string) map[string]any {
+	var p struct {
+		Target string
+		Lines  *int
+	}
+	_ = json.Unmarshal(r.Params, &p)
+	if p.Lines != nil {
+		rows := strings.Split(strings.TrimSuffix(screen, "\n"), "\n")
+		screen = strings.Join(rows[max(0, len(rows)-*p.Lines):], "\n") + "\n"
+	}
+	return map[string]any{"type": "pane_read", "read": map[string]any{"pane_id": p.Target, "tab_id": "w1:t1", "workspace_id": "w1",
+		"source": "visible", "format": "text", "revision": 1, "text": screen, "truncated": false}}
+}
+
+// nhm limits finds a limit line above a blank gap and the prompt box: it
+// reads the whole screen and counts only the lines that are not blank
+// (nhm-1q7).
+func TestLimitsShortScreen(t *testing.T) {
+	s := quotaInstance(t)
+	s.Handle("agent.read", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		return visibleRead(r, shortScreen()), nil
+	})
+	code, out, errOut := runVerb(runLimits, "--dry-run", "--socket", s.SocketPath)
+	if code != 0 || !strings.Contains(out, "IcyKnoll (claude, w1:p1) would be reported: ⎿  You've hit your limit · resets 5pm (UTC)") {
+		t.Fatalf("dry run = %d\n%s%s", code, out, errOut)
+	}
+	// --lines still bounds the window: the limit is the 6th line from the
+	// bottom that is not blank.
+	if code, out, errOut := runVerb(runLimits, "--dry-run", "--lines", "5", "--socket", s.SocketPath); code != 0 || strings.Contains(out, "w1:p1") {
+		t.Fatalf("--lines 5 = %d\n%s%s", code, out, errOut)
+	}
+}
