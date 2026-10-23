@@ -424,6 +424,39 @@ var claudeTrustWrapped = map[int]string{
 `,
 }
 
+// codexHooksReview is codex-cli 0.162.1's dialog when a hook in its
+// hooks.json is new or changed, as herdr 0.9.3 reads the screen (ACFS
+// acfs-akb2, nhm-5as).
+const codexHooksReview = `
+  Hooks need review
+  1 hook is new or changed.
+  Hooks can run outside the sandbox after you trust them.
+
+
+› 1. Review hooks
+  2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+
+  enter confirm · esc skip
+`
+
+func TestCodexDialog(t *testing.T) {
+	x, _ := Get("codex")
+	if got := x.Dialog(codexHooksReview); !strings.HasPrefix(got, "Codex's 'Hooks need review' dialog") {
+		t.Fatalf("hooks dialog = %q", got)
+	}
+	// Wrapped in a narrow pane, it reads the same.
+	narrow := strings.Replace(codexHooksReview, "Continue without trusting", "Continue without\n     trusting", 1)
+	if got := x.Dialog(narrow); got == "" {
+		t.Fatal("the wrapped hooks dialog is not named")
+	}
+	for _, screen := range []string{"Trust this folder?\n› 1. Trust and continue\n  2. Quit\n", "› Ask Codex to do anything\n"} {
+		if got := x.Dialog(screen); got != "" {
+			t.Fatalf("%q names %q", screen, got)
+		}
+	}
+}
+
 func TestTrustKeysWrapped(t *testing.T) {
 	c, _ := Get("claude")
 	x, _ := Get("codex")

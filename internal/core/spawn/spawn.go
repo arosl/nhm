@@ -589,8 +589,12 @@ func startAgent(ctx context.Context, env Env, req Request, t *Target, a kinds.Ad
 		return err
 	}
 	ready := func() (herdr.AgentInfo, error) {
-		return env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: t.PaneID,
+		info, err := env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: t.PaneID,
 			Until: []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusBlocked}, TimeoutMS: &ms})
+		if herdr.ErrorCode(err) == herdr.CodeTimeout && a.Dialog != nil {
+			err = namedDialog(ctx, env, t.PaneID, a, err)
+		}
+		return info, err
 	}
 	info, err := ready()
 	if err != nil {
@@ -633,6 +637,22 @@ func startAgent(ctx context.Context, env Env, req Request, t *Target, a kinds.Ad
 		return fmt.Errorf("herdr still reports the launch as pending")
 	}
 	return nil
+}
+
+// namedDialog names the dialog that the agent waits at when the ready
+// wait ran out (err) and the kind knows it on the pane's last lines
+// (kinds.Adapter.Dialog): herdr reads some dialogs as unknown, not blocked,
+// so agent.wait never returns for them (nhm-5as). Otherwise it is err.
+func namedDialog(ctx context.Context, env Env, pane string, a kinds.Adapter, err error) error {
+	n := 40
+	screen, rerr := env.Herdr.AgentRead(ctx, herdr.AgentReadParams{Target: pane, Source: herdr.ReadRecent, Lines: &n})
+	if rerr != nil {
+		return err
+	}
+	if d := a.Dialog(screen.Text); d != "" {
+		return fmt.Errorf("the agent waits at %s, which herdr does not report: answer it in pane %s (%w)", d, pane, err)
+	}
+	return err
 }
 
 func trustHint(req Request, a kinds.Adapter) string {

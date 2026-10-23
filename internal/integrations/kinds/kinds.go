@@ -139,6 +139,10 @@ type Adapter struct {
 	// keys that say yes, or nil when the screen is not exactly that
 	// dialog (spawn --trust-folder).
 	TrustKeys func(screen string) []string `json:"-"`
+	// Dialog names a startup dialog of the kind that herdr does not read
+	// as blocked, on the pane's last lines, or "" when they show none
+	// (spawn's ready wait that ran out, nhm-5as).
+	Dialog func(screen string) string `json:"-"`
 	// Cannot lists what nhm cannot prove for this kind.
 	Cannot []string `json:"cannot,omitempty"`
 	// Builtin is false for a kind from config.
@@ -432,6 +436,17 @@ func codexTrust(screen string) []string {
 	return nil
 }
 
+// codexDialog names Codex's question when a hook in its hooks.json is new
+// or changed. herdr 0.9.3 reads it as unknown, not blocked (ACFS
+// acfs-akb2), so a wait for ready runs out with no word of it.
+func codexDialog(screen string) string {
+	flat := flatScreen(screen)
+	if strings.Contains(flat, "Hooks need review") && strings.Contains(flat, "Continue without trusting") {
+		return "Codex's 'Hooks need review' dialog (a hook in hooks.json is new or changed; Codex's /hooks reviews them)"
+	}
+	return ""
+}
+
 func fromCodex(e Event, bound string, launch bool) Decision {
 	d := codex.Classify(codex.Event{HookEvent: e.HookEvent, Source: e.Source, SessionID: e.SessionID}, bound, launch)
 	return Decision{Verdict: d.Verdict, Reason: d.Reason, Compacted: d.Compacted, Resumed: d.Resumed, TakeSession: d.TakeSession}
@@ -461,7 +476,7 @@ func builtins() []Adapter {
 			// --no-daemon runs Codex's hooks in its own pane (F.22, exp.3).
 			// ntm's launch: --dangerously-bypass-approvals-and-sandbox and
 			// model_reasoning_effort xhigh; --no-daemon is the fork's (F.22).
-			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Flags: []string{"cod"},
+			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Dialog: codexDialog, Flags: []string{"cod"},
 			LaunchArgs: []string{"--no-daemon", "--dangerously-bypass-approvals-and-sandbox"}, ModelFlag: "--model",
 			EffortArgs: []string{"-c", "model_reasoning_effort={effort}"}, DefaultEffort: "xhigh",
 			ResumeArgv:  []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "{session}"},

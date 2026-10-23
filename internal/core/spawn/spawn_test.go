@@ -50,6 +50,8 @@ type fakeHerdr struct {
 	stale int
 	again bool
 	keyed bool
+	// waitErr fails every agent.wait (herdr's timeout, say).
+	waitErr error
 	// screen is what the pane shows; scrollback the lines above it, which
 	// a recent read gives too.
 	screen     string
@@ -244,6 +246,9 @@ func (f *fakeHerdr) AgentWait(_ context.Context, p herdr.AgentWaitParams) (herdr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	a := f.agents[p.Target]
+	if f.waitErr != nil {
+		return herdr.AgentInfo{}, f.waitErr
+	}
 	if f.blocked {
 		f.blocked = false
 		a.AgentStatus = herdr.StatusBlocked
@@ -771,6 +776,38 @@ func TestTrustFolderAfterTheKeys(t *testing.T) {
 	if got := trust(func(w *world) { w.h.stale = 1 << 20 }, time.Second); got.Status != StatusUnresolved ||
 		!strings.Contains(got.Error, "still waits at a dialog after nhm answered the folder-trust question") {
 		t.Fatalf("not answered = %+v", got)
+	}
+}
+
+// herdr reads Codex's 'Hooks need review' dialog as unknown, so the ready
+// wait runs out (nhm-5as): the error names the dialog the kind knows on
+// the pane, and keeps herdr's timeout. Another screen, or a kind that
+// knows no such dialog, keeps the timeout alone.
+func TestReadyTimeoutNamesTheDialog(t *testing.T) {
+	start := func(kind, screen string) Target {
+		w := newWorld(t)
+		w.h.waitErr = &herdr.Error{Method: "agent.wait", Code: herdr.CodeTimeout, Message: "agent did not reach the state"}
+		w.h.screen = screen
+		r := req(Want{Kind: kind, Count: 1})
+		r.NoKickoff = true
+		res, err := Spawn(context.Background(), w.env, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Targets[0]
+	}
+	hooks := "  Hooks need review\n  1 hook is new or changed.\n\n› 1. Review hooks\n  2. Trust all and continue\n" +
+		"  3. Continue without trusting (hooks won't run)\n"
+	got := start("codex", hooks)
+	if got.Status != StatusUnresolved || !strings.Contains(got.Error, "the agent waits at Codex's 'Hooks need review' dialog") ||
+		!strings.Contains(got.Error, "answer it in pane "+got.PaneID) || !strings.Contains(got.Error, "agent did not reach the state") {
+		t.Fatalf("hooks dialog = %+v", got)
+	}
+	for _, c := range []struct{ kind, screen string }{{"codex", "› Ask Codex to do anything\n"}, {"claude", hooks}} {
+		if got := start(c.kind, c.screen); got.Status != StatusUnresolved || strings.Contains(got.Error, "Hooks need review") ||
+			!strings.Contains(got.Error, "agent did not reach the state") {
+			t.Fatalf("%s = %+v", c.kind, got)
+		}
 	}
 }
 
