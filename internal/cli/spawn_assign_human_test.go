@@ -94,11 +94,11 @@ func TestKickoffsNeedAStartedAgent(t *testing.T) {
 	ie := &instanceEnv{inst: inst, db: db}
 	a := &humanAssign{}
 	res := &spawn.Result{Targets: []spawn.Target{{Slot: "2.1", Status: spawn.StatusFailed}}}
-	if n, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md."); n != 0 || err != nil {
+	if n, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md.", nil); n != 0 || err != nil {
 		t.Fatalf("no agent started: %d, %v", n, err)
 	}
 	res.Targets[0].Ready = true
-	if _, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md."); err == nil {
+	if _, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md.", nil); err == nil {
 		t.Fatal("a started agent under the Bash: no owner check")
 	}
 }

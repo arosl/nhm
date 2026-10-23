@@ -68,7 +68,11 @@ gets its identity line, the kickoff and --init-prompt after the
 assignment. If an agent does not start, the others get the kickoff alone
 and nothing is assigned. A planned bead that is not claimed and sent makes
 the exit 1; a delivery whose outcome is unknown is never sent again. A
-rerun of the same --op-id assigns nothing.
+rerun of the same --op-id starts nothing, and refuses while the first run
+still runs. If the first run reached none of its agents (it ended between
+the spawn and the assignment), the rerun assigns as a first run does.
+Otherwise each agent that no prompt or bead reached, and that is still
+ready for a prompt, gets its kickoff alone; no bead is assigned again.
 
 Agents of one project share a tab, a pane each, up to --per-tab (6): a new
 agent joins a tab of its project that has room, or opens a tab. A tab with
@@ -611,6 +615,19 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 			return output(stdout, stderr, asJSON, env, errors.New("--assign needs your yes (or --yes)"), exitRefused, nil)
 		}
 	}
+	// --assign under an --op-id holds the operation's lock to its last
+	// send: a rerun that gets it knows that this run is over, and that its
+	// records are final (nhm-vcf).
+	if assign != nil && !req.DryRun && req.OperationID != "" {
+		unlock, err := store.LockOperation(ie.inst.Dir, req.OperationID)
+		if errors.Is(err, store.ErrOperationBusy) {
+			err = fmt.Errorf("operation %s still runs in another nhm process; nothing started (rerun it when that one ends)", req.OperationID)
+		}
+		if err != nil {
+			return output(stdout, stderr, asJSON, env, err, exitRefused, nil)
+		}
+		defer unlock()
+	}
 	res, code, err := spawnUnderOwner(ctx, ie, &req, project)
 	env.Scope, env.OperationID, env.Result = req.Scope, res.OperationID, res
 	env.Warnings = append(res.Admission.Warnings, res.Warnings...)
@@ -619,7 +636,7 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		if assign != nil && !req.DryRun {
 			// The spawn sent no kickoff for --assign: an agent that started
 			// before the error (the operation's last write) gets it now.
-			if _, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff); kerr != nil {
+			if _, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, nil); kerr != nil {
 				err = fmt.Errorf("%w; kickoff: %v", err, kerr)
 			}
 		}
@@ -649,20 +666,54 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		}
 		return output(stdout, stderr, asJSON, env, err, exitError, nil)
 	}
+	// untouched is a replay's agents that the first run never reached; nil
+	// on a first run.
+	var untouched []int
 	switch {
 	case res.Replayed:
-		// Nothing started, so nothing is assigned: the first run did that.
+		// Nothing started. The first run is over (the lock), so its records
+		// say which agents it reached. A run that reached none ended
+		// between the spawn and the assignment: the ready path below runs,
+		// as it would have. Otherwise each agent it did not reach gets its
+		// kickoff alone, as an agent with no bead does: no bead is
+		// assigned again.
+		var uerr error
+		untouched, uerr = replayUntouched(ctx, ie, &res)
 		env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: []robot.SpawnAssignment{},
 			Skipped: []spawnassign.HumanSkip{}}
-		return output(stdout, stderr, asJSON, env, nil, spawnExit(res), func(w io.Writer) {
-			printSpawn(w, res)
-			fmt.Fprintln(w, "assignment: the operation ran before; nothing is assigned again")
-		})
+		if uerr != nil {
+			return fail(fmt.Errorf("assignment: the operation ran before, and its agents' records cannot be read; nothing is sent: %w", uerr))
+		}
+		if len(untouched) == 0 {
+			return output(stdout, stderr, asJSON, env, nil, spawnExit(res), func(w io.Writer) {
+				printSpawn(w, res)
+				fmt.Fprintln(w, "assignment: the operation ran before; nothing is assigned again")
+			})
+		}
+		// A target that is not ready is never untouched: a partial spawn
+		// takes this branch too, and gets the kickoff alone, as at first.
+		if len(untouched) < len(res.Targets) {
+			text := kickoff
+			if res.Ready() {
+				text = assign.prefix(kickoff)
+			}
+			kicked, kerr := assign.kickoffs(ctx, ie, req, &res, nil, text, untouched)
+			if kerr != nil {
+				env.Warnings = append(env.Warnings, "kickoff of the agents the first run did not reach: "+kerr.Error())
+			}
+			env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: []robot.SpawnAssignment{},
+				Skipped: []spawnassign.HumanSkip{}}
+			return output(stdout, stderr, asJSON, env, nil, spawnExit(res), func(w io.Writer) {
+				printSpawn(w, res)
+				fmt.Fprintf(w, "assignment: the operation ran before; %d of its agents had no prompt, and %d got the kickoff now; "+
+					"no bead is assigned again\n", len(untouched), kicked)
+			})
+		}
 	case !res.Ready():
 		// ntm stops when an agent is not ready, before the init prompt:
 		// the agents that are up get the kickoff the spawn would have
 		// sent, and nothing is assigned.
-		_, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff)
+		_, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, nil)
 		env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: []robot.SpawnAssignment{},
 			Skipped: []spawnassign.HumanSkip{}}
 		show = func(w io.Writer) { printSpawn(w, res) }
@@ -686,7 +737,7 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	out := spawn.SpawnOutput(res, nil, "json", time.Now())
 	assignPhase(ctx, ie, res, scope, plan, prefix, hooks, &out)
 	outcome := newHumanOutcome(&out, sel)
-	kicked, kerr := assign.kickoffs(ctx, ie, req, &res, out.Assignments, prefix)
+	kicked, kerr := assign.kickoffs(ctx, ie, req, &res, out.Assignments, prefix, untouched)
 	if kerr != nil {
 		env.Warnings = append(env.Warnings, "kickoff of the agents without a bead: "+kerr.Error())
 	}
@@ -700,6 +751,9 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		Skipped: append([]spawnassign.HumanSkip{}, sel.Skipped...)}
 	show = func(w io.Writer) {
 		printSpawn(w, res)
+		if res.Replayed {
+			fmt.Fprintln(w, "assignment: the operation ran before, but none of its agents had a prompt; assigning now")
+		}
 		assign.print(w, stderr, ready, outcome.assigned+kicked, outcome, sel)
 	}
 	if err := outcome.err(); err != nil {

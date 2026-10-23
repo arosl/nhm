@@ -376,7 +376,7 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 
 	// 6. The kickoff, through send.
 	if !kick.empty() {
-		sendKickoff(ctx, env, req, res, t, kick.text(req, t))
+		sendKickoff(ctx, env, req, res, t, kick.text(req, t), nil)
 	}
 	return true
 }
@@ -386,13 +386,23 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 // spawn --assign calls it after the assignment for an agent that got no
 // bead (nhm-cvw). A failure is a warning in res.
 func Kickoff(ctx context.Context, env Env, req Request, res *Result, t *Target, task string) {
-	sendKickoff(ctx, env, req, res, t, task)
+	sendKickoff(ctx, env, req, res, t, task, nil)
+	_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
+}
+
+// KickoffGated is Kickoff for an agent that a replay of spawn --assign
+// found untouched (nhm-vcf): the send's delivery gate must find it ready,
+// and its binding at FirstGeneration, so an agent that got a prompt
+// since, or a later occupant, gets nothing.
+func KickoffGated(ctx context.Context, env Env, req Request, res *Result, t *Target, task string) {
+	sendKickoff(ctx, env, req, res, t, task, map[string]int64{t.BindingID: FirstGeneration})
 	_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
 }
 
 // sendKickoff sends t its kickoff through send: the identity preamble,
-// then task.
-func sendKickoff(ctx context.Context, env Env, req Request, res *Result, t *Target, task string) {
+// then task. With expect nil the send takes the agent in any state;
+// otherwise the gate applies, and expect freezes the binding.
+func sendKickoff(ctx context.Context, env Env, req Request, res *Result, t *Target, task string, expect map[string]int64) {
 	if env.Send == nil {
 		return
 	}
@@ -405,8 +415,8 @@ func sendKickoff(ctx context.Context, env Env, req Request, res *Result, t *Targ
 		enr.Query = task
 	}
 	sr, err := env.Send(ctx, send.Request{Session: req.Session, WorkspaceID: res.WorkspaceID, ProjectRoot: req.ProjectRoot,
-		Selector: send.Selector{Names: []string{t.MailName}}, Message: text, WhenAny: true, Source: history.SourceCLI,
-		Scope: req.Scope, Enrich: enr})
+		Selector: send.Selector{Names: []string{t.MailName}}, Message: text, WhenAny: expect == nil, Expect: expect,
+		Source: history.SourceCLI, Scope: req.Scope, Enrich: enr})
 	switch {
 	case err != nil:
 		res.Warnings = append(res.Warnings, fmt.Sprintf("%s: kickoff not sent: %v", t.MailName, err))
@@ -883,6 +893,30 @@ func stored(ctx context.Context, db *store.DB, opID string) (Result, error) {
 	return res, rows.Err()
 }
 
+// ReachedBindings are the bindings of a spawn's targets that a receipt of
+// another operation names: a send (a kickoff, a bead's dispatch, nhm
+// send), a reap. send writes its receipt before it types anything, so a
+// binding that is not in the set has had no prompt from nhm since the
+// spawn (nhm-vcf).
+func ReachedBindings(ctx context.Context, db *store.DB, opID string) (map[string]bool, error) {
+	rows, err := db.SQL().QueryContext(ctx, `SELECT DISTINCT r.binding_id FROM receipts r
+		JOIN receipts s ON s.binding_id = r.binding_id
+		WHERE s.operation_id = ? AND r.operation_id != ?`, opID, opID)
+	if err != nil {
+		return nil, fmt.Errorf("spawn: receipts of %s's agents: %w", opID, err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("spawn: receipts of %s's agents: %w", opID, err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func nullStr(s string) any {
 	if s == "" {
 		return nil
@@ -890,12 +924,16 @@ func nullStr(s string) any {
 	return s
 }
 
-// nullGen is generation 1 for a binding this spawn created.
+// FirstGeneration is the generation of a binding that spawn creates
+// (bindings.Create); a later occupant counts up.
+const FirstGeneration = 1
+
+// nullGen is FirstGeneration for a binding this spawn created.
 func nullGen(bindingID string) any {
 	if bindingID == "" {
 		return nil
 	}
-	return 1
+	return FirstGeneration
 }
 
 func ptr[T any](v T) *T { return &v }

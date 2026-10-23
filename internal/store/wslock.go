@@ -12,7 +12,8 @@ import (
 )
 
 // LocksDir is the instance directory's lock files: one per binding
-// (send's target lock) and one per workspace.
+// (send's target lock), one per workspace and one per running operation
+// (LockOperation).
 const LocksDir = "locks"
 
 // ErrWorkspaceBusy means another nhm process holds the workspace lock

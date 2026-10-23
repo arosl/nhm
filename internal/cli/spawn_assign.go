@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -451,9 +452,12 @@ func kickoffSkips(rows []robot.SpawnAssignment, get func(beadID string) *assignm
 
 // kickoffs sends the kickoff, prefix, to each ready agent of res that is
 // not in kickoffSkips of rows (nil: every ready agent), under the owner
-// lock as every send runs. It returns how many were submitted.
+// lock as every send runs, in any state of the agent. With only, a
+// replay's untouched agents (replayUntouched, nhm-vcf), it sends to those
+// alone, and through the delivery gate (spawn.KickoffGated). It returns
+// how many were submitted.
 func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.Request, res *spawn.Result, rows []robot.SpawnAssignment,
-	prefix string) (int, error) {
+	prefix string, only []int) (int, error) {
 	if strings.TrimSpace(prefix) == "" {
 		return 0, nil
 	}
@@ -464,7 +468,7 @@ func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.R
 	claimed := kickoffSkips(rows, get)
 	var targets []int
 	for i, t := range res.Targets {
-		if t.Ready && !claimed[t.Slot] {
+		if t.Ready && !claimed[t.Slot] && (only == nil || slices.Contains(only, i)) {
 			targets = append(targets, i)
 		}
 	}
@@ -484,7 +488,11 @@ func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.R
 		}
 		for _, i := range targets {
 			t := &res.Targets[i]
-			spawn.Kickoff(ctx, env, req, res, t, prefix)
+			if only != nil {
+				spawn.KickoffGated(ctx, env, req, res, t, prefix)
+			} else {
+				spawn.Kickoff(ctx, env, req, res, t, prefix)
+			}
 			if t.KickoffStatus == send.StatusSubmitted || t.KickoffStatus == send.StatusPossiblySubmitted {
 				sent++
 			}
@@ -492,6 +500,62 @@ func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.R
 		return nil
 	})
 	return sent, err
+}
+
+// replayUntouched is the target indexes of a replayed spawn --assign whose
+// agents nothing has reached (nhm-vcf): the first run died after the
+// spawn and before it sent them anything. The caller holds the
+// operation's lock, so the first run is over and its records are final.
+// An agent is untouched when its target is ready, no kickoff is recorded,
+// no receipt of another operation and no ledger row of any status names
+// its binding, and the binding is still the spawn's occupant (active at
+// its first generation, in its pane and the spawn's workspace) with
+// herdr's agent ready for a prompt; every other agent counts as touched.
+// It fills res.WorkspaceID, which the stored outcome does not keep, from
+// the first binding. A read that fails is an error: nothing is sent then.
+func replayUntouched(ctx context.Context, ie *instanceEnv, res *spawn.Result) ([]int, error) {
+	bs := bindings.NewStore(ie.db)
+	for _, t := range res.Targets {
+		if t.BindingID == "" {
+			continue
+		}
+		b, err := bs.Get(ctx, t.BindingID)
+		if err != nil {
+			return nil, fmt.Errorf("the binding of %s: %w", t.MailName, err)
+		}
+		res.WorkspaceID = b.WorkspaceID
+		break
+	}
+	reached, err := spawn.ReachedBindings(ctx, ie.db, res.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	ledger, err := assignment.LoadStoreStrictReadOnly(ie.inst.ID)
+	if err != nil {
+		return nil, fmt.Errorf("the assignment ledger: %w", err)
+	}
+	for _, row := range ledger.List() {
+		reached[strings.TrimSpace(row.OccupancyKey)] = true
+		if id, _, err := spawnassign.ParseTarget(row.DispatchTarget); err == nil {
+			reached[id] = true
+		}
+	}
+	topo := spawnassign.Topology{Bindings: bs, Herdr: ie.herdr, WorkspaceID: res.WorkspaceID}
+	untouched := []int{}
+	for i, t := range res.Targets {
+		if !t.Ready || t.BindingID == "" || t.KickoffOp != "" || t.KickoffStatus != "" || reached[t.BindingID] {
+			continue
+		}
+		safe, err := topo.ObserveOccupant(ctx, spawnassign.Occupant{BindingID: t.BindingID, Generation: spawn.FirstGeneration,
+			PaneID: t.PaneID})
+		if err != nil {
+			return nil, fmt.Errorf("observe %s: %w", t.MailName, err)
+		}
+		if safe {
+			untouched = append(untouched, i)
+		}
+	}
+	return untouched, nil
 }
 
 // identityPreamble is the human form's Preamble: each agent's work
