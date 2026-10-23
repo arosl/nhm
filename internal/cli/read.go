@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"regexp"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/snapshot"
@@ -123,104 +120,6 @@ func runRead(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(w)
 		}
 	})
-}
-
-const watchUsage = `Usage: nhm watch <session> [name|slot ...] [--lines N] [--interval D] [--count N] [--socket PATH]
-
-Follow the output of a session's agents (or the named ones): every
-interval, read each pane's last lines and print the lines that are new.
-
-A pane's last 10 lines are its live region: the prompt box, status line
-and spinner that a working agent redraws in place. watch prints a line
-only once it is above them, so an idle agent's last few lines wait for
-its next output. --lines N counts the lines above them (fewer when the
-pane holds fewer). The first round prints those lines. A later round
-prints a line when its text is not in the last read, so a line that the
-agent redraws prints once, with its new text, and a line whose exact
-text is already there does not print again. Blank lines are left out.
-`
-
-func runWatch(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, watchUsage) }
-	lines := fs.Int("lines", 20, "lines above the live region, per pane")
-	interval := fs.Duration("interval", 2*time.Second, "time between reads")
-	count := fs.Int("count", 0, "stop after N rounds (0: until interrupted)")
-	socket := fs.String("socket", "", "herdr API socket")
-	pos, err := parseInterleaved(fs, args)
-	if err != nil {
-		return exitRefused
-	}
-	if len(pos) < 1 || *lines <= 0 || *interval <= 0 {
-		fmt.Fprint(stderr, watchUsage)
-		return exitRefused
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	r, err := openReader(*socket, false)
-	if err != nil {
-		fmt.Fprintf(stderr, "nhm watch: %v\n", err)
-		return exitError
-	}
-	defer r.close()
-	m, _, err := selectWorkspace(r.model(ctx, ""), pos[0])
-	if err != nil {
-		fmt.Fprintf(stderr, "nhm watch: %v\n", err)
-		return exitError
-	}
-	agents := selectAgents(m.Agents, pos[1:])
-	if len(agents) == 0 {
-		fmt.Fprintln(stderr, "nhm watch: no agents match")
-		return exitError
-	}
-	last := map[string][]string{}
-	for round := 1; ; round++ {
-		for _, a := range agents {
-			// The live region comes on top of --lines: a 20-line read cut
-			// by 10 lost the lines a working agent wrote between two
-			// reads (nhm-rnx).
-			n := *lines + logsLiveLines
-			read, err := r.herdr.PaneRead(ctx, herdr.PaneReadParams{PaneID: a.PaneID, Source: herdr.ReadRecent, Lines: &n})
-			if err != nil {
-				fmt.Fprintf(stderr, "nhm watch: %s: %v\n", label(a), err)
-				continue
-			}
-			cur := settledLines(read.Text)
-			for _, l := range freshLines(last[a.PaneID], cur) {
-				if strings.TrimSpace(l) != "" {
-					fmt.Fprintf(stdout, "%s | %s\n", label(a), l)
-				}
-			}
-			last[a.PaneID] = cur
-		}
-		if *count > 0 && round >= *count {
-			return exitOK
-		}
-		select {
-		case <-ctx.Done():
-			return exitOK
-		case <-time.After(*interval):
-		}
-	}
-}
-
-// selectAgents keeps the agents named by mail name, herdr name or slot;
-// no selector keeps all.
-func selectAgents(agents []snapshot.Agent, sel []string) []snapshot.Agent {
-	if len(sel) == 0 {
-		return agents
-	}
-	var out []snapshot.Agent
-	for _, a := range agents {
-		for _, s := range sel {
-			if a.Slot == s || strings.EqualFold(a.HerdrName, s) || (a.Binding != nil && strings.EqualFold(a.Binding.MailName, s)) {
-				out = append(out, a)
-				break
-			}
-		}
-	}
-	return out
 }
 
 func label(a snapshot.Agent) string {

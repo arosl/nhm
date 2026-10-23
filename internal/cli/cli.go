@@ -62,8 +62,8 @@ Usage:
                          print an agent's pane
   nhm logs <session> [--panes N.M,…] [-f] [--filter RE] [-n N] [-a] [--json]
                          every agent's recent output, as ntm's logs (a name: nhm read)
-  nhm watch <session> [name|slot ...]
-                         follow the agents' output
+  nhm watch [session] [name|slot ...] [--cc] [--pane P] [--bead ID] [--pattern G --command T] [--json]
+                         stream the agents' output, a bead or files, as ntm's watch (also w)
   nhm wait [session] [selector] [--until idle|done|complete|generating|healthy] [--after-op OP] [--timeout D] [--json]
                          wait until agents reach a state, or a turn completes
   nhm interrupt [session] [selector] [--json]
@@ -205,7 +205,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		// ntm's logs <session>; an agent's name runs read (the operator's
 		// ruling, nhm-k9d, 2026-10-23).
 		return runLogs(args[1:], stdout, stderr)
-	case "watch":
+	case "watch", "w":
+		// ntm's watch and its alias w (the operator's ruling, nhm-zac,
+		// 2026-10-23).
 		return runWatch(args[1:], stdout, stderr)
 	case "activity":
 		return runActivity(args[1:], stdout, stderr)

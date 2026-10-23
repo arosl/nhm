@@ -37,6 +37,7 @@ var verbUsage = map[string]string{
 	"read":          readUsage,
 	"logs":          logsUsage,
 	"watch":         watchUsage,
+	"w":             watchUsage,
 	"activity":      activityUsage,
 	"health":        healthUsage,
 	"doctor":        doctorUsage,
