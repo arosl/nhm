@@ -35,6 +35,10 @@ func TestCheckUIConfig(t *testing.T) {
 	if err := checkUIConfig(); err == nil || !strings.Contains(err.Error(), `ui.board is "fzf", but nhm no longer has the fzf`) {
 		t.Errorf("fzf = %v", err)
 	}
+	write("[ui]\nmenu = \"Go\"\n")
+	if err := checkUIConfig(); err == nil || !strings.Contains(err.Error(), `ui.menu must be "go" or not set (it is "Go")`) {
+		t.Errorf("Go = %v", err)
+	}
 	// A typo is an error.
 	for _, bad := range []string{"[ui]\nmenu = \"Go\"\n", "[ui]\nmneu = \"go\"\n", "[ui]\nmenu = true\n", "[ui]\nspawn = \"go\"\n", "[ui\n"} {
 		write(bad)

@@ -57,7 +57,7 @@ func checkUIConfig() error {
 			return fmt.Errorf("%s: ui.%s is \"fzf\", but nhm no longer has the fzf palette, menu and board: delete the line (the Go %s is the default)",
 				path, key, key)
 		case !ok || s != "go":
-			return fmt.Errorf("%s: ui.%s is \"go\" or not set", path, key)
+			return fmt.Errorf("%s: ui.%s must be \"go\" or not set (it is %#v)", path, key, f.UI[key])
 		}
 	}
 	return nil
