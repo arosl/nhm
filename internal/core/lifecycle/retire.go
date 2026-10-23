@@ -172,18 +172,22 @@ type retirePlan struct {
 	// token is the kept registration token Agent Mail accepts; empty
 	// when there is none.
 	token string
+	// stale: Agent Mail refuses the kept token, because the agent
+	// registered again; the identity is retired with a new token.
+	stale bool
 	// identityRetired: Agent Mail has the identity retired already.
 	identityRetired bool
 	original        string
 }
 
-// staleToken is the warning for a kept registration token that Agent Mail
-// refuses, with the ways to finish (acfs-9hkh.92).
-func staleToken(name string) string {
+// staleToken is the warning for a stale kept token when registering the
+// identity again for a new one failed, with the way to finish
+// (acfs-9hkh.92, nhm-p49).
+func staleToken(name string, err error) string {
 	return "the registration token nhm kept for " + name + " is stale: " + name + " registered again later, and Agent Mail " +
-		"gave it a new token. The Agent Mail identity stays active. To retire it, have " + name + " call retire_agent itself " +
-		"before you retire it (--dry-run shows this first), or call retire_agent with the newest token, which is in the " +
-		"result of " + name + "'s last register_agent or macro_start_session call"
+		"gave it a new token. Registering " + name + " again for a newer token failed (" + err.Error() + "), so the Agent " +
+		"Mail identity stays active. To retire it, call retire_agent with the newest token, which is in the result of " +
+		name + "'s last register_agent or macro_start_session call"
 }
 
 // Retire closes an agent's pane, preserves its transcript and retires its
@@ -567,7 +571,12 @@ func check(ctx context.Context, env Env, req RetireRequest, b bindings.Binding, 
 				case state == agentmail.TokenNoAgent:
 					res.Warnings = append(res.Warnings, "Agent Mail has no identity "+b.MailName+" in "+b.MailProjectKey)
 				default:
-					res.Warnings = append(res.Warnings, staleToken(b.MailName))
+					plan.stale = true
+					// After the new token, nobody holds a token of the
+					// identity: restoring it starts with register_agent.
+					act("soft-retire the Agent Mail identity %s (register_agent, then unretire_agent with its token, "+
+						"restores it); the kept token is stale, so after the close retire registers %s again for a new token",
+						b.MailName, b.MailName)
 				}
 			}
 		} else {
@@ -624,19 +633,8 @@ func execute(ctx context.Context, env Env, req RetireRequest, plan retirePlan, r
 		res.Removed = append(res.Removed, wt)
 	}
 	switch {
-	case plan.token != "":
-		err := env.Mail.Call(ctx, "retire_agent", map[string]any{"project_key": b.MailProjectKey, "agent_name": b.MailName,
-			"registration_token": plan.token}, nil)
-		switch {
-		case agentmail.IsTokenMismatch(err):
-			// The agent registered again after the check.
-			res.Warnings = append(res.Warnings, staleToken(b.MailName))
-		case err != nil:
-			res.Warnings = append(res.Warnings, "the Agent Mail identity stays active: "+err.Error())
-		default:
-			res.IdentityRetired = true
-			_ = store.DeleteSecret(env.InstanceDir, b.ID)
-		}
+	case plan.token != "" || plan.stale:
+		retireIdentity(ctx, env, b, plan, res)
 	case plan.identityRetired:
 		// No token outlives the identity it was kept for.
 		res.IdentityRetired = true
@@ -649,4 +647,46 @@ func execute(ctx context.Context, env Env, req RetireRequest, plan retirePlan, r
 		return fmt.Errorf("binding %s: %w", b.ID, err)
 	}
 	return nil
+}
+
+// retireIdentity soft-retires b's Agent Mail identity, after the pane
+// closed. A stale kept token, found by the checks or by retire_agent
+// itself, is replaced by a new one (nhm-p49): Agent Mail has no way to
+// retire one identity without its token, and the agent's newest token is
+// in its own context, out of nhm's reach. The pane is closed, so no agent
+// of b registers again before retire_agent. The new token is never stored
+// or printed; once the identity is retired, no token is kept at all.
+func retireIdentity(ctx context.Context, env Env, b bindings.Binding, plan retirePlan, res *RetireResult) {
+	retire := func(token string) error {
+		return env.Mail.Call(ctx, "retire_agent", map[string]any{"project_key": b.MailProjectKey, "agent_name": b.MailName,
+			"registration_token": token}, nil)
+	}
+	var err error
+	if !plan.stale {
+		err = retire(plan.token)
+	}
+	if plan.stale || agentmail.IsTokenMismatch(err) {
+		var token string
+		token, err = agentmail.NewToken(ctx, env.Mail, b.MailProjectKey, b.MailName)
+		switch {
+		case errors.Is(err, agentmail.ErrIdentityRetired):
+			err = nil
+		case err != nil:
+			res.Warnings = append(res.Warnings, staleToken(b.MailName, err))
+			return
+		default:
+			if err = retire(token); err != nil {
+				// The agent's own token is stale now, and nhm kept none.
+				res.Warnings = append(res.Warnings, "the Agent Mail identity stays active: "+err.Error()+"; to retire it, "+
+					"call register_agent with the name "+b.MailName+" and then retire_agent with the token it returns")
+				return
+			}
+		}
+	}
+	if err != nil {
+		res.Warnings = append(res.Warnings, "the Agent Mail identity stays active: "+err.Error())
+		return
+	}
+	res.IdentityRetired = true
+	_ = store.DeleteSecret(env.InstanceDir, b.ID)
 }

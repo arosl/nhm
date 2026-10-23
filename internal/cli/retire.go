@@ -103,10 +103,12 @@ const retireUsage = `Usage: nhm retire <Name> [--keep-identity] [--cleanup-workt
 Close an agent's pane, preserve its transcript (and index it in CASS),
 record the closed beads it worked, and retire its Agent Mail identity
 with the kept token. It checks that token with Agent Mail first: when the
-agent registered again since nhm kept it, the token is stale, and the
-identity stays active; a warning says how to finish. It refuses, before
-anything changes, when the agent
-is working, blocked or unknown, is displaced or being recycled, holds a
+agent registered again since nhm kept it, the token is stale, and after
+the close retire registers the identity again (same program, model and
+task) for a new token, retires it with that token and keeps no token. If
+that fails, the identity stays active, and a warning says how to finish.
+It refuses, before anything changes, when the agent is working, blocked
+or unknown, is displaced or being recycled, holds a
 reservation, has uncommitted changes in files it reserved, has a dirty
 or unmerged worktree, has a bead in progress with no handoff comment, has
 no bead at all in the bead databases searched (the project's own and

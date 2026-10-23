@@ -10,8 +10,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 )
+
+// ErrIdentityRetired means Agent Mail has the identity retired already.
+var ErrIdentityRetired = errors.New("agentmail: the identity is retired")
 
 // Token states, as CheckToken reports them.
 const (
@@ -52,7 +56,7 @@ func CheckToken(ctx context.Context, mail Caller, project, name, token string) (
 		}
 		return "", err
 	}
-	if r := strings.TrimSpace(string(who.RetiredAt)); r != "" && r != "null" && r != `""` {
+	if retired(who.RetiredAt) {
 		return TokenRetired, nil
 	}
 	err := mail.Call(ctx, "unretire_agent", map[string]any{"project_key": project, "agent_name": name,
@@ -66,6 +70,62 @@ func CheckToken(ctx context.Context, mail Caller, project, name, token string) (
 		return TokenNoAgent, nil
 	}
 	return "", err
+}
+
+// NewToken registers identity name in project again and returns the new
+// registration token, which makes every token before it stale (nhm-p49).
+// Agent Mail takes register_agent with a name it has as an update of that
+// identity, with no proof unless its registration proof gate is on
+// (checked in am 0.3.38's source). The update overwrites the program, the
+// model, the task (an omitted one becomes "") and the attachments policy
+// (an omitted one becomes "auto"), so the call passes back the ones whois
+// reports; only the last activity changes. The caller keeps the token in
+// memory: it is never stored, logged or printed.
+//
+// A retired identity is not registered again (ErrIdentityRetired):
+// register_agent would only change its token, and leave it retired.
+func NewToken(ctx context.Context, mail Caller, project, name string) (string, error) {
+	var who struct {
+		Program           string          `json:"program"`
+		Model             string          `json:"model"`
+		TaskDescription   string          `json:"task_description"`
+		AttachmentsPolicy string          `json:"attachments_policy"`
+		RetiredAt         json.RawMessage `json:"retired_at"`
+	}
+	if err := mail.Call(ctx, "whois", map[string]any{"project_key": project, "agent_name": name}, &who); err != nil {
+		return "", err
+	}
+	if retired(who.RetiredAt) {
+		return "", ErrIdentityRetired
+	}
+	if who.Program == "" || who.Model == "" {
+		return "", fmt.Errorf("agentmail: whois gives %s no program or model to register it with", name)
+	}
+	args := map[string]any{"project_key": project, "name": name, "program": who.Program, "model": who.Model,
+		"task_description": who.TaskDescription}
+	if who.AttachmentsPolicy != "" {
+		args["attachments_policy"] = who.AttachmentsPolicy
+	}
+	var out struct {
+		Name  string `json:"name"`
+		Token string `json:"registration_token"`
+	}
+	if err := mail.Call(ctx, "register_agent", args, &out); err != nil {
+		return "", err
+	}
+	switch {
+	case !strings.EqualFold(out.Name, name):
+		return "", fmt.Errorf("agentmail: register_agent for %s answered for %q", name, out.Name)
+	case out.Token == "":
+		return "", fmt.Errorf("agentmail: register_agent for %s returned no registration token", name)
+	}
+	return out.Token, nil
+}
+
+// retired reports a whois retired_at that is set.
+func retired(raw json.RawMessage) bool {
+	r := strings.TrimSpace(string(raw))
+	return r != "" && r != "null" && r != `""`
 }
 
 // refusal is the type and reason of an Agent Mail refusal: a ToolError

@@ -237,6 +237,11 @@ type fakeMail struct {
 	calls []string
 	// afterCheck runs after an unretire_agent that accepted the token.
 	afterCheck func()
+	// registered are the register_agent calls' arguments; onRegister
+	// runs at each, and refuseRegister refuses them (a proof gate).
+	registered     []map[string]any
+	onRegister     func()
+	refuseRegister bool
 }
 
 func (m *fakeMail) Call(_ context.Context, tool string, args, out any) error {
@@ -251,6 +256,24 @@ func (m *fakeMail) Call(_ context.Context, tool string, args, out any) error {
 		if m.gone[name] {
 			return json.Unmarshal([]byte(`{"name":"`+name+`","retired_at":"2026-10-12T05:00:00Z"}`), out)
 		}
+		return json.Unmarshal([]byte(`{"name":"`+name+`","program":"claude-code","model":"opus","task_description":"nhm-1",`+
+			`"attachments_policy":"file","retired_at":null}`), out)
+	case "register_agent":
+		// Agent Mail updates the identity and gives it a new token.
+		if m.onRegister != nil {
+			m.onRegister()
+		}
+		if m.refuseRegister {
+			return &agentmail.ToolError{Tool: tool, Message: `{"error":{"type":"REGISTRATION_PROOF_REQUIRED"}}`}
+		}
+		m.registered = append(m.registered, a)
+		name, _ = a["name"].(string)
+		token := fmt.Sprintf("tok-again-%d", len(m.registered))
+		if m.current == nil {
+			m.current = map[string]string{}
+		}
+		m.current[name] = token
+		return json.Unmarshal([]byte(`{"name":"`+name+`","registration_token":"`+token+`"}`), out)
 	case "unretire_agent", "retire_agent":
 		if cur, ok := m.current[name]; ok && a["registration_token"] != cur {
 			return &agentmail.ToolError{Tool: tool, Message: `{"error":{"type":"AUTHENTICATION_REQUIRED","data":{"reason":"token_mismatch"}}}`}
@@ -348,26 +371,60 @@ func writeFile(t *testing.T, path, s string) {
 
 // acfs-9hkh.92: an agent that registered again after nhm kept its token
 // has a newer one, and Agent Mail refuses the kept token. Retire checks
-// the token first: the pane still closes, the identity stays active, and
-// the warning says how to finish.
+// the token first. nhm-p49: after the close, retire registers the
+// identity again with its own profile, retires it with the new token,
+// and keeps that token nowhere.
 func TestRetireChecksTheKeptToken(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	b := w.bind(t, "IcyKnoll", "w1:p1", herdr.StatusIdle)
 	w.mail.current = map[string]string{"IcyKnoll": "tok-newer"}
 	res, err := Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll", DryRun: true})
-	if err != nil || len(res.Actions) != 2 || !strings.Contains(strings.Join(res.Warnings, "\n"), "IcyKnoll is stale") {
-		t.Fatalf("dry run = %+v %v", res, err)
+	if err != nil || len(res.Actions) != 3 || !strings.Contains(res.Actions[2], "the kept token is stale") ||
+		len(res.Warnings) != 0 || w.mail.called("register_agent") != 0 {
+		t.Fatalf("dry run = %+v %v, calls %v", res, err, w.mail.calls)
+	}
+	w.mail.onRegister = func() {
+		if len(w.h.closed) != 1 {
+			t.Error("register_agent ran before the pane closed")
+		}
 	}
 	res, err = Retire(ctx, w.env, RetireRequest{Target: "IcyKnoll"})
-	if err != nil || !res.Done || res.IdentityRetired || len(w.h.closed) != 1 || w.mail.called("retire_agent") != 0 {
-		t.Fatalf("retire = %+v %v (retire_agent calls %d)", res, err, w.mail.called("retire_agent"))
+	if err != nil || !res.Done || !res.IdentityRetired || len(w.h.closed) != 1 || len(res.Warnings) != 0 {
+		t.Fatalf("retire = %+v %v", res, err)
 	}
-	if !strings.Contains(strings.Join(res.Warnings, "\n"), "call retire_agent itself before you retire it") {
-		t.Fatalf("warnings = %q", res.Warnings)
+	// The profile whois gave goes back unchanged, and only the new token
+	// retires the identity.
+	if len(w.mail.registered) != 1 || fmt.Sprint(w.mail.registered[0]) !=
+		"map[attachments_policy:file model:opus name:IcyKnoll program:claude-code project_key:/p task_description:nhm-1]" {
+		t.Fatalf("register_agent calls = %v", w.mail.registered)
+	}
+	if fmt.Sprint(w.mail.retired) != "[IcyKnoll:tok-again-1]" {
+		t.Fatalf("retire_agent calls = %v", w.mail.retired)
+	}
+	if out, _ := json.Marshal(res); strings.Contains(string(out), "tok-") {
+		t.Fatalf("a token in the result: %s", out)
+	}
+	if _, err := store.ReadSecret(w.env.InstanceDir, b.ID); !errors.Is(err, store.ErrNoSecret) {
+		t.Fatalf("a token stays: %v", err)
 	}
 	if got, _ := w.env.Bindings.Get(ctx, b.ID); got.Status != bindings.Retired {
 		t.Fatalf("binding = %s", got.Status)
+	}
+
+	// Agent Mail refuses to register the identity again (its proof gate
+	// is on): the identity stays active, and the warning says how to
+	// finish.
+	w = newWorld(t)
+	w.bind(t, "BayFern", "w1:p5", herdr.StatusIdle)
+	w.mail.current = map[string]string{"BayFern": "tok-newer"}
+	w.mail.refuseRegister = true
+	res, err = Retire(ctx, w.env, RetireRequest{Target: "BayFern"})
+	if err != nil || !res.Done || res.IdentityRetired || len(w.h.closed) != 1 || w.mail.called("retire_agent") != 0 {
+		t.Fatalf("retire = %+v %v, calls %v", res, err, w.mail.calls)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "Registering BayFern again for a newer token failed") {
+		t.Fatalf("warnings = %q", res.Warnings)
 	}
 
 	// The agent retired its identity itself first: retire sends no
@@ -384,14 +441,33 @@ func TestRetireChecksTheKeptToken(t *testing.T) {
 		t.Fatalf("the token stays: %v", err)
 	}
 
-	// The agent registers again between the check and retire_agent.
+	// The agent registers again between the check and retire_agent:
+	// retire_agent refuses the kept token, and the new one retires it.
 	w = newWorld(t)
 	w.bind(t, "OwlPeak", "w1:p3", herdr.StatusIdle)
 	w.mail.current = map[string]string{"OwlPeak": "tok-OwlPeak"}
 	w.mail.afterCheck = func() { w.mail.current["OwlPeak"] = "tok-later" }
 	res, err = Retire(ctx, w.env, RetireRequest{Target: "OwlPeak"})
-	if err != nil || !res.Done || res.IdentityRetired || !strings.Contains(strings.Join(res.Warnings, "\n"), "OwlPeak is stale") {
-		t.Fatalf("retire = %+v %v", res, err)
+	if err != nil || !res.Done || !res.IdentityRetired || len(res.Warnings) != 0 ||
+		fmt.Sprint(w.mail.retired) != "[OwlPeak:tok-again-1]" {
+		t.Fatalf("retire = %+v %v, retire_agent calls %v", res, err, w.mail.retired)
+	}
+
+	// As above, and the identity is retired by then: nothing registers
+	// it again.
+	w = newWorld(t)
+	b = w.bind(t, "AshDell", "w1:p6", herdr.StatusIdle)
+	w.mail.current = map[string]string{"AshDell": "tok-AshDell"}
+	w.mail.afterCheck = func() {
+		w.mail.current["AshDell"] = "tok-later"
+		w.mail.gone = map[string]bool{"AshDell": true}
+	}
+	res, err = Retire(ctx, w.env, RetireRequest{Target: "AshDell"})
+	if err != nil || !res.Done || !res.IdentityRetired || w.mail.called("register_agent") != 0 {
+		t.Fatalf("retire = %+v %v, calls %v", res, err, w.mail.calls)
+	}
+	if _, err := store.ReadSecret(w.env.InstanceDir, b.ID); !errors.Is(err, store.ErrNoSecret) {
+		t.Fatalf("the token stays: %v", err)
 	}
 
 	// Agent Mail cannot check the token: retire refuses before it closes
