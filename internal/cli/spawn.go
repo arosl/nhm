@@ -863,12 +863,13 @@ type robotSpawnFlags struct {
 	session, dir, format, prompt, opID, socket *string
 	counts                                     map[string]*int
 	readyTimeout, timeout                      *time.Duration
-	dryRun, assign, safety                     *bool
+	dryRun, assign, safety, trustFolder        *bool
 	assignFlags                                robotAssignFlags
 }
 
-// addRobotSpawnFlags registers ntm's robot spawn flags, then a
-// --spawn-<kind> count for each kind name and flag that is free.
+// addRobotSpawnFlags registers ntm's robot spawn flags and nhm's
+// --trust-folder, then a --spawn-<kind> count for each kind name and flag
+// that is free.
 func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	f := robotSpawnFlags{counts: map[string]*int{}}
 	f.session = fs.String("robot-spawn", "", "")
@@ -881,6 +882,11 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	fs.Bool("spawn-wait", false, "")
 	f.readyTimeout = fs.Duration("ready-timeout", 60*time.Second, "")
 	f.timeout = fs.Duration("timeout", 60*time.Second, "")
+	// nhm's own, as spawn's --trust-folder: ntm 9d5ed977 has no such
+	// flag. Its robot spawn without --spawn-wait returns at once and
+	// leaves an agent at the folder-trust dialog; nhm's always waits for
+	// ready, so without the flag that agent ends unresolved (nhm-cvg).
+	f.trustFolder = fs.Bool("trust-folder", false, "")
 	f.dryRun = fs.Bool("dry-run", false, "")
 	f.assign = fs.Bool("spawn-assign-work", false, "")
 	f.assignFlags = addRobotAssignFlags(fs)
@@ -909,6 +915,29 @@ func robotReadyWait(fs *flag.FlagSet, rf robotSpawnFlags) time.Duration {
 	return *rf.readyTimeout
 }
 
+// robotSpawnRequest is the spawn request of a parsed robot spawn. It
+// sends no kickoff unless --spawn-prompt. With --spawn-assign-work (the
+// caller's consent) the assignment phase sends each agent its work, with
+// --spawn-prompt ahead of it, so the spawn itself sends nothing. Only
+// --trust-folder answers a folder-trust dialog.
+func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) spawn.Request {
+	req := spawn.Request{Session: *rf.session, Prompt: *rf.prompt, NoKickoff: *rf.prompt == "",
+		ReadyTimeout: robotReadyWait(fs, rf), TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
+		OperationID: *rf.opID, Safety: *rf.safety}
+	if *rf.assign {
+		req.Prompt, req.NoKickoff = "", true
+	}
+	for flagName, n := range rf.counts {
+		if *n == 0 {
+			continue
+		}
+		a, _ := kinds.Default().ByFlag(flagName)
+		req.Agents = append(req.Agents, spawn.Want{Kind: a.Name, Count: *n})
+	}
+	sortWants(req.Agents)
+	return req
+}
+
 // hasRobotSpawn reports a --robot-spawn flag in args.
 func hasRobotSpawn(args []string) bool {
 	for _, a := range args {
@@ -922,14 +951,15 @@ func hasRobotSpawn(args []string) bool {
 // The robot form: --robot-spawn=S --spawn-dir=R --spawn-cc=N
 // --spawn-cod=N [--spawn-agy=N] --spawn-no-user --spawn-safety
 // --spawn-wait [--ready-timeout=Ns] --timeout=60s --robot-format=json
-// [--dry-run] [--spawn-assign-work [--strategy=S]] [--spawn-prompt=T].
+// [--dry-run] [--spawn-assign-work [--strategy=S]] [--spawn-prompt=T]
+// [--trust-folder].
 func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	rf := addRobotSpawnFlags(fs)
-	session, dir, format, counts := rf.session, rf.dir, rf.format, rf.counts
-	dryRun, assign, prompt, opID, socket := rf.dryRun, rf.assign, rf.prompt, rf.opID, rf.socket
+	dir, format := rf.dir, rf.format
+	dryRun, assign, prompt, socket := rf.dryRun, rf.assign, rf.prompt, rf.socket
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		msg := "unexpected arguments"
 		if err != nil {
@@ -944,23 +974,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
 			"use --robot-format=json", "json", robotError, now)
 	}
-	// A robot spawn sends no kickoff unless --spawn-prompt. With
-	// --spawn-assign-work (the caller's consent) the assignment phase
-	// sends each agent its work, with --spawn-prompt ahead of it, so the
-	// spawn itself sends nothing.
-	req := spawn.Request{Session: *session, Prompt: *prompt, NoKickoff: *prompt == "",
-		ReadyTimeout: robotReadyWait(fs, rf), RequireObservations: true, DryRun: *dryRun, OperationID: *opID, Safety: *rf.safety}
-	if *assign {
-		req.Prompt, req.NoKickoff = "", true
-	}
-	for flagName, n := range counts {
-		if *n == 0 {
-			continue
-		}
-		a, _ := kinds.Default().ByFlag(flagName)
-		req.Agents = append(req.Agents, spawn.Want{Kind: a.Name, Count: *n})
-	}
-	sortWants(req.Agents)
+	req := robotSpawnRequest(fs, rf)
 	ie, err := openInstance(*socket)
 	if err != nil {
 		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotError, now)
