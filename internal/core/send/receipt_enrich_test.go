@@ -29,6 +29,7 @@ type nhmView struct {
 	NHM struct {
 		Targets []struct {
 			Target     string                   `json:"target"`
+			MailName   string                   `json:"mail_name"`
 			Injections []enrich.TargetInjection `json:"injections"`
 		} `json:"targets"`
 		Memory enrich.Report `json:"memory_injection"`
@@ -56,13 +57,18 @@ func robotView(t *testing.T, out any) (nhmView, map[string]any) {
 
 // includedIDs is one source's included item ids in a target's injections.
 func includedIDs(list []enrich.TargetInjection, source string) []string {
+	return idsWith(list, source, enrich.Included)
+}
+
+// idsWith is one source's item ids of one status in a target's injections.
+func idsWith(list []enrich.TargetInjection, source, status string) []string {
 	ids := []string{}
 	for _, ti := range list {
 		if ti.Source != source {
 			continue
 		}
 		for _, it := range ti.Items {
-			if it.Status == enrich.Included {
+			if it.Status == status {
 				ids = append(ids, it.ID)
 			}
 		}
@@ -111,6 +117,38 @@ func TestReceiptReadsBackTheEnrichment(t *testing.T) {
 	sent, _ := robotView(t, SendOutput(res, "json", time.Now()))
 	if !reflect.DeepEqual(sent.NHM, receipt.NHM) {
 		t.Fatalf("send _nhm = %+v\nreceipt _nhm = %+v", sent.NHM, receipt.NHM)
+	}
+}
+
+// Each target's entry has its own items: a context that has the rules
+// already gets them suppressed, a new one gets them included.
+func TestReceiptGivesEachTargetItsOwnItems(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.env.CM = &memCM{rules: twoRules}
+	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
+	if _, err := Send(ctx, w.env, memoryReq("op-1")); err != nil {
+		t.Fatal(err)
+	}
+	w.fake.add("w1:p1", "claude", "icyknoll", herdr.StatusIdle, 20)
+	w.bind(t, "BlueLake", "w1:t1", "w1:p2", "claude", herdr.StatusIdle)
+	if _, err := Send(ctx, w.env, memoryReq("op-2")); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := Stored(ctx, w.db, "op-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := robotView(t, ReceiptOutput(stored, "json", time.Now()))
+	want := map[string]string{"IcyKnoll": enrich.Suppressed, "BlueLake": enrich.Included}
+	if len(receipt.NHM.Targets) != len(want) {
+		t.Fatalf("_nhm.targets = %+v", receipt.NHM.Targets)
+	}
+	for _, tg := range receipt.NHM.Targets {
+		status, ok := want[tg.MailName]
+		if got := idsWith(tg.Injections, enrich.SourceCM, status); !ok || !reflect.DeepEqual(got, []string{"b-1", "b-2"}) {
+			t.Fatalf("%s (%s): %s cm = %v; injections %+v", tg.MailName, tg.Target, status, got, tg.Injections)
+		}
 	}
 }
 
