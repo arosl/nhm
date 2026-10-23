@@ -15,8 +15,10 @@ The rules:
   commit, and its local changes.
 - This file lists every taken file. Add a line in the same commit that
   takes a file.
-- nhm takes code, not architecture: no tmux backend, detection engine,
-  TUI, coordinator or task scheduler.
+- nhm takes ntm's code only where it decides what the user sees (the
+  drop-in rule, rule 4 in `AGENTS.md`). The code underneath is nhm's:
+  herdr replaces ntm's tmux backend and pane detection, and nhm's popups
+  replace ntm's TUI.
 - Each file is ported by hand. Nothing is generated from ntm by a script.
 
 The same rules apply to code from pt and dcg.

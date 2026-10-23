@@ -19,14 +19,21 @@ it. The operator is in charge.
    keeps its licence text (`LICENSE` beside it, unmodified, with its
    rider), starts with a header that names its source path, commit and
    local changes, and gets a line in `PROVENANCE.md` in the same commit.
-   Take code, not architecture: no tmux backend, detection engine, TUI,
-   coordinator or task scheduler.
 3. **No script-based code changes.** Never run a script or a regex over
    code to change it, and never generate code from ntm by script. Port by
    hand. `gofmt` is the formatter and is allowed.
-4. **ntm's grammar.** The verbs and flags that ACFS, its lessons, brenner
-   or ru call use ntm's spelling at the tracked commit (`NTMCommit` in
-   `internal/cli`). `--robot-*` output uses ntm's types.
+4. **nhm is a drop-in for ntm.** Every ntm verb and flag at the tracked
+   commit (`NTMCommit` in `internal/cli`) works the same for the user:
+   its name and aliases, flags, defaults, output, choices and error
+   codes. `--robot-*` output uses ntm's types. Where nhm has a verb of
+   its own for the same job, it also answers to ntm's name. ntm's
+   coordinator, controller, pipeline, workflow and swarm verbs are in
+   scope too (the operator, 2026-10-23). The code is nhm's: herdr
+   replaces tmux and its pane detection, and nhm's popups replace ntm's
+   TUI. Port ntm code only where it decides what the user sees.
+   `compat/ntm-contract.md` holds a row for each verb: implemented,
+   deferred (with its bead) or waived (with the operator's ruling). The
+   forms that ACFS, its lessons, brenner and ru call come first.
 5. **Internal boundaries:** `internal/cli` (parsing and rendering),
    `internal/core` (scope, selection, send, lifecycle), `internal/herdr`
    (the protocol-22 client; `schema` and `herdrtest` beside it),
