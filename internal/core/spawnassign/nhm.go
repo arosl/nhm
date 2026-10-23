@@ -28,6 +28,12 @@ type (
 	SpawnAssignment   = robot.SpawnAssignment
 	CASSInjectionInfo = robot.CASSInjectionInfo
 	CMInjectionInfo   = robot.CMInjectionInfo
+	AssignOutput      = robot.AssignOutput
+	AssignRecommend   = robot.AssignRecommend
+	BlockedBead       = robot.BlockedBead
+	UnassignableBead  = robot.UnassignableBead
+	AssignSummary     = robot.AssignSummary
+	AssignAgentHints  = robot.AssignAgentHints
 )
 
 // ErrorCodeAssignmentFailed is ntm's error code of a spawn whose work
@@ -48,6 +54,8 @@ type Occupant struct {
 	PaneID   string
 	MailName string
 	Kind     string
+	// Model is the binding's model ("" for the kind's default).
+	Model string
 }
 
 // Target is the occupant's dispatch target: "<binding id>@<generation>".

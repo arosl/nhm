@@ -111,6 +111,9 @@ Usage:
       [--panes=P] [--type=K] [--dry-run] [--op-id=ID]
                          interrupt agents, ntm's InterruptOutput
   nhm --robot-health=S   each agent's health, ntm's SessionHealthOutput
+  nhm --robot-assign=S [--beads=a,b] [--strategy=simple|balanced|speed|quality|dependency]
+                         which ready bead each idle agent should take,
+                         ntm's AssignOutput; it assigns nothing
   nhm --robot-spawn=S --spawn-dir=R --spawn-cc=N --spawn-cod=N [--spawn-agy=N]
       --spawn-no-user --spawn-safety --spawn-wait [--ready-timeout=Ns] [--dry-run]
                          ntm's robot spawn, ntm's SpawnOutput

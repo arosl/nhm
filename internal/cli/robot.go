@@ -49,6 +49,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotFlag(args, "--robot-interrupt") {
 		return runRobotInterrupt(args, stdout)
 	}
+	if hasRobotFlag(args, "--robot-assign") {
+		return runRobotAssign(args, stdout)
+	}
 	now := time.Now()
 	if slices.Contains(args, "--robot-health") {
 		// ntm's bare form is project health: bv's drift, bottlenecks and
@@ -276,7 +279,7 @@ func robotCapabilities(format string, now time.Time) robot.CapabilitiesOutput {
 
 func robotCategory(flagName string) string {
 	switch flagName {
-	case "--robot-send", "--robot-send-receipt", "--robot-ack", "--robot-wait":
+	case "--robot-send", "--robot-send-receipt", "--robot-ack", "--robot-wait", "--robot-assign":
 		return "dispatch"
 	case "--robot-spawn":
 		return "lifecycle"

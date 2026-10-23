@@ -44,7 +44,7 @@ func (t Topology) ListOccupants(ctx context.Context, _ string) ([]Occupant, erro
 	out := make([]Occupant, 0, len(list))
 	for _, b := range list {
 		out = append(out, Occupant{BindingID: b.ID, Generation: b.Generation, Slot: b.Slot, PaneID: b.PaneID,
-			MailName: b.MailName, Kind: b.Kind})
+			MailName: b.MailName, Kind: b.Kind, Model: b.Model})
 	}
 	return out, nil
 }
