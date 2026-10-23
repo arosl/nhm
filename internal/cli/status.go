@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -631,7 +632,18 @@ func watchVerb(v readVerb, args []string, stdout, stderr io.Writer, knobs func()
 		return *count > 0 && renders >= *count
 	}
 	events := make(chan struct{}, 1)
-	go watchEvents(ctx, r.herdr, events)
+	// The verb cancels its watcher and waits for it before it returns
+	// (the defers run in that order): a watcher that outlived the verb
+	// raced with a later test's write of the backoff bounds (nhm-krf).
+	wctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		watchEvents(wctx, r.herdr, events)
+	}()
+	defer wg.Wait()
+	defer cancel()
 	if draw() {
 		return exitOK
 	}
