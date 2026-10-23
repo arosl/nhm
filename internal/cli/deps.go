@@ -102,10 +102,10 @@ func depChecks() []depCheck {
 // flywheelTools are ntm's key flywheel tools, in its order; bv is marked
 // as triage needs it, and bd is br first, as ntm's adapter looks.
 var flywheelTools = []depCheck{
-	{Name: "bv *", Commands: []string{"bv"}}, {Name: "bd", Commands: []string{"br", "bd"}},
-	{Name: "caam", Commands: []string{"caam"}}, {Name: "caut", Commands: []string{"caut"}},
-	{Name: "dcg", Commands: []string{"dcg"}}, {Name: "ubs", Commands: []string{"ubs"}},
-	{Name: "cass", Commands: []string{"cass"}}, {Name: "cm", Commands: []string{"cm"}},
+	{Name: "bv *", Commands: []string{"bv"}, Category: depFlywheel}, {Name: "bd", Commands: []string{"br", "bd"}, Category: depFlywheel},
+	{Name: "caam", Commands: []string{"caam"}, Category: depFlywheel}, {Name: "caut", Commands: []string{"caut"}, Category: depFlywheel},
+	{Name: "dcg", Commands: []string{"dcg"}, Category: depFlywheel}, {Name: "ubs", Commands: []string{"ubs"}, Category: depFlywheel},
+	{Name: "cass", Commands: []string{"cass"}, Category: depFlywheel}, {Name: "cm", Commands: []string{"cm"}, Category: depFlywheel},
 }
 
 func runDeps(args []string, stdout, stderr io.Writer) int {
@@ -150,7 +150,9 @@ func runDeps(args []string, stdout, stderr io.Writer) int {
 }
 
 // probeDeps checks each tool, at once: its path, and its version when
-// asked.
+// asked. A flywheel tool's version is the first line of its output, as
+// ntm shows the version its tool adapter parsed, not a banner after it
+// (ScarletOrchid's review, nhm-k9d).
 func probeDeps(ctx context.Context, checks []depCheck, withVersion bool) []DependencyCheck {
 	out := make([]DependencyCheck, len(checks))
 	var wg sync.WaitGroup
@@ -166,7 +168,7 @@ func probeDeps(ctx context.Context, checks []depCheck, withVersion bool) []Depen
 				}
 			}
 			if r.Installed && withVersion {
-				r.Version = depVersion(ctx, r.Path, d.VersionArgs)
+				r.Version = depVersion(ctx, r.Path, d.VersionArgs, d.Category == depFlywheel)
 			}
 		}(&out[i], d)
 	}
@@ -175,9 +177,10 @@ func probeDeps(ctx context.Context, checks []depCheck, withVersion bool) []Depen
 }
 
 // depVersion is a tool's version line, as ntm reads it: the command's
-// output, even when it exits non-zero, made safe for a terminal (no
-// control or format characters, spaces collapsed, at most 240 runes).
-func depVersion(ctx context.Context, path string, args []string) string {
+// output (only its first line that is not blank, with firstLine), even
+// when it exits non-zero, made safe for a terminal (no control or format
+// characters, spaces collapsed, at most 240 runes).
+func depVersion(ctx context.Context, path string, args []string, firstLine bool) string {
 	if len(args) == 0 {
 		args = []string{"--version"}
 	}
@@ -186,9 +189,18 @@ func depVersion(ctx context.Context, path string, args []string) string {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.WaitDelay = 2 * time.Second
 	raw, _ := cmd.CombinedOutput()
+	text := stripControl(string(raw))
+	if firstLine {
+		for _, l := range strings.Split(text, "\n") {
+			if strings.TrimSpace(l) != "" {
+				text = l
+				break
+			}
+		}
+	}
 	var runes []rune
 	space := false
-	for _, r := range stripControl(string(raw)) {
+	for _, r := range text {
 		if unicode.IsSpace(r) {
 			space = len(runes) > 0
 			continue

@@ -18,6 +18,7 @@ import (
 )
 
 const mailUsage = `Usage: nhm mail inbox [--agent NAME] [--project KEY] [--keep-unread] [--limit N] [--socket PATH] [--json]
+       nhm mail inbox <session> [--agent NAME] [--urgent] [--session-agents] [--limit N] [--project KEY] [--json]
 
 List every unread message sent to the agent (to or bcc), oldest first,
 grouped by thread, with bodies; then mark each listed message read. cc
@@ -31,6 +32,15 @@ project key, the project's absolute path), else AGENT_MAIL_PROJECT, else
 the binding's project, else the git work tree of the cwd. A listing that
 reaches --limit (default 200) is refused: older mail would sink out of
 sight.
+
+With a session (a workspace id or label), or with ntm's --urgent or
+--session-agents, it is ntm's mail inbox: the project's inbox, every
+agent's recent mail (--limit per agent, default 50), read or not, each
+message once with the agents that got it, oldest first. --agent keeps
+one agent, --urgent the urgent mail, --session-agents the agents bound
+in the session (without a session, the calling pane's). The project is
+--project, else that of the session's bound agents, else as above.
+Unlike ntm's, it marks nothing read.
 `
 
 func runMail(args []string, stdout, stderr io.Writer) int {
@@ -48,17 +58,38 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	agent := fs.String("agent", "", "the Agent Mail name")
 	project := fs.String("project", "", "Agent Mail's project key")
 	keep := fs.Bool("keep-unread", false, "mark nothing read")
-	limit := fs.Int("limit", 200, "the most messages one listing reads")
+	limit := fs.Int("limit", 0, "the most messages one listing reads (200; ntm's form: 50 per agent)")
+	urgent := fs.Bool("urgent", false, "ntm's form: only the urgent mail")
+	sessionAgents := fs.Bool("session-agents", false, "ntm's form: only the agents bound in the session")
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args[1:])
-	if err != nil || len(pos) > 0 || *limit <= 0 {
+	limitSet := false
+	fs.Visit(func(f *flag.Flag) { limitSet = limitSet || f.Name == "limit" })
+	if err != nil || len(pos) > 1 || (len(pos) == 1 && pos[0] == "") || (limitSet && *limit <= 0) {
 		fmt.Fprint(stderr, mailUsage)
 		return exitRefused
 	}
-	env := envelope{Command: "mail inbox"}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if len(pos) == 1 || *urgent || *sessionAgents {
+		// ntm's mail inbox [session] (the operator's ruling, nhm-k9d,
+		// 2026-10-23); --keep-unread changes nothing there, as it marks
+		// nothing read.
+		o := projectInbox{agent: *agent, project: *project, urgent: *urgent, sessionAgents: *sessionAgents,
+			limit: 50, socket: *socket, asJSON: *asJSON}
+		if len(pos) == 1 {
+			o.session = pos[0]
+		}
+		if limitSet {
+			o.limit = *limit
+		}
+		return runProjectInbox(ctx, o, stdout, stderr)
+	}
+	if !limitSet {
+		*limit = 200
+	}
+	env := envelope{Command: "mail inbox"}
 
 	// The instance is optional: it names the calling pane's agent and
 	// keeps the wake table in step with what this listing marks read.

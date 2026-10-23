@@ -17,8 +17,10 @@ func TestRowsParseAndUseKnownDispositions(t *testing.T) {
 			t.Errorf("%s: a %s row names its bead or ruling", r.Form, r.Disposition)
 		}
 	}
+	// A deferred row is work still owed: none is fine (nhm-k9d answered
+	// the last ones).
 	c := Counts(rows)
-	if c["implemented"] == 0 || c["deferred"] == 0 || c["waived"] == 0 {
+	if c["implemented"] == 0 || c["waived"] == 0 {
 		t.Fatalf("counts = %v", c)
 	}
 }

@@ -88,6 +88,8 @@ Usage:
                          the maintenance pass: due wakes, inboxes, names
   nhm mail inbox [--agent NAME] [--keep-unread] [--json]
                          list the agent's unread mail by thread; mark it read
+  nhm mail inbox <session> [--agent NAME] [--urgent] [--session-agents] [--json]
+                         the project's inbox, read-only, as ntm's mail inbox
   nhm doctor [--json]    check what nhm needs
   nhm deps [-v] [--json] (also check)
                          the tools and agent CLIs installed, as ntm's deps

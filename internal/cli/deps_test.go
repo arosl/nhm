@@ -102,11 +102,20 @@ func TestDepVersionIsOneSafeLine(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := depVersion(t.Context(), filepath.Join(dir, "tool"), nil); got != "tool 1.2 built today" {
+	if got := depVersion(t.Context(), filepath.Join(dir, "tool"), nil, false); got != "tool 1.2 built today" {
 		t.Errorf("version = %q", got)
 	}
-	if got := depVersion(t.Context(), filepath.Join(dir, "long"), nil); got != strings.Repeat("x", 240)+"..." {
+	if got := depVersion(t.Context(), filepath.Join(dir, "long"), nil, false); got != strings.Repeat("x", 240)+"..." {
 		t.Errorf("long version = %q", got)
+	}
+	// A flywheel tool's version is its first line that is not blank, not
+	// the banner after it.
+	banner := "#!/bin/sh\nprintf '\\n0.15.4\\n\\n  ╭──────╮\\n  │ Guard │\\n'\n"
+	if err := os.WriteFile(filepath.Join(dir, "dcg"), []byte(banner), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := depVersion(t.Context(), filepath.Join(dir, "dcg"), nil, true); got != "0.15.4" {
+		t.Errorf("first line = %q", got)
 	}
 	// The report cuts by runes: a box drawing does not split.
 	if got := clip("0.15.4 "+strings.Repeat("─", 40), 10); got != "0.15.4 ───..." {

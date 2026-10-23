@@ -7,8 +7,8 @@ package agentmail
 // JSON or one SSE "data:" line; the tool's own result is JSON text in
 // result.content[0].text.
 //
-// nhm reads mail without consuming it: FetchInbox always sends
-// mark_read=false (plan-v8 2.5).
+// nhm reads mail without consuming it: FetchInbox and RecentInbox always
+// send mark_read=false (plan-v8 2.5).
 
 import (
 	"bufio"
@@ -184,6 +184,8 @@ type Message struct {
 	AckRequired bool   `json:"ack_required"`
 	AckTS       string `json:"ack_ts,omitempty"`
 	ReadTS      string `json:"read_ts,omitempty"`
+	// Kind is how the agent got the message: to, cc or bcc.
+	Kind string `json:"kind,omitempty"`
 }
 
 // ErrNotRegistered means Agent Mail does not know the agent in that
@@ -200,6 +202,40 @@ func (c *Client) FetchInbox(ctx context.Context, projectKey, agent string, limit
 		return nil, fmt.Errorf("%w: %s in %s", ErrNotRegistered, agent, projectKey)
 	}
 	return msgs, err
+}
+
+// RecentInbox reads an agent's recent mail, read or not, as ntm's mail
+// inbox reads each agent's: the newest limit messages, the urgent ones
+// only when asked. It marks nothing read.
+func (c *Client) RecentInbox(ctx context.Context, projectKey, agent string, limit int, urgentOnly bool) ([]Message, error) {
+	args := map[string]any{"project_key": projectKey, "agent_name": agent, "mark_read": false, "limit": limit,
+		"include_bodies": false}
+	if urgentOnly {
+		args["urgent_only"] = true
+	}
+	var msgs []Message
+	err := c.Call(ctx, "fetch_inbox", args, &msgs)
+	var te *ToolError
+	if errors.As(err, &te) && strings.Contains(strings.ToLower(te.Message), "not found") {
+		return nil, fmt.Errorf("%w: %s in %s", ErrNotRegistered, agent, projectKey)
+	}
+	return msgs, err
+}
+
+// ListAgents is list_agents: the names of the project's agents, the
+// most recently active first. Agent Mail gives at most 250.
+func (c *Client) ListAgents(ctx context.Context, projectKey string) ([]string, error) {
+	var agents []struct {
+		Name string `json:"name"`
+	}
+	if err := c.Call(ctx, "list_agents", map[string]any{"project_key": projectKey, "limit": 250}, &agents); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(agents))
+	for _, a := range agents {
+		names = append(names, a.Name)
+	}
+	return names, nil
 }
 
 // Unread sums up an inbox: unread messages, urgent ones, and acks that
