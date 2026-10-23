@@ -579,6 +579,13 @@ func keepTrue(ctx context.Context, env Env, st paneState, b *bindings.Binding, r
 	if st.agent.Agent != b.Kind {
 		return displace(ctx, env, b, st, fmt.Sprintf("herdr sees a %s agent, the binding has %s", st.agent.Agent, b.Kind), r)
 	}
+	if st.agent.TabID != "" && st.agent.TabID != b.TabID && (st.agent.WorkspaceID == "" || st.agent.WorkspaceID == b.WorkspaceID) {
+		// herdr moved the pane to another tab of its workspace, where
+		// the pane keeps its id (nhm-bdc).
+		if err := followTab(ctx, env, b, st.agent.TabID, r); err != nil {
+			return err
+		}
+	}
 	if b.NativeSession == nil || st.session() != b.NativeSession.Value {
 		// A new session waits for its SessionStart candidate; a session
 		// herdr has not reported yet (Codex before its first turn) too.
@@ -618,6 +625,22 @@ func followMove(ctx context.Context, env Env, b *bindings.Binding, r *Reconcile)
 		return nil
 	}
 	return relocate(ctx, env, b, a, "herdr moved", r)
+}
+
+// followTab records that herdr moved the binding's pane to tab, another
+// tab of its workspace, where the pane keeps its id (nhm-bdc). The
+// occupant, the generation and the slot stay: a slot is never a layout
+// coordinate (plan-v8 2.12).
+func followTab(ctx context.Context, env Env, b *bindings.Binding, tab string, r *Reconcile) error {
+	from := b.TabID
+	nb, err := env.Bindings.Relocate(ctx, b.ID, b.Generation, bindings.Location{WorkspaceID: b.WorkspaceID, TabID: tab,
+		PaneID: b.PaneID}, bindings.Evidence{Kind: "move", Detail: fmt.Sprintf("herdr moved %s from tab %s to tab %s", b.PaneID, from, tab)})
+	if err != nil {
+		return err
+	}
+	*b = nb
+	r.act("%s moved from tab %s to tab %s, slot %s", b.MailName, from, tab, b.Slot)
+	return nil
 }
 
 // FollowMove moves a binding to newPane after the caller moved its

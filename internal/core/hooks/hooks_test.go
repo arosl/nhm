@@ -595,6 +595,42 @@ func TestBindingFollowsAPaneMovedToAnotherWorkspace(t *testing.T) {
 	}
 }
 
+// herdr pane move to another tab of the same workspace keeps the pane
+// id; the reconcile records the new tab, and the slot and the generation
+// stay, as a slot is never a layout coordinate (plan-v8 2.12; nhm-bdc).
+func TestBindingFollowsAPaneMovedToAnotherTab(t *testing.T) {
+	h := newHarness(t, core.OwnerNhm)
+	ctx := context.Background()
+	h.world.set("w1:p1", pane{kind: "claude", session: "sess-a", pid: 500})
+	h.hook(registration("sess-a", "IcyKnoll", t.TempDir()), "e1")
+	b := h.binding("IcyKnoll")
+	if b.TabID != "w1:t1" {
+		t.Fatalf("binding = %+v", b)
+	}
+	// In its recorded tab nothing changes.
+	if r, err := ReconcilePane(ctx, h.env, "w1:p1"); err != nil || len(r.Actions) != 0 || h.binding("IcyKnoll").TabID != "w1:t1" {
+		t.Fatalf("in place: %+v %v", r, err)
+	}
+	// herdr pane move w1:p1 --tab w1:t2 --split down.
+	h.world.set("w1:p1", pane{kind: "claude", name: "icyknoll", session: "sess-a", pid: 500, ws: "w1", tab: "w1:t2"})
+	h.world.addTab("w1:t2", "p", 2)
+	r, err := ReconcilePane(ctx, h.env, "w1:p1")
+	nb := h.binding("IcyKnoll")
+	if err != nil || nb.ID != b.ID || nb.Generation != b.Generation || nb.Status != bindings.Active || nb.PaneID != "w1:p1" ||
+		nb.WorkspaceID != "w1" || nb.TabID != "w1:t2" || nb.Slot != b.Slot || len(r.Warnings) != 0 {
+		t.Fatalf("binding = %+v, report %+v %v", nb, r, err)
+	}
+	if want := "IcyKnoll moved from tab w1:t1 to tab w1:t2, slot " + b.Slot; !slices.Contains(r.Actions, want) {
+		t.Fatalf("report %+v, want %q", r, want)
+	}
+	if ev := nb.Evidence[len(nb.Evidence)-1]; ev.Kind != "move" || ev.Detail != "herdr moved w1:p1 from tab w1:t1 to tab w1:t2" {
+		t.Fatalf("evidence = %+v", ev)
+	}
+	if r, err = ReconcilePane(ctx, h.env, "w1:p1"); err != nil || len(r.Actions) != 0 || len(r.Warnings) != 0 {
+		t.Fatalf("second reconcile: %+v %v", r, err)
+	}
+}
+
 // A moved agent's hooks still name its old pane (HERDR_PANE_ID); after
 // nhm followed the move, a compaction still continues the binding and
 // the agent still gets its reminder (nhm-5qa).
