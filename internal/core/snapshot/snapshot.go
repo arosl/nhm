@@ -173,6 +173,10 @@ type BindingRef struct {
 	Alias      string          `json:"herdr_alias,omitempty"`
 	// NameMatches is false when herdr shows another name than the alias.
 	NameMatches bool `json:"name_matches"`
+	// CompactedAt and ResumedAt are the last compaction and resume that
+	// nhm's hooks recorded for the occupant (nhm-8ns).
+	CompactedAt *time.Time `json:"compacted_at,omitempty"`
+	ResumedAt   *time.Time `json:"resumed_at,omitempty"`
 }
 
 // Workspace is one herdr workspace (ntm's session).
@@ -607,7 +611,8 @@ func (m *Model) join(snap herdr.SessionSnapshot, all []bindings.Binding, opts Op
 			ag.Slot = b.Slot
 			ag.Binding = &BindingRef{ID: b.ID, Generation: b.Generation, Status: b.Status, MailName: b.MailName,
 				ProjectKey: b.MailProjectKey, Model: b.Model, Alias: b.HerdrAlias,
-				NameMatches: b.HerdrAlias == "" || a.Name == b.HerdrAlias}
+				NameMatches: b.HerdrAlias == "" || a.Name == b.HerdrAlias,
+				CompactedAt: b.CompactedAt, ResumedAt: b.ResumedAt}
 		}
 		agentCount[a.WorkspaceID]++
 		m.Agents = append(m.Agents, ag)

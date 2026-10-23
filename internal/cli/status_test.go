@@ -251,6 +251,58 @@ func TestListVerb(t *testing.T) {
 	}
 }
 
+// METHOD-MATRIX E04 (nhm-8ns): status and list show the binding's
+// compacted_at and resumed_at once the hook recorded them, as resolve
+// does, and leave them out before.
+func TestStatusAndListShowCompactionAndResume(t *testing.T) {
+	s := swarmInstance(t)
+	binding := func(args ...string) map[string]any {
+		t.Helper()
+		code, out, errOut := run(append(args, "--json", "--socket", s.SocketPath)...)
+		if code != 0 {
+			t.Fatalf("%v = %d\n%s%s", args, code, out, errOut)
+		}
+		for _, a := range envelopeOf(t, out)["result"].(map[string]any)["agents"].([]any) {
+			if b, ok := a.(map[string]any)["binding"].(map[string]any); ok && b["mail_name"] == "IcyKnoll" {
+				return b
+			}
+		}
+		t.Fatalf("%v: IcyKnoll has no binding\n%s", args, out)
+		return nil
+	}
+	verbs := [][]string{{"status", "swarm", "--no-mail"}, {"list"}}
+	for _, verb := range verbs {
+		b := binding(verb...)
+		if _, has := b["compacted_at"]; has {
+			t.Fatalf("%v: compacted_at before a compaction: %v", verb, b)
+		}
+		if _, has := b["resumed_at"]; has {
+			t.Fatalf("%v: resumed_at before a resume: %v", verb, b)
+		}
+	}
+	ie, err := openInstance(s.SocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := bindings.NewStore(ie.db)
+	b, err := st.ActiveByPane(context.Background(), "w1:p1")
+	if err == nil {
+		compacted := time.Date(2026, 10, 23, 15, 22, 27, 0, time.UTC)
+		resumed := compacted.Add(time.Minute)
+		_, err = st.Continue(context.Background(), b.ID, b.Generation,
+			bindings.Continuation{CompactedAt: &compacted, ResumedAt: &resumed})
+	}
+	_ = ie.db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range verbs {
+		if b := binding(verb...); b["compacted_at"] != "2026-10-23T15:22:27Z" || b["resumed_at"] != "2026-10-23T15:23:27Z" {
+			t.Fatalf("%v: binding = %v", verb, b)
+		}
+	}
+}
+
 func TestSnapshotAndAttention(t *testing.T) {
 	s := swarmInstance(t)
 	code, out, _ := run("snapshot", "--no-mail", "--socket", s.SocketPath)
