@@ -63,6 +63,38 @@ func (f robotAssignFlags) strategyValue() string {
 	return *f.legacyStrategy
 }
 
+// options are the robot form's assignment choices for the spawn's
+// fingerprint, as spawn --assign's are (humanAssign.options): a rerun of
+// the operation with other choices, or without --spawn-assign-work, is
+// refused, since a replay may assign (nhm-88n). prompt is --spawn-prompt,
+// which goes ahead of every work prompt.
+func (f robotAssignFlags) options(prompt string) string {
+	b, _ := json.Marshal(map[string]any{"strategy": f.strategyValue(), "prompt": prompt, "with_cass": *f.withCASS,
+		"with_memory": *f.withMemory})
+	return string(b)
+}
+
+// robotReplayPlan is the plan of a replayed --robot-spawn
+// --spawn-assign-work, by spawn --assign's rule (nhm-88n, nhm-vcf). A
+// first run that reached none of its agents (replayUntouched finds every
+// one) ended between the spawn and the assignment: the verified plan runs,
+// as on a first run. Otherwise the plan holds no work, so the phase claims
+// and sends nothing and reports only the ledger's complete assignments
+// (ntm's durable replay): an agent that the first run did not reach gets
+// what ntm's robot spawn gives an agent without work, no prompt. It fills
+// res.WorkspaceID, which the occupants need. The caller holds the
+// operation's lock.
+func robotReplayPlan(ctx context.Context, ie *instanceEnv, res *spawn.Result, plan spawnassign.Plan) (spawnassign.Plan, error) {
+	untouched, err := replayUntouched(ctx, ie, res)
+	if err != nil {
+		return plan, err
+	}
+	if len(res.Targets) == 0 || len(untouched) < len(res.Targets) {
+		plan.Triage = &bv.TriageResponse{}
+	}
+	return plan, nil
+}
+
 // robotAssignPreflight runs ntm's assignment preflight for project before
 // the spawn creates anything: no reservations (nhm does not take ntm's
 // reservation runtime), the strict policy, the verified actionable plan. A

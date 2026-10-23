@@ -15,6 +15,7 @@ import (
 	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -237,5 +238,143 @@ func TestSpawnAssignReplayWaitsForTheFirstRun(t *testing.T) {
 	unlock()
 	if code, out, errOut = run(w.args...); code != 0 || len(w.h.sent()) != 2 {
 		t.Fatalf("rerun after the lock = %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+// newRobotReplayWorld is a --robot-spawn --spawn-assign-work whose first
+// run ended after the spawn and before the assignment (nhm-88n): one
+// agent up, with no prompt. The robot admission needs a quota observation
+// and the guards; a replay never asks it, so the first run here admits
+// without them.
+func newRobotReplayWorld(t *testing.T) *replayWorld {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake tools use a POSIX shell")
+	}
+	s, inst, h := newSendInstance(t)
+	spawnHerdr(t, s, h)
+	spawnAgentMail(t, "GreenPike")
+	t.Setenv("HOME", t.TempDir())
+	project := assignTools(t)
+	ownNhm(t, inst)
+	w := &replayWorld{s: s, inst: inst, h: h, args: []string{"--robot-spawn=swarm", "--spawn-dir=" + project, "--spawn-cc=1",
+		"--spawn-assign-work", "--spawn-prompt=Read AGENTS.md.", "--op-id=sp-q1", "--robot-format=json", "--socket=" + s.SocketPath}}
+	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	rf := addRobotSpawnFlags(fs)
+	if err := fs.Parse(w.args); err != nil {
+		t.Fatal(err)
+	}
+	req := robotSpawnRequest(fs, rf)
+	ie, err := openInstance(s.SocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ie.db.Close()
+	ctx := context.Background()
+	sc, err := projectScope(ctx, ie.inst.ID, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ProjectRoot, req.ProjectID, req.Scope = sc.ProjectRoot, sc.ProjectID, sc
+	senv, err := ie.spawnEnv(req.ProjectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senv.Admission = spawn.AdmissionEnv{AdmitUnknown: []string{kinds.Lookup("claude").QuotaPool}}
+	res, err := spawn.Spawn(ctx, senv, req)
+	if err != nil || !res.Ready() || len(res.Targets) != 1 || len(h.sent()) != 0 {
+		t.Fatalf("first run's spawn = %+v, %v, %q", res, err, h.sent())
+	}
+	w.first = res
+	return w
+}
+
+// robotAssignments is a robot answer's assignments by bead id ("" for an
+// agent with none).
+func robotAssignments(t *testing.T, out map[string]any) map[string]map[string]any {
+	t.Helper()
+	rows := map[string]map[string]any{}
+	list, _ := out["assignments"].([]any)
+	for _, r := range list {
+		row, _ := r.(map[string]any)
+		id, _ := row["bead_id"].(string)
+		rows[id] = row
+	}
+	return rows
+}
+
+// A robot first run that reached none of its agents: the rerun assigns as
+// the first run would have, the bead with --spawn-prompt ahead of it. A
+// rerun after that one claims and sends nothing: it reports the ledger's
+// assignment, ntm's durable replay.
+func TestRobotSpawnAssignReplayAfterACrash(t *testing.T) {
+	w := newRobotReplayWorld(t)
+	out, code := robotJSON(t, w.args...)
+	rows := robotAssignments(t, out)
+	sent := w.h.sent()
+	if code != 0 || out["success"] != true || rows["nhm-1"]["claimed"] != true || rows["nhm-1"]["prompt_sent"] != true ||
+		len(sent) != 1 || !strings.Contains(sent[0], "Read AGENTS.md.\n\nWork on bead nhm-1: Fix the thing") {
+		t.Fatalf("rerun = %d %v %q", code, out, sent)
+	}
+	out, code = robotJSON(t, w.args...)
+	rows = robotAssignments(t, out)
+	if code != 0 || out["success"] != true || rows["nhm-1"]["claimed"] != true || rows["nhm-1"]["prompt_sent"] != true ||
+		len(w.h.sent()) != 1 {
+		t.Fatalf("second rerun = %d %v %q", code, out, w.h.sent())
+	}
+}
+
+// When the first run reached its agent (here a hand send, done since), the
+// rerun claims and sends nothing: the agent gets what ntm's robot spawn
+// gives an agent without work, and the answer says that it has none.
+func TestRobotSpawnAssignReplayAssignsNoNewWork(t *testing.T) {
+	w := newRobotReplayWorld(t)
+	green := w.first.Targets[0]
+	if code, out, errOut := run("send", "swarm", "hello", "--name", green.MailName, "--socket", w.s.SocketPath); code != 0 {
+		t.Fatalf("hand send = %d %s %s", code, out, errOut)
+	}
+	w.h.finish(green.PaneID)
+	out, code := robotJSON(t, w.args...)
+	rows := robotAssignments(t, out)
+	if code != 1 || out["error_code"] != "ASSIGNMENT_FAILED" || len(rows) != 1 || rows[""] == nil || rows["nhm-1"] != nil ||
+		len(w.h.sent()) != 1 {
+		t.Fatalf("rerun = %d %v %q", code, out, w.h.sent())
+	}
+}
+
+// While the first run still runs, a robot rerun answers
+// OPERATION_IN_PROGRESS and sends nothing. The assignment's choices enter
+// the fingerprint: the same id without --spawn-assign-work, or with
+// another --spawn-prompt, is a conflict, not a replay.
+func TestRobotSpawnAssignReplayLockAndFingerprint(t *testing.T) {
+	w := newRobotReplayWorld(t)
+	unlock, err := store.LockOperation(w.inst.Dir, "sp-q1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code := robotJSON(t, w.args...)
+	unlock()
+	if code != 1 || out["error_code"] != "OPERATION_IN_PROGRESS" || len(w.h.sent()) != 0 {
+		t.Fatalf("rerun under the lock = %d %v", code, out)
+	}
+	// plain is the same spawn request without the assignment: no kickoff
+	// either way, so only the assignment's choices tell them apart.
+	var plain, other []string
+	for _, a := range w.args {
+		prompt := strings.HasPrefix(a, "--spawn-prompt=")
+		if a != "--spawn-assign-work" && !prompt {
+			plain = append(plain, a)
+		}
+		if prompt {
+			a = "--spawn-prompt=Read README.md."
+		}
+		other = append(other, a)
+	}
+	for _, args := range [][]string{plain, other} {
+		out, code := robotJSON(t, args...)
+		if code != 1 || out["error_code"] != "IDEMPOTENCY_CONFLICT" || len(w.h.sent()) != 0 {
+			t.Fatalf("%v = %d %v", args, code, out)
+		}
 	}
 }

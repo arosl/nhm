@@ -925,7 +925,7 @@ func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) spawn.Request {
 		ReadyTimeout: robotReadyWait(fs, rf), TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
 		OperationID: *rf.opID, Safety: *rf.safety}
 	if *rf.assign {
-		req.Prompt, req.NoKickoff = "", true
+		req.Prompt, req.NoKickoff, req.AssignOptions = "", true, rf.assignFlags.options(*rf.prompt)
 	}
 	for flagName, n := range rf.counts {
 		if *n == 0 {
@@ -991,13 +991,36 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 			return robotWrite(stdout, robotAssignRefusal(refusal, req.Session, *dir, *format, now), robotError)
 		}
 	}
+	// --spawn-assign-work under an --op-id holds the operation's lock to
+	// its last send, as spawn --assign does: a rerun that gets it knows
+	// that the first run is over (nhm-88n).
+	if *assign && !*dryRun && req.OperationID != "" {
+		unlock, err := store.LockOperation(ie.inst.Dir, req.OperationID)
+		if errors.Is(err, store.ErrOperationBusy) {
+			return robotFail(stdout, robot.ErrCodeOperationInProgress, err.Error(),
+				"another nhm process still runs this operation; retry when it ends", *format, robotError, now)
+		}
+		if err != nil {
+			return robotFail(stdout, robot.ErrCodeInternalError, err.Error(), "", *format, robotError, now)
+		}
+		defer unlock()
+	}
 	res, _, err := spawnUnderOwner(ctx, ie, &req, *dir)
 	if res.Session == "" {
 		res.Session, res.ProjectRoot = req.Session, req.ProjectRoot
 	}
+	// A replay assigns new work only when the first run reached none of
+	// its agents (nhm-88n).
+	if *assign && err == nil && res.Replayed && res.Ready() {
+		plan, err = robotReplayPlan(ctx, ie, &res, plan)
+	}
 	out := spawn.SpawnOutput(res, err, *format, now)
-	if errors.Is(err, core.ErrNotOwner) {
+	switch {
+	case errors.Is(err, core.ErrNotOwner):
 		out.ErrorCode = robot.ErrCodeNotOwner
+	case errors.Is(err, store.ErrOperationIDConflict):
+		// ntm's code for an --op-id reused with another request.
+		out.ErrorCode = robot.ErrCodeIdempotencyConflict
 	}
 	if errors.Is(err, spawn.ErrSessionExists) {
 		// ntm's answer (internal/robot/spawn.go:242-243): INVALID_FLAG,
