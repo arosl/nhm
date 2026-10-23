@@ -134,6 +134,8 @@ Usage:
                          move an agent's pane to a new tab of W; its binding follows
   nhm move <Name> --tab T [--per-tab N] [--dry-run] [--json]
                          move an agent's pane into tab T's next grid cell
+  nhm arrange [session] [--per-tab N] [--dry-run] [--json]
+                         pack a session's agents into full grid tabs, in slot order
   nhm admin instance enroll [--session NAME] [--socket PATH] [--json]
                          enroll a herdr server (ACFS's install runs it)
   nhm admin recover reconcile --import-only [--dry-run] [--json]
@@ -167,6 +169,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runAdopt(args[1:], stdout, stderr)
 	case "move":
 		return runMove(args[1:], stdout, stderr)
+	case "arrange":
+		return runArrange(args[1:], stdout, stderr)
 	case "retire":
 		return runRetire(args[1:], stdout, stderr)
 	case "recycle":
