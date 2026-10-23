@@ -39,8 +39,8 @@ type Binary struct {
 // LaunchPath is the path the running nhm was started by, made absolute:
 // os.Args[0] when it names a file, else what PATH resolves it to. herdr
 // starts a plugin pane's "../nhm" as "<plugin dir>/../nhm" in the
-// workspace's directory (checked on herdr 0.9.3), and `nhm board --go`
-// in a shell is PATH's nhm link. A bare name that PATH does not resolve
+// workspace's directory (checked on herdr 0.9.3), and `nhm board` in a
+// shell is PATH's nhm link. A bare name that PATH does not resolve
 // is an error: the running executable is the resolved release file,
 // which an install never changes, so watching it would never freeze the
 // board. Call it before anything changes the working directory.

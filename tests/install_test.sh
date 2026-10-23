@@ -60,11 +60,10 @@ else
   fail "nhm-hook is linked and runs: $(readlink "$home/.local/bin/nhm-hook")"
 fi
 cur="$home/.local/share/nhm/current"
-if [[ -x "$cur/nhm-palette" ]] && grep -q "^version = \"$version\"" "$cur/plugin/herdr-plugin.toml" &&
-  "$cur/nhm-palette" --help > /dev/null 2>&1; then
-  pass "the release ships nhm-palette and the herdr plugin, with its version"
+if grep -q "^version = \"$version\"" "$cur/plugin/herdr-plugin.toml" && [[ ! -e "$cur/nhm-palette" ]]; then
+  pass "the release ships the herdr plugin, with its version, and no nhm-palette"
 else
-  fail "the release ships nhm-palette and the herdr plugin: $(ls -R "$cur" 2>&1)"
+  fail "the release ships the herdr plugin and no nhm-palette: $(ls -R "$cur" 2>&1)"
 fi
 if [[ "$(readlink "$home/.local/share/nhm/current")" == "releases/$version" ]]; then
   pass "current points at the release"
@@ -124,7 +123,7 @@ newname="nhm-$version-linux-$(go env GOARCH 2> /dev/null || echo amd64)"
 mkdir -p "$work/oldsrc" "$work/olddist"
 tar --zstd -xf "$dist/$newname.tar.zst" -C "$work/oldsrc"
 mv "$work/oldsrc/$newname" "$work/oldsrc/$oldname"
-rm "$work/oldsrc/$oldname/nhm-hook" "$work/oldsrc/$oldname/nhm-palette" "$work/oldsrc/$oldname/plugin/herdr-plugin.toml"
+rm "$work/oldsrc/$oldname/nhm-hook" "$work/oldsrc/$oldname/plugin/herdr-plugin.toml"
 rmdir "$work/oldsrc/$oldname/plugin"
 (cd "$work/oldsrc/$oldname" && sha256sum nhm LICENSE PROVENANCE.md > SHA256SUMS)
 tar --zstd -C "$work/oldsrc" -cf "$work/olddist/$oldname.tar.zst" "$oldname"

@@ -10,8 +10,9 @@ import (
 	"strings"
 )
 
-// State file names in the state directory: one key per line. The fzf
-// palette (scripts/nhm-palette) reads and writes the same files.
+// State file names in the state directory: one key per line. nhm's
+// former fzf palette (scripts/nhm-palette) kept the same files, so its
+// pins, favorites and recents carry over.
 const (
 	PinsFile      = "pins"
 	FavoritesFile = "favorites"

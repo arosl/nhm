@@ -39,7 +39,7 @@ func runSpawnJob(ctx context.Context, ie *instanceEnv, j runner.Job) (any, int, 
 
 // spawnRequestOf is the core's request for a surface's spawn: the
 // wizard's fields, with the kickoff's enrichment from nhm's config, as
-// the gum wizard builds it. The project is the cwd.
+// nhm spawn builds it from its flags. The project is the cwd.
 func spawnRequestOf(r runner.SpawnRequest) (spawn.Request, error) {
 	enrichment, err := spawnEnrichment(&spawnFlags{withMemory: r.Memory, withCASS: r.CASS, noCASSContext: !r.CASS})
 	if err != nil {

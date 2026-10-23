@@ -224,16 +224,6 @@ The same rules apply to code from pt and dcg.
 | `internal/core/panediff/codeblock_ntm.go` | `internal/codeblock/parser.go` (in part) | provenance header; the package; only what `ntm diff --code-only` uses: `CodeBlock`'s language, content and lines, the language names, and the fence parser as `ExtractFromText` itself (ntm's `Parser.Parse`, without the `Parser` type and its language filter), with its comments on the fences shortened; the file path detection, `Extraction` and `DetectLanguage` left out |
 | `internal/core/panediff/codeblock_ntm_test.go` | `internal/codeblock/parser_test.go` (in part) | provenance header; the package; only the tests of what `codeblock_ntm.go` keeps |
 
-## Files from ACFS at 4ba4464fbe5e848f3c41eae87c574fe75ffd1319
-
-ACFS (github.com/arosl/agentic_coding_flywheel_setup) has the same
-licence text as ntm; `scripts/LICENSE` is ACFS's, unmodified.
-
-| nhm path | ACFS path | Local changes |
-|---|---|---|
-| `scripts/LICENSE` | `LICENSE` | none |
-| `scripts/nhm-palette` | `scripts/lib/palette.sh` | provenance header; targets from `nhm status`, the send through `nhm send -t FILE.md` (bound agents only, `--var thread`), `NHM_CONTEXT`, nhm's palette and state paths; `bind` and `unbind` removed (now `nhm bind`) |
-
 ## Files from herdr
 
 | nhm path | Source | Local changes |

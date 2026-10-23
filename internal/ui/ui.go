@@ -28,7 +28,7 @@ import (
 const PluginID = "nhm"
 
 // Popups are the popup panes the plugin declares, by entrypoint.
-var Popups = []string{"palette", "board", "menu", "spawn"}
+var Popups = []string{"palette", "board", "menu"}
 
 // ContextEnv is the variable that carries the captured context into a
 // popup.
@@ -325,24 +325,6 @@ func Open(ctx context.Context, h Opener, entrypoint string, c Context) error {
 		return ErrBusy
 	}
 	return err
-}
-
-// Beside returns the path of a file that ships beside the running nhm
-// binary in its release (nhm-palette, the plugin), or "" when there is
-// none.
-func Beside(name string) string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	if real, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = real
-	}
-	p := filepath.Join(filepath.Dir(exe), name)
-	if _, err := os.Stat(p); err != nil {
-		return ""
-	}
-	return p
 }
 
 // userBinDirs are where ACFS installs the tools nhm runs (cm, cass, br,

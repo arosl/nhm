@@ -3,15 +3,18 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestSurfaceEngine(t *testing.T) {
+// [ui] = "go" (aro-acf's config) still loads and does nothing; "fzf"
+// says plainly that the fzf surfaces are gone (nhm-qbi.12).
+func TestCheckUIConfig(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	path := filepath.Join(cfg, "nhm", "config.toml")
-	if e, err := surfaceEngine("menu"); err != nil || e != engineFzf {
-		t.Fatalf("no config = %q %v", e, err)
+	if err := checkUIConfig(); err != nil {
+		t.Fatalf("no config = %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -22,20 +25,21 @@ func TestSurfaceEngine(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("[reap]\nkeep = [\"IcyKnoll\"]\n\n[ui]\nmenu = \"go\"\nboard = \"fzf\"\n")
-	for surface, want := range map[string]string{"menu": engineGo, "board": engineFzf, "palette": engineFzf} {
-		if e, err := surfaceEngine(surface); err != nil || e != want {
-			t.Errorf("%s = %q %v, want %q", surface, e, err, want)
+	for _, good := range []string{"[reap]\nkeep = [\"IcyKnoll\"]\n", "[ui]\nmenu = \"go\"\npalette = \"go\"\nboard = \"go\"\n"} {
+		write(good)
+		if err := checkUIConfig(); err != nil {
+			t.Errorf("%q = %v", good, err)
 		}
 	}
-	if _, err := surfaceEngine("spawn"); err == nil {
-		t.Error("an unknown surface was read")
+	write("[ui]\nmenu = \"go\"\nboard = \"fzf\"\n")
+	if err := checkUIConfig(); err == nil || !strings.Contains(err.Error(), `ui.board is "fzf", but nhm no longer has the fzf`) {
+		t.Errorf("fzf = %v", err)
 	}
-	// A typo is an error, never the other engine.
-	for _, bad := range []string{"[ui]\nmenu = \"Go\"\n", "[ui]\nmneu = \"go\"\n", "[ui]\nmenu = true\n", "[ui\n"} {
+	// A typo is an error.
+	for _, bad := range []string{"[ui]\nmenu = \"Go\"\n", "[ui]\nmneu = \"go\"\n", "[ui]\nmenu = true\n", "[ui]\nspawn = \"go\"\n", "[ui\n"} {
 		write(bad)
-		if e, err := surfaceEngine("menu"); err == nil {
-			t.Errorf("%q gave %q", bad, e)
+		if err := checkUIConfig(); err == nil {
+			t.Errorf("%q loaded", bad)
 		}
 	}
 }

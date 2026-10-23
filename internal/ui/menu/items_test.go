@@ -1,7 +1,6 @@
 package menu
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/arosl/nhm/internal/ui/actions"
@@ -21,18 +20,6 @@ func TestNotInMenuHasReasons(t *testing.T) {
 		}
 		if n.Reason == "" {
 			t.Errorf("%q has no reason", n.Leaf)
-		}
-	}
-}
-
-// The menu's own row keeps clear of the top level's keys.
-func TestPaletteGoKey(t *testing.T) {
-	if slices.Contains(actions.MenuReserved, paletteGo.Menu.Key) {
-		t.Fatalf("%q is reserved", paletteGo.Menu.Key)
-	}
-	for _, a := range actions.Level("") {
-		if a.Menu.Key == paletteGo.Menu.Key {
-			t.Fatalf("%q picks %s too", paletteGo.Menu.Key, a.ID)
 		}
 	}
 }

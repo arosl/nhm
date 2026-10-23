@@ -57,39 +57,3 @@ func TestAddWarnsOfAnotherProjectsWorkspace(t *testing.T) {
 		t.Fatalf("add beside its own project's agent warned: %q", mixed)
 	}
 }
-
-// answers is a prompter for the spawn wizard: one claude, the defaults,
-// no kickoff, and no at the yes.
-type answers struct{}
-
-func (answers) Choose(_ string, options []string, multi bool) ([]string, error) {
-	if multi {
-		return []string{"claude"}, nil
-	}
-	return options[len(options)-1:], nil
-}
-func (answers) Input(_, _, value string) (string, error) { return value, nil }
-func (answers) Write(string, string) (string, error)     { return "", nil }
-func (answers) Confirm(string) (bool, error)             { return false, nil }
-
-// The wizard prints the plan's warnings with the plan, before its yes, so
-// the operator reads that the session holds other projects' agents only
-// before anything starts (nhm-8ze). The test's HOME has no guards, so
-// admission refuses right after the plan; the warning still comes first.
-func TestSpawnWizardWarnsWithThePlan(t *testing.T) {
-	s, _, h := newSendInstance(t)
-	spawnHerdr(t, s, h)
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PATH", t.TempDir())
-	var stdout, stderr strings.Builder
-	code := runSpawnWizard(context.Background(), answers{}, "swarm", true, t.TempDir(), s.SocketPath, &stdout, &stderr)
-	errOut := stderr.String()
-	warn := strings.Index(errOut, "nhm add: warning: workspace w1 holds agents of other projects only (/p)")
-	if code == exitOK || warn < 0 || !strings.Contains(stdout.String(), "would start 1 agents in swarm (w1)") ||
-		strings.Contains(stdout.String(), "started 1") {
-		t.Fatalf("wizard = %d\nstdout %s\nstderr %s", code, stdout.String(), errOut)
-	}
-	if refused := strings.Index(errOut, "admission refused"); refused >= 0 && refused < warn {
-		t.Fatalf("the warning came after the refusal:\n%s", errOut)
-	}
-}

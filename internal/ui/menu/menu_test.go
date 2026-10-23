@@ -176,16 +176,16 @@ func TestRowsShowWhatCanOpen(t *testing.T) {
 	if diag := ids(m.Rows("diagnostics")); !strings.Contains(diag, "diag.doctor") {
 		t.Errorf("diagnostics = %q", diag)
 	}
-	// A menu whose palettes are there (it looks for surfaces once).
+	// A menu whose palette is there (it looks for surfaces once).
 	m = newMenu(ctxW, &fakeCore{})
 	m.env.Surface = func(id string) *exec.Cmd {
-		if id == "palette" || id == "palette.go" {
+		if id == "palette" {
 			return exec.Command("true")
 		}
 		return nil
 	}
-	if top := ids(m.Rows("")); !strings.Contains(top, "palette palette.go") || strings.Contains(top, "board") {
-		t.Errorf("with the palettes: %q", top)
+	if top := ids(m.Rows("")); !strings.Contains(top, "palette") || strings.Contains(top, "board") {
+		t.Errorf("with the palette: %q", top)
 	}
 }
 

@@ -228,9 +228,9 @@ func TestGoBoardZoomBringsItsTabInFront(t *testing.T) {
 	}
 }
 
-// prefix+d follows [ui] board: "go" opens the Go board in a tab; the
-// default opens today's board popup.
-func TestUIBoardFollowsTheSwitch(t *testing.T) {
+// prefix+d opens the Go board in a tab, by default and with [ui] board =
+// "go"; "fzf" says the fzf board is gone (nhm-qbi.12).
+func TestUIBoardOpensTheGoBoard(t *testing.T) {
 	s, _ := cliInstance(t)
 	boardHerdr(t, s)
 	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
@@ -246,9 +246,10 @@ func TestUIBoardFollowsTheSwitch(t *testing.T) {
 		return p.Placement
 	}
 	var stderr bytes.Buffer
-	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitOK || placement() != "popup" {
+	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitOK || placement() != "tab" {
 		t.Fatalf("default: code %d, placement %q: %s", code, placement(), stderr.String())
 	}
+	opens := len(requests(s, "plugin.pane.open"))
 	dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "nhm")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -256,15 +257,19 @@ func TestUIBoardFollowsTheSwitch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[ui]\nboard = \"go\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitOK || placement() != "tab" {
-		t.Fatalf("go: code %d, placement %q: %s", code, placement(), stderr.String())
+	// The board of the first call is starting: the second finds it and
+	// opens none.
+	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitOK || len(requests(s, "plugin.pane.open")) != opens {
+		t.Fatalf("go: code %d, %d opens: %s", code, len(requests(s, "plugin.pane.open")), stderr.String())
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[ui]\nboard = \"gogo\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	stderr.Reset()
-	if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitError || !strings.Contains(stderr.String(), "ui.board") {
-		t.Fatalf("a bad value: code %d: %s", code, stderr.String())
+	for value, want := range map[string]string{"fzf": "no longer has the fzf palette, menu and board", "gogo": "ui.board"} {
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[ui]\nboard = \""+value+"\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stderr.Reset()
+		if code := runUI([]string{"board"}, &bytes.Buffer{}, &stderr); code != exitError || !strings.Contains(stderr.String(), want) {
+			t.Fatalf("%s: code %d: %s", value, code, stderr.String())
+		}
 	}
 }
 
@@ -279,11 +284,31 @@ func TestGoBoardValidatesItsContext(t *testing.T) {
 		data, _ := json.Marshal(c)
 		t.Setenv(ui.ContextEnv, string(data))
 		var stderr bytes.Buffer
-		if code := runGoBoard(&stderr); code != exitRefused {
+		if code := runGoBoard("", &stderr); code != exitRefused {
 			t.Errorf("%s: runGoBoard = %d: %s", name, code, stderr.String())
 		}
 	}
 	if n := len(requests(s, "session.snapshot")); n != 0 {
 		t.Fatalf("a refused board asked herdr %d times", n)
+	}
+}
+
+// --go chose the Go board and menu while the fzf ones were the default:
+// it is accepted and does nothing. spawn --interactive ran the gum
+// wizard: it says where the spawn wizard is (nhm-qbi.12).
+func TestRemovedSurfacesFlags(t *testing.T) {
+	s, _ := zoomServer(t)
+	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
+	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", "")
+	t.Setenv(ui.ContextEnv, "")
+	if code, _, errOut := run("board", "--go", "nosuch"); code != exitRefused || !strings.Contains(errOut, `session "nosuch": no such workspace`) {
+		t.Errorf("board --go nosuch = %d %q", code, errOut)
+	}
+	if code, _, errOut := run("menu", "--go", "stray"); code != exitRefused || !strings.Contains(errOut, "Usage: nhm palette") {
+		t.Errorf("menu --go stray = %d %q", code, errOut)
+	}
+	if code, _, errOut := run("spawn", "swarm", "--cc=1", "--interactive"); code != exitRefused ||
+		!strings.Contains(errOut, "nhm menu (prefix+m) has the spawn wizard") {
+		t.Errorf("spawn --interactive = %d %q", code, errOut)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"slices"
 
@@ -12,60 +13,52 @@ import (
 	"github.com/arosl/nhm/internal/core/enrich"
 )
 
-// The engines of a surface. Until a Go surface passes its acceptance, the
-// operator opens it by choice ([ui] in nhm's config, or --go); then the
-// default becomes "go" and the fzf and gum code goes (plan-v4 sections 0
-// and 10).
-const (
-	engineFzf = "fzf"
-	engineGo  = "go"
-)
-
-// uiSurfaces are the surfaces [ui] switches.
+// uiSurfaces are the surfaces [ui] in nhm's config named while the fzf
+// palette, menu and board were the default.
 var uiSurfaces = []string{"menu", "palette", "board"}
 
-// surfaceEngine is the engine nhm's config sets for a surface:
+// checkUIConfig checks [ui] in nhm's config. The Go surfaces are the only
+// ones since the operator accepted them (nhm-qbi.12), so "go", which
+// chose them before, is accepted and does nothing:
 //
 //	[ui]
-//	menu = "go"      # default "fzf"
+//	menu = "go"
 //	palette = "go"
 //	board = "go"
 //
-// A missing file or key is the default. An unknown key or value is an
-// error, so that a typo shows in the popup instead of opening the other
-// engine.
-func surfaceEngine(surface string) (string, error) {
-	if !slices.Contains(uiSurfaces, surface) {
-		return "", fmt.Errorf("[ui] has no surface %q", surface)
-	}
+// "fzf" is an error that says the fzf surfaces are gone, and so is an
+// unknown key or value, so that a typo shows in the popup. A missing file
+// or block is no error.
+func checkUIConfig() error {
 	path, err := enrich.ConfigPath()
 	if err != nil {
-		return engineFzf, nil
+		// No HOME and no XDG_CONFIG_HOME: no config to check.
+		return nil
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return engineFzf, nil
+		return nil
 	}
 	if err != nil {
-		return "", err
+		return err
 	}
 	var f struct {
 		UI map[string]any `toml:"ui"`
 	}
 	if _, err := toml.Decode(string(data), &f); err != nil {
-		return "", fmt.Errorf("%s: %w", path, err)
+		return fmt.Errorf("%s: %w", path, err)
 	}
-	engine := engineFzf
-	for key, v := range f.UI {
-		s, ok := v.(string)
+	for _, key := range slices.Sorted(maps.Keys(f.UI)) {
+		s, ok := f.UI[key].(string)
 		switch {
 		case !slices.Contains(uiSurfaces, key):
-			return "", fmt.Errorf("%s: [ui] takes %v, not %s", path, uiSurfaces, key)
-		case !ok || s != engineFzf && s != engineGo:
-			return "", fmt.Errorf("%s: ui.%s is %q or %q", path, key, engineGo, engineFzf)
-		case key == surface:
-			engine = s
+			return fmt.Errorf("%s: [ui] takes %v, not %s", path, uiSurfaces, key)
+		case ok && s == "fzf":
+			return fmt.Errorf("%s: ui.%s is \"fzf\", but nhm no longer has the fzf palette, menu and board: delete the line (the Go %s is the default)",
+				path, key, key)
+		case !ok || s != "go":
+			return fmt.Errorf("%s: ui.%s is \"go\" or not set", path, key)
 		}
 	}
-	return engine, nil
+	return nil
 }

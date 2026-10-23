@@ -39,8 +39,12 @@ import (
 // old board and the open.
 const boardOpenWait = 15 * time.Second
 
-// openGoBoard is prefix+d with the Go board.
+// openGoBoard is prefix+d.
 func openGoBoard(stderr io.Writer) int {
+	if err := checkUIConfig(); err != nil {
+		fmt.Fprintf(stderr, "nhm ui board: %v\n", err)
+		return exitError
+	}
 	c, err := ui.Capture(os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm ui board: %v\n", err)
@@ -92,20 +96,32 @@ func openGoBoard(stderr io.Writer) int {
 	return exitOK
 }
 
-// runGoBoard is the board's program in its tab, or `nhm board --go` in a
-// pane. It acts on the workspace it was opened for and never falls back
-// to the focused one.
-func runGoBoard(stderr io.Writer) int {
+// runGoBoard is the board's program in its tab, or `nhm board [session]`
+// in a pane. It acts on the workspace it was opened for (session's, when
+// given) and never falls back to the focused one.
+func runGoBoard(session string, stderr io.Writer) int {
 	// The path the board was started by, before anything changes the
 	// working directory: an upgrade switches the links it resolves through.
 	launch, launchErr := board.LaunchPath()
+	if err := checkUIConfig(); err != nil {
+		fmt.Fprintf(stderr, "nhm board: %v\n", err)
+		return exitError
+	}
 	c, err := popupContext()
 	if err != nil {
 		fmt.Fprintf(stderr, "nhm board: %v\n", err)
 		return exitError
 	}
+	if session != "" {
+		// ntm's dashboard <session>.
+		c, err = boardContextFor(context.Background(), herdr.New(c.SocketPath), c, session)
+		if err != nil {
+			fmt.Fprintf(stderr, "nhm board: %v (nhm list shows the sessions)\n", err)
+			return exitRefused
+		}
+	}
 	if c.WorkspaceID == "" {
-		fmt.Fprintln(stderr, "nhm board: no workspace: open the board from herdr (prefix+d), or run it in a herdr pane")
+		fmt.Fprintln(stderr, "nhm board: no workspace: open the board from herdr (prefix+d), run it in a herdr pane, or name a session (nhm board <session>)")
 		return exitRefused
 	}
 	ie, err := openInstance(c.SocketPath)

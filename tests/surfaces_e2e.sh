@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # nhm's Go surfaces in a real herdr (nhm-qbi.11, plan-v4 section 10, the
 # automated cases that need herdr): a private herdr server
-# (tests/herdr_lib.sh) with nhm's plugin, [ui] set to the Go surfaces,
-# nhm's keys bound, a fake Agent Mail (tests/fake_agentmail.py), and a
+# (tests/herdr_lib.sh) with nhm's plugin and no nhm config (the Go
+# surfaces are the default since nhm-qbi.12), nhm's keys bound, a fake Agent Mail (tests/fake_agentmail.py), and a
 # fake claude adopted as IcyKnoll. Each script in
 # tests/surfaces/ drives an attached herdr client in a pty
 # (tests/ptyclient.py) and checks its screen; a track adds its script with
@@ -54,7 +54,6 @@ herdr_private_start
 nhm admin instance enroll >/dev/null
 inst="$(dirname "$(find "$XDG_STATE_HOME/nhm" -name owner.lock | head -1)")"
 printf 'owner = "nhm"\ngeneration = 1\nupdated_at = 2026-10-13T00:00:00Z\n' >"$inst/owner.toml"
-printf '[ui]\nmenu = "go"\npalette = "go"\nboard = "go"\n' >"$XDG_CONFIG_HOME/nhm/config.toml"
 nhm bind --no-reload >/dev/null 2>&1
 herdr server reload-config >/dev/null
 

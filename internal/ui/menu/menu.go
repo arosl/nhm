@@ -40,18 +40,13 @@ type Env struct {
 	Operations forms.OperationsReader
 	// Kinds are the kinds the spawn wizard offers (kinds.All()).
 	Kinds []kinds.Adapter
-	// Surface is the command of another surface ("palette", "palette.go",
-	// "board"), which the menu runs in the same popup until it ends; nil
+	// Surface is the command of another surface ("palette", "board"),
+	// which the menu runs in the same popup until it ends; nil
 	// when it is not there.
 	Surface func(id string) *exec.Cmd
 	// Memory serves the composer's memory preview; nil: none.
 	Memory *palette.Submitter
 }
-
-// paletteGo is the menu's own row for the Go palette until its
-// acceptance (plan-v4 section 5): "palette (new)", after the palette.
-var paletteGo = actions.Action{ID: "palette.go", Label: "palette (new)", Help: "the Go palette, until it is accepted",
-	Kind: actions.KindSurface, Scope: actions.ScopeNone, Menu: actions.MenuPlace{Key: "A"}}
 
 // Model is the menu: one program in a popup, every MVP row of the action
 // table within two levels; forms and views open inside it and return to
@@ -121,9 +116,6 @@ func (m *Model) Rows(level string) []actions.Action {
 	for _, a := range actions.Level(level) {
 		if m.shown(a) {
 			out = append(out, a)
-		}
-		if a.ID == "palette" && level == "" && m.hasSurface(paletteGo.ID) {
-			out = append(out, paletteGo)
 		}
 	}
 	return out

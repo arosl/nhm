@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,37 +11,58 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
-	"github.com/arosl/nhm/internal/ui"
 	"github.com/arosl/nhm/internal/ui/palette"
 	"github.com/arosl/nhm/internal/ui/runner"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
 )
 
-// The Go palette (nhm-qbi.6, plan-v4 section 5): ntm's palette on nhm, in
-// this terminal. nhm palette --go runs it by hand; with [ui] palette =
-// "go" in nhm's config, prefix+a runs it in the popup. Its sends are
-// runner jobs through uiCore, as the board's and the menu's are, so a
-// send outlives the popup.
+// The palette (nhm-qbi.6, plan-v4 section 5): ntm's palette on nhm, in
+// this terminal. prefix+a runs it in the popup. Its sends are runner jobs
+// through uiCore, as the board's and the menu's are, so a send outlives
+// the popup. It took the place of the fzf palette, nhm-palette
+// (nhm-qbi.12), and keeps its flags, its files and ACFS's hand-off.
 
-const paletteGoUsage = `Usage: nhm palette --go [--workspace ID] [--file PATH]
+const paletteUsage = `Usage: nhm palette [--workspace ID] [--file PATH]
+       nhm palette --list [--json] [--file PATH]
+       nhm palette --show KEY [--file PATH]
+       nhm board [session]
+       nhm menu
 
-The new command palette (ntm's), in this terminal, for the calling
-pane's workspace: pick a prompt, edit it, pick the agents by kind digit
-or by hand, and read a receipt per agent. With [ui] palette = "go" in
-nhm's config, prefix+a opens it.
+The command palette (ntm's), the agent board and the nhm menu, in this
+terminal, for the calling pane's workspace; nhm board <session> shows
+that session's workspace (an id or label). In herdr, prefix+a opens the
+palette and prefix+m the menu in a popup, and prefix+d opens the board
+in a tab of its own (nhm bind). nhm dashboard [session], or dash or d,
+is nhm board, by ntm's names.
+
+In the palette, pick a prompt, edit it, pick the agents by kind digit or
+by hand, and read a receipt per agent.
 
   --workspace ID   the agents of this workspace (default: the context's;
                    else pick one)
   --file PATH      read prompts from this file only
+  --list           print the prompts (key, label, category, file) and exit
+  --json           with --list, as JSON
+  --show KEY       print one prompt's text and exit
+  --go             accepted by all three; it does nothing
+
+Palette files, first key wins: --file (or NHM_PALETTE_FILE) alone when
+given; otherwise ./command_palette.md in the pane's directory
+(NHM_PALETTE_CWD when set) and at its project root,
+~/.config/nhm/command_palette.md, then ACFS's
+~/.acfs/onboard/docs/ntm/command_palette.md. Pins and favorites live
+under ~/.local/state/nhm/palette/.
 
 Keys: f1 in the list, ? elsewhere.
 `
@@ -48,21 +70,24 @@ Keys: f1 in the list, ? elsewhere.
 // paletteGoWait bounds the palette's reads before the program starts.
 const paletteGoWait = 15 * time.Second
 
-// runPaletteGo is nhm palette --go, and the popup body with [ui]
-// palette = "go".
-func runPaletteGo(args []string, stdout, stderr io.Writer) int {
+// runPalette is nhm palette, and prefix+a's popup body.
+func runPalette(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("palette", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, paletteGoUsage) }
-	fs.Bool("go", true, "the Go palette")
+	fs.Usage = func() { fmt.Fprint(stderr, paletteUsage) }
+	// --go chose this palette while the fzf one was the default.
+	fs.Bool("go", true, "accepted; it does nothing")
 	workspace := fs.String("workspace", "", "the workspace whose agents get prompts")
 	file := fs.String("file", "", "read prompts from this file only")
+	list := fs.Bool("list", false, "print the prompts and exit")
+	asJSON := fs.Bool("json", false, "with --list, as JSON")
+	show := fs.String("show", "", "print one prompt's text and exit")
 	if hasFlag(args, "h") || hasFlag(args, "help") {
-		fmt.Fprint(stdout, paletteGoUsage)
+		fmt.Fprint(stdout, paletteUsage)
 		return exitOK
 	}
 	pos, err := parseInterleaved(fs, args)
-	if err != nil || len(pos) > 0 {
+	if err != nil || len(pos) > 0 || *asJSON && !*list || *list && *show != "" {
 		fs.Usage()
 		return exitRefused
 	}
@@ -70,9 +95,30 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nhm palette: %v\n", err)
 		return code
 	}
+	if *file != "" {
+		if *file, err = filepath.Abs(*file); err != nil {
+			return fail(exitRefused, err)
+		}
+		if st, err := os.Stat(*file); err != nil || !st.Mode().IsRegular() {
+			return fail(exitRefused, fmt.Errorf("--file %s: no such readable file", *file))
+		}
+	}
+	if *list || *show != "" {
+		return paletteCatalog(*file, *show, *asJSON, stdout, stderr)
+	}
+	if err := checkUIConfig(); err != nil {
+		return fail(exitError, err)
+	}
 	c, err := popupContext()
 	if err != nil {
 		return fail(exitError, err)
+	}
+	if dir := os.Getenv("NHM_PALETTE_CWD"); dir != "" {
+		// ACFS's acfs palette hands off with the directory it was opened
+		// in (scripts/lib/palette.sh, palette_hand_to_nhm).
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			c.Cwd = dir
+		}
 	}
 	// A selection another surface handed on (the board's space a) is the
 	// palette's only target; an explicitly empty one is refused.
@@ -85,11 +131,6 @@ func runPaletteGo(args []string, stdout, stderr io.Writer) int {
 	}
 	if *workspace != "" {
 		c.WorkspaceID, c.WorkspaceLabel = *workspace, ""
-	}
-	if *file != "" {
-		if *file, err = filepath.Abs(*file); err != nil {
-			return fail(exitRefused, err)
-		}
 	}
 	if st, err := os.Stat(c.Cwd); c.Cwd != "" && err == nil && st.IsDir() {
 		// The palette acts for the pane it was opened over: that pane's
@@ -249,15 +290,77 @@ func paletteHandOff(sub *palette.Submitter, jobs runner.Client, opID string, wai
 	}
 }
 
-// paletteEngine is the palette that nhm ui palette-popup runs for c: the
-// Go palette when c hands on a selection (the fzf palette cannot honour
-// one, so it would widen it), else [ui] palette.
-func paletteEngine(c ui.Context) (string, error) {
-	if c.TargetMode == ui.TargetsExplicit {
-		return engineGo, nil
+// paletteCatalog is nhm palette --list and --show: the prompts of the
+// palette's files, read in the palette's directory (NHM_PALETTE_CWD,
+// else the context's, else this one), with no herdr call. --list prints
+// key, label, category and file, tab-separated; --show prints one
+// prompt's text.
+func paletteCatalog(file, key string, asJSON bool, stdout, stderr io.Writer) int {
+	dir := os.Getenv("NHM_PALETTE_CWD")
+	if dir == "" {
+		if c, err := popupContext(); err == nil {
+			dir = c.Cwd
+		}
 	}
-	return surfaceEngine("palette")
+	if st, err := os.Stat(dir); dir != "" && err == nil && st.IsDir() {
+		if err := os.Chdir(dir); err != nil {
+			fmt.Fprintf(stderr, "nhm palette: %v\n", err)
+			return exitError
+		}
+	}
+	dir, _ = os.Getwd()
+	// The project root as a send finds it: the git work tree that holds
+	// dir, else none.
+	root := ""
+	if s, err := core.ResolveScope(context.Background(), core.ScopeRequest{Cwd: dir}, nil); err == nil {
+		root = s.ProjectRoot
+	}
+	cmds, errs := palette.LoadCommands(palette.CatalogPaths(os.Getenv, dir, root, file))
+	for _, e := range errs {
+		fmt.Fprintf(stderr, "nhm palette: %v\n", e)
+	}
+	if key != "" {
+		for _, c := range cmds {
+			if c.Key == key {
+				fmt.Fprintln(stdout, c.Prompt)
+				return exitOK
+			}
+		}
+		fmt.Fprintf(stderr, "nhm palette: no palette prompt has the key %s\n", key)
+		return exitError
+	}
+	type entry struct {
+		Key      string `json:"key"`
+		Label    string `json:"label"`
+		Category string `json:"category"`
+		File     string `json:"file"`
+	}
+	rows := make([]entry, 0, len(cmds))
+	for _, c := range cmds {
+		e := entry{Key: c.Key, Label: c.Label, Category: c.Category, File: c.Source}
+		if e.Category == "" {
+			e.Category = "Other"
+		}
+		rows = append(rows, e)
+	}
+	if asJSON {
+		data, err := json.Marshal(rows)
+		if err != nil {
+			fmt.Fprintf(stderr, "nhm palette: %v\n", err)
+			return exitError
+		}
+		fmt.Fprintln(stdout, string(data))
+		return exitOK
+	}
+	for _, e := range rows {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", e.Key, tabless(e.Label), tabless(e.Category), e.File)
+	}
+	return exitOK
 }
+
+// tabless is s with its tabs as spaces, for one field of a tab-separated
+// line.
+func tabless(s string) string { return strings.ReplaceAll(s, "\t", " ") }
 
 // paletteReader reads what the core recorded for a send. A record still
 // open whose job has ended is not in progress: the core no longer runs

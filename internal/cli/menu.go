@@ -19,15 +19,18 @@ import (
 	"github.com/arosl/nhm/internal/ui/tui/theme"
 )
 
-// runGoMenu is nhm menu --go, and the popup body with [ui] menu = "go":
-// the Go menu over the action table, for the context the popup captured
-// (plan-v4 section 6). It runs in the captured pane's directory, so every
-// verb finds the project there; its mutations run as jobs of their own
-// (uiCore), so closing it cancels nothing.
+// runGoMenu is nhm menu, and prefix+m's popup body: the Go menu over the
+// action table, for the context the popup captured (plan-v4 section 6).
+// It runs in the captured pane's directory, so every verb finds the
+// project there; its mutations run as jobs of their own (uiCore), so
+// closing it cancels nothing.
 func runGoMenu(stderr io.Writer) int {
 	fail := func(code int, err error) int {
 		fmt.Fprintf(stderr, "nhm menu: %v\n", err)
 		return code
+	}
+	if err := checkUIConfig(); err != nil {
+		return fail(exitError, err)
 	}
 	c, err := popupContext()
 	if err != nil {
@@ -57,10 +60,6 @@ func runGoMenu(stderr io.Writer) int {
 		return fail(exitError, err)
 	}
 	defer closeSrc()
-	surface, err := menuSurfaces(c)
-	if err != nil {
-		return fail(exitError, err)
-	}
 	jobs := uiJobs(ie, c)
 	env := menu.Env{
 		Context:        c,
@@ -71,7 +70,7 @@ func runGoMenu(stderr io.Writer) int {
 		Views:          viewsEnv(c),
 		Operations:     uiOperations{ie: ie, jobs: jobs},
 		Kinds:          kinds.All(),
-		Surface:        surface,
+		Surface:        menuSurfaces(c),
 	}
 	theme.ApplyLipGlossDefaults(theme.Current())
 	if _, err := tea.NewProgram(menu.New(env), tea.WithAltScreen()).Run(); err != nil {
@@ -111,28 +110,10 @@ func (o uiOperations) RecentOperations(ctx context.Context, limit int) ([]lifecy
 func (o uiOperations) RecentJobs(limit int) ([]runner.Entry, error) { return o.jobs.Recent(limit) }
 
 // menuSurfaces gives the command of each surface the menu runs in its
-// popup, by [ui] in nhm's config, read once: the palette (the Go palette
-// when [ui] palette = "go", else today's), "palette (new)" while the Go
-// palette is not the default, and the board (the Go board's tab when
-// [ui] board = "go", else today's board in this popup).
-func menuSurfaces(c ui.Context) (func(id string) *exec.Cmd, error) {
-	paletteEngine, err := surfaceEngine("palette")
-	if err != nil {
-		return nil, err
-	}
-	boardEngine, err := surfaceEngine("board")
-	if err != nil {
-		return nil, err
-	}
-	args := map[string][]string{"palette": {"palette"}, "palette.go": {"palette", "--go"}, "board": {"board"}}
-	if paletteEngine == engineGo {
-		args["palette"] = []string{"palette", "--go"}
-		delete(args, "palette.go")
-	}
-	if boardEngine == engineGo {
-		// It opens the board's tab, or focuses it, and returns.
-		args["board"] = []string{"ui", "board"}
-	}
+// popup: the palette, and the board, which opens the board's tab, or
+// focuses it, and returns.
+func menuSurfaces(c ui.Context) func(id string) *exec.Cmd {
+	args := map[string][]string{"palette": {"palette"}, "board": {"ui", "board"}}
 	return func(id string) *exec.Cmd {
 		a, ok := args[id]
 		if !ok {
@@ -144,5 +125,5 @@ func menuSurfaces(c ui.Context) (func(id string) *exec.Cmd, error) {
 			cmd.Dir = c.Cwd
 		}
 		return cmd
-	}, nil
+	}
 }

@@ -174,32 +174,93 @@ func TestPaletteMemoryFollowsTheConfig(t *testing.T) {
 	}
 }
 
-func TestPaletteGoUsage(t *testing.T) {
-	var out, errOut bytes.Buffer
-	if code := runPaletteGo([]string{"--go", "--help"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "nhm palette --go") {
-		t.Fatalf("--help = %d %q", code, out.String())
+// --go chose this palette while the fzf one was the default: it is
+// accepted and does nothing (nhm-qbi.12).
+func TestPaletteUsage(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"--go", "--help"}} {
+		var out, errOut bytes.Buffer
+		if code := runPalette(args, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "nhm palette --show KEY") {
+			t.Fatalf("%v = %d %q", args, code, out.String())
+		}
 	}
-	out.Reset()
-	if code := runPaletteGo([]string{"--go", "stray"}, &out, &errOut); code != exitRefused {
-		t.Fatalf("a stray argument = %d", code)
+	for _, args := range [][]string{{"--go", "stray"}, {"--json"}, {"--list", "--show", "k"}} {
+		var out, errOut bytes.Buffer
+		if code := runPalette(args, &out, &errOut); code != exitRefused || !strings.Contains(errOut.String(), "Usage: nhm palette") {
+			t.Fatalf("%v = %d %q", args, code, errOut.String())
+		}
+	}
+	// [ui] palette = "fzf" says the fzf palette is gone.
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	writeTestFile(t, filepath.Join(cfg, "nhm", "config.toml"), "[ui]\npalette = \"fzf\"\n")
+	var out, errOut bytes.Buffer
+	if code := runPalette([]string{"--go"}, &out, &errOut); code != exitError || !strings.Contains(errOut.String(), "no longer has the fzf") {
+		t.Fatalf("fzf = %d %q", code, errOut.String())
 	}
 }
 
-// A selection handed on always gets the Go palette: the fzf palette
-// cannot honour one. Without one, [ui] palette decides.
-func TestPaletteEngineForAHandedSelection(t *testing.T) {
+// nhm palette --list and --show (ACFS's lesson 06) read the palette's
+// files in NHM_PALETTE_CWD (ACFS's hand-off), and its project root, with
+// no herdr call; --file reads that file alone.
+func TestPaletteListAndShow(t *testing.T) {
+	cwd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", "")
+	t.Setenv(ui.ContextEnv, "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("ACFS_HOME", filepath.Join(home, ".acfs"))
+	t.Setenv("NHM_PALETTE_FILE", "")
+	proj := t.TempDir()
+	writeTestFile(t, filepath.Join(proj, ".git", "HEAD"), "ref: refs/heads/main\n")
+	writeTestFile(t, filepath.Join(proj, "command_palette.md"), "## Review\n### fresh_review | Fresh\teyes\n\nLook again.\n\n### ping\nPing.\n")
+	writeTestFile(t, filepath.Join(home, ".config", "nhm", "command_palette.md"), "## Mine\n### fresh_review | Shadowed\nNo.\n### mine | Mine\nMy prompt.\n")
+	sub := filepath.Join(proj, "sub")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NHM_PALETTE_CWD", sub)
+	run := func(args ...string) (int, string, string) {
+		var out, errOut bytes.Buffer
+		code := runPalette(args, &out, &errOut)
+		return code, out.String(), errOut.String()
+	}
+	code, out, errOut := run("--list")
+	want := "fresh_review\tFresh eyes\tReview\t" + filepath.Join(proj, "command_palette.md") + "\n" +
+		"ping\tping\tReview\t" + filepath.Join(proj, "command_palette.md") + "\n" +
+		"mine\tMine\tMine\t" + filepath.Join(home, ".config", "nhm", "command_palette.md") + "\n"
+	if code != exitOK || out != want {
+		t.Fatalf("--list = %d %q %q, want %q", code, out, errOut, want)
+	}
+	code, out, _ = run("--list", "--json")
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(out), &rows); code != exitOK || err != nil || len(rows) != 3 || rows[2]["key"] != "mine" ||
+		rows[0]["category"] != "Review" {
+		t.Fatalf("--list --json = %d %q %v", code, out, err)
+	}
+	if code, out, _ = run("--show", "fresh_review"); code != exitOK || out != "Look again.\n" {
+		t.Fatalf("--show = %d %q", code, out)
+	}
+	if code, out, errOut = run("--show", "nosuch"); code != exitError || out != "" || !strings.Contains(errOut, "no palette prompt has the key nosuch") ||
+		strings.Contains(errOut, "Usage:") {
+		t.Fatalf("--show nosuch = %d %q %q", code, out, errOut)
+	}
+	if code, out, _ = run("--file", filepath.Join(home, ".config", "nhm", "command_palette.md"), "--show", "fresh_review"); code != exitOK || out != "No.\n" {
+		t.Fatalf("--file --show = %d %q", code, out)
+	}
+	if code, _, errOut = run("--file", filepath.Join(home, "nosuch.md"), "--list"); code != exitRefused || !strings.Contains(errOut, "no such readable file") {
+		t.Fatalf("--file nosuch = %d %q", code, errOut)
+	}
+	// No palette files: --list prints nothing, and its JSON is [].
+	t.Setenv("NHM_PALETTE_CWD", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	c := ui.Context{SocketPath: "/run/h.sock", WorkspaceID: "w1"}
-	if e, err := paletteEngine(c); err != nil || e != engineFzf {
-		t.Fatalf("no selection, no config = %q %v", e, err)
+	if code, out, _ = run("--list"); code != exitOK || out != "" {
+		t.Fatalf("--list, no files = %d %q", code, out)
 	}
-	picked := c.WithTargets("board", []ui.Target{{BindingID: "b1", Generation: 2, PaneID: "w1:p1"}})
-	if e, err := paletteEngine(picked); err != nil || e != engineGo {
-		t.Fatalf("a handed selection = %q %v", e, err)
-	}
-	writeTestFile(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "nhm", "config.toml"), "[ui]\npalette = \"go\"\n")
-	if e, err := paletteEngine(c); err != nil || e != engineGo {
-		t.Fatalf("[ui] palette = go = %q %v", e, err)
+	if code, out, _ = run("--list", "--json"); code != exitOK || out != "[]\n" {
+		t.Fatalf("--list --json, no files = %d %q", code, out)
 	}
 }
 
@@ -211,7 +272,7 @@ func TestPaletteGoRefusesAnEmptySelection(t *testing.T) {
 	}
 	t.Setenv(ui.ContextEnv, string(data))
 	var out, errOut bytes.Buffer
-	if code := runPaletteGo(nil, &out, &errOut); code != exitRefused || !strings.Contains(errOut.String(), "empty") {
+	if code := runPalette(nil, &out, &errOut); code != exitRefused || !strings.Contains(errOut.String(), "empty") {
 		t.Fatalf("= %d %q", code, errOut.String())
 	}
 }

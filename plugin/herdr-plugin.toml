@@ -15,9 +15,10 @@
 # once and refuses the rest (ACFS evidence exp1), so a hook is a hint and
 # nhm's reconcile catches what a refused one missed.
 #
-# The spawn popup is nhm.spawn's gum wizard: it adds agents to the
-# workspace the action was invoked in. Later releases add the memory popup
-# (nhm.memory) and the startup hook `nhm admin restore` (nhm.lifecycle).
+# The palette, the board and the menu are Go programs in the nhm binary
+# (plan-v4). The menu's spawn wizard adds agents, so there is no spawn
+# action of its own. Later releases add the memory popup (nhm.memory) and
+# the startup hook `nhm admin restore` (nhm.lifecycle).
 
 id = "nhm"
 name = "nhm"
@@ -44,12 +45,6 @@ title = "nhm menu"
 contexts = ["workspace", "pane"]
 command = ["../nhm", "ui", "menu"]
 
-[[actions]]
-id = "spawn"
-title = "Spawn agents"
-contexts = ["workspace", "pane"]
-command = ["../nhm", "ui", "spawn"]
-
 [[panes]]
 id = "palette"
 title = "Palette"
@@ -73,14 +68,6 @@ placement = "popup"
 width = "60%"
 height = "60%"
 command = ["../nhm", "ui", "menu-popup"]
-
-[[panes]]
-id = "spawn"
-title = "Spawn agents"
-placement = "popup"
-width = "70%"
-height = "70%"
-command = ["../nhm", "ui", "spawn-popup"]
 
 # nhm doctor --herdr-fit opens this pane (as a popup, or with
 # --placements as a tab, split or overlay) to check that herdr still fits

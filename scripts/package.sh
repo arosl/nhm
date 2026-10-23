@@ -7,7 +7,7 @@
 # (default: linux-amd64 linux-arm64) and <out-dir>/SHA256SUMS over the
 # archives. install.sh checks an archive against SHA256SUMS of the same
 # release. Each archive holds one directory, nhm-<version>-<platform>/,
-# with nhm, nhm-hook, nhm-palette, the herdr plugin (plugin/, with this
+# with nhm, nhm-hook, the herdr plugin (plugin/, with this
 # release's version), LICENSE, PROVENANCE.md and a SHA256SUMS of its files.
 set -euo pipefail
 
@@ -50,14 +50,13 @@ for platform in "${platforms[@]}"; do
     )
   done
   cp "$root/LICENSE" "$root/PROVENANCE.md" "$dir/"
-  install -m 0755 "$root/scripts/nhm-palette" "$dir/nhm-palette"
   mkdir -p "$dir/plugin"
   sed "s/^version = \"0\.0\.0\"/version = \"${version}\"/" "$root/plugin/herdr-plugin.toml" > "$dir/plugin/herdr-plugin.toml"
   if ! grep -q "^version = \"${version}\"" "$dir/plugin/herdr-plugin.toml"; then
     echo "package: could not set the plugin's version" >&2
     exit 1
   fi
-  (cd "$dir" && sha256sum nhm nhm-hook nhm-palette plugin/herdr-plugin.toml LICENSE PROVENANCE.md > SHA256SUMS)
+  (cd "$dir" && sha256sum nhm nhm-hook plugin/herdr-plugin.toml LICENSE PROVENANCE.md > SHA256SUMS)
   tar --zstd -C "$stage" --owner=0 --group=0 --numeric-owner -cf "$out/$name.tar.zst" "$name"
   archives+=("$name.tar.zst")
   echo "package: $out/$name.tar.zst" >&2

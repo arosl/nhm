@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -30,7 +29,6 @@ import (
 	"github.com/arosl/nhm/internal/integrations/quota"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
-	"github.com/arosl/nhm/internal/ui"
 )
 
 // spawnLockWait bounds a spawn's wait for the owner lock. A spawn holds
@@ -179,7 +177,7 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.BoolVar(&f.withMemory, "with-memory", true, "CM rules in the kickoff (best-effort; the default)")
 	fs.BoolVar(&f.withCASS, "with-cass", false, "CASS context in the kickoff (best-effort)")
 	fs.BoolVar(&f.noCASSContext, "no-cass-context", false, "no CASS context in the kickoff")
-	fs.BoolVar(&f.interact, "interactive", false, "the gum wizard: questions, the plan, then your yes")
+	fs.BoolVar(&f.interact, "interactive", false, "gone: nhm menu (prefix+m) has the spawn wizard")
 	fs.StringVar(&f.project, "project", "", "the project (default: the git work tree of the cwd)")
 	fs.StringVar(&f.opID, "op-id", "", "operation id, for an idempotent retry")
 	fs.StringVar(&f.socket, "socket", "", "herdr API socket")
@@ -304,10 +302,7 @@ func spawnVerb(verb string, args []string, stdout, stderr io.Writer) int {
 		return exitRefused
 	}
 	if f.interact {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return refuse(errors.New("--interactive needs a terminal"))
-		}
-		return runSpawnWizard(context.Background(), ui.Gum{}, pos[0], verb == "add", f.project, f.socket, stdout, stderr)
+		return refuse(errors.New("--interactive ran the gum wizard, which is gone: nhm menu (prefix+m) has the spawn wizard"))
 	}
 	req, err := f.request(pos[0], verb == "add")
 	if err != nil {
@@ -325,93 +320,6 @@ func spawnVerb(verb string, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return runSpawnRequest(context.Background(), req, f.project, f.socket, f.asJSON, env, stdout, stderr, assign)
-}
-
-// runSpawnWizard is the gum wizard (plan-v8 2.4): the questions, then the
-// plan and the admission (a dry run), then the final yes before the paid
-// start, then the spawn.
-func runSpawnWizard(ctx context.Context, p ui.Prompter, session string, add bool, project, socket string, stdout, stderr io.Writer) int {
-	verb := "spawn"
-	if add {
-		verb = "add"
-	}
-	fail := func(err error, code int) int {
-		fmt.Fprintf(stderr, "nhm %s: %v\n", verb, err)
-		return code
-	}
-	ans, err := ui.SpawnWizard(p, fmt.Sprintf("nhm %s in %s", verb, session), kinds.All())
-	if err != nil {
-		return fail(err, exitRefused)
-	}
-	f := &spawnFlags{withMemory: ans.Memory, withCASS: ans.CASS, noCASSContext: !ans.CASS}
-	enrichment, err := spawnEnrichment(f)
-	if err != nil {
-		return fail(err, exitRefused)
-	}
-	req := spawn.Request{Session: session, Add: add, Label: ans.Label, Group: ans.Group, Prompt: ans.Prompt,
-		NoKickoff: ans.NoKickoff, Enrich: enrichment, DryRun: true}
-	for _, a := range ans.Agents {
-		req.Agents = append(req.Agents, spawn.Want{Kind: a.Kind, Count: a.Count, Model: a.Model})
-	}
-	ie, err := openInstance(socket)
-	if err != nil {
-		return fail(err, exitError)
-	}
-	defer ie.db.Close()
-	plan, code, err := spawnUnderOwner(ctx, ie, &req, project)
-	printSpawn(stdout, plan)
-	// The plan's warnings come before the yes: one may say that the
-	// session holds other projects' agents only (nhm-8ze).
-	printSpawnWarnings(stderr, verb, plan)
-	if err != nil {
-		return fail(err, code)
-	}
-	fmt.Fprintf(stdout, "the same by hand: %s\n", strings.Join(ui.SpawnArgs(session, add, ans), " "))
-	yes, err := p.Confirm(fmt.Sprintf("Start %d agents? This starts paid model work.", req.Count()))
-	if err != nil || !yes {
-		fmt.Fprintln(stderr, "nothing started")
-		return exitRefused
-	}
-	req.DryRun = false
-	res, code, err := spawnUnderOwner(ctx, ie, &req, project)
-	printSpawn(stdout, res)
-	printSpawnWarnings(stderr, verb, res)
-	if err != nil {
-		return fail(err, code)
-	}
-	return spawnExit(res)
-}
-
-// printSpawnWarnings prints a spawn's warnings as output does for the
-// other verbs.
-func printSpawnWarnings(w io.Writer, verb string, res spawn.Result) {
-	for _, s := range append(slices.Clone(res.Admission.Warnings), res.Warnings...) {
-		fmt.Fprintf(w, "nhm %s: warning: %s\n", verb, s)
-	}
-}
-
-// runSpawnPopup is the spawn popup: the wizard adds agents to the
-// workspace the action was invoked in, with that pane's cwd as the
-// project.
-func runSpawnPopup(stderr io.Writer) int {
-	c, err := popupContext()
-	if err != nil {
-		fmt.Fprintf(stderr, "nhm spawn: %v\n", err)
-		return exitError
-	}
-	if c.WorkspaceID == "" {
-		fmt.Fprintln(stderr, "nhm spawn: the popup has no workspace; run it from a workspace")
-		return exitRefused
-	}
-	fmt.Fprintln(os.Stdout, c.Header())
-	project := ""
-	if c.Cwd != "" {
-		// The git work tree that holds the pane's cwd.
-		if s, err := core.ResolveScope(context.Background(), core.ScopeRequest{Cwd: c.Cwd}, nil); err == nil {
-			project = s.ProjectRoot
-		}
-	}
-	return runSpawnWizard(context.Background(), ui.Gum{}, c.WorkspaceID, true, project, c.SocketPath, os.Stdout, stderr)
 }
 
 // confirm asks a yes/no question on the terminal; without a terminal the

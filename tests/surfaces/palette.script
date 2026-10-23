@@ -1,5 +1,5 @@
 # The Go palette through an attached herdr client (nhm-qbi.6, plan-v4
-# section 10's palette cases): prefix+a with [ui] palette = "go"; a
+# section 10's palette cases): prefix+a opens it by default; a
 # catalog prompt sent to IcyKnoll through a runner job, its receipt, and
 # the record read back; a {{thread}} prompt that the core refuses before
 # its claim, asked for, then sent; an emptied draft refused; esc out.
