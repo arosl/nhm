@@ -28,6 +28,12 @@ type Runner func(ctx context.Context, args ...string) ([]byte, error)
 // ErrNotInstalled: there is no cass binary.
 var ErrNotInstalled = errors.New("cass is not installed")
 
+// WaitDelay is how long a cass call may outlive its context: the time to
+// close the pipes a killed cass's children still hold. It is cm's:
+// enrichment runs cm and cass at once, so a batch still ends at most
+// WaitDelay after its budget.
+var WaitDelay = 2 * time.Second
+
 // Exec runs the binary at path (default "cass") from PATH, without its
 // update prompt, auto refresh and progress events.
 func Exec(path string) Runner {
@@ -36,6 +42,11 @@ func Exec(path string) Runner {
 	}
 	return func(ctx context.Context, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(ctx, path, args...)
+		// When ctx ends, cass is killed; a child of cass (or of a wrapper
+		// script) that holds its stdout open must not stretch the call past
+		// the caller's budget (nhm-gne): after WaitDelay the pipes are
+		// closed.
+		cmd.WaitDelay = WaitDelay
 		cmd.Env = append(os.Environ(), "CODING_AGENT_SEARCH_NO_UPDATE_PROMPT=1", "CASS_AUTO_REFRESH=0",
 			"CASS_INDEX_NO_PROGRESS_EVENTS=1", "NO_COLOR=1")
 		var stderr bytes.Buffer

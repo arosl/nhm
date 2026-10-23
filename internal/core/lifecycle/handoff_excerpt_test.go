@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/integrations/cass"
 )
 
 func writeTranscript(t *testing.T, lines ...string) string {
@@ -201,6 +203,30 @@ func TestExcerptNoConversationText(t *testing.T) {
 		}
 	}
 	if !strings.Contains(strings.Join(h.Degraded, "\n"), "excerpt: no conversation text") || strings.Contains(h.Text, "stop_hook_summary") {
+		t.Fatalf("handoff = %+v", h)
+	}
+}
+
+// A cass pack whose child holds stdout ends with the budget (nhm-gne), and
+// the handoff takes the direct excerpt.
+func TestExcerptWhenACASSPackChildHoldsStdout(t *testing.T) {
+	path := writeTranscript(t, `{"type":"user","message":{"role":"user","content":"Please fix the parser in nhm-1."}}`)
+	bin := filepath.Join(t.TempDir(), "cass")
+	script := "#!/bin/sh\ncase \"$1\" in\nsessions) echo '{\"sessions\":[{\"path\":\"" + path + "\"}]}' ;;\n*) sleep 30 ;;\nesac\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := cass.WaitDelay
+	cass.WaitDelay = 200 * time.Millisecond
+	defer func() { cass.WaitDelay = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	h := DefaultHandoff(bin, filepath.Join(t.TempDir(), "absent"))(ctx, bindings.Binding{}, nil, path)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the handoff took %v after its context ended", took)
+	}
+	if !strings.Contains(strings.Join(h.Degraded, "\n"), "cass: cass pack:") || !strings.Contains(h.Text, "fix the parser") {
 		t.Fatalf("handoff = %+v", h)
 	}
 }

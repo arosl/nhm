@@ -3,6 +3,8 @@ package cass
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,6 +27,27 @@ func (s *script) run(_ context.Context, args ...string) ([]byte, error) {
 const searchAnswer = `{"query":"q","count":1,"hits":[{"title":"T","snippet":"s","content":"the content",
 "score":2.7,"source_path":"/h/.codex/sessions/2026/10/12/rollout-x-abc.jsonl","agent":"codex","workspace":"/p",
 "created_at":1791777605000,"conversation_id":2,"line_number":7,"match_type":"exact"}]}`
+
+// ACFS's E06 (nhm-gne): a cass wrapper whose child holds stdout (sh:
+// sleep 30; exec cass) does not keep the call past its context.
+func TestExecEndsWhenAChildHoldsStdout(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "cass")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 30\necho '{\"hits\":[]}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := WaitDelay
+	WaitDelay = 200 * time.Millisecond
+	defer func() { WaitDelay = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := (Client{Run: Exec(bin)}).Search(ctx, Search{Query: "q"}); err == nil {
+		t.Fatal("a killed cass returned no error")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the call took %v after its context ended", took)
+	}
+}
 
 // The E06 kickoff (nhm-vbx): as one query cass needs every word and
 // finds nothing; its keywords, any of them, find the earlier session.

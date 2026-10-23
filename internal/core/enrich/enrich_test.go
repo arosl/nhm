@@ -162,6 +162,29 @@ func TestBudgetIsTotalAndRequiredFailureRefuses(t *testing.T) {
 	}
 }
 
+// ACFS's E06 (nhm-gne): a cass whose child holds its stdout (a wrapper,
+// sh: sleep 30; exec cass) held the kickoff for 30 s. The batch ends with
+// its budget and the close of the pipes, not with the child.
+func TestBudgetHoldsWhenACASSChildHoldsStdout(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "cass")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 30\necho '{\"hits\":[]}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := cass.WaitDelay
+	cass.WaitDelay = 200 * time.Millisecond
+	defer func() { cass.WaitDelay = old }()
+	b := Budgets{Total: 300 * time.Millisecond}
+	r := NewRetriever(nil, cass.Client{Run: cass.Exec(bin)}, b, time.Now())
+	start := time.Now()
+	got := r.Retrieve(context.Background(), Request{Query: "the e06 plan's next bead", CASS: BestEffort})
+	if took, most := time.Since(start), b.Total+cass.WaitDelay+3*time.Second; took > most {
+		t.Fatalf("the retrieval took %v; its budget and the pipes' close allow %v", took, most)
+	}
+	if want := "over the " + b.Total.String() + " budget"; !strings.Contains(got.CASS.Error, want) || got.Err() != nil {
+		t.Fatalf("cass = %+v, err = %v", got.CASS, got.Err())
+	}
+}
+
 func TestItemBudgetBlockBudgetAndFrame(t *testing.T) {
 	f := &fakeCM{rules: append(rules(1, 3000), rules(8, 600)[1:]...)}
 	hits := []cass.Hit{{SourcePath: "/s.jsonl", LineNumber: 3, Agent: "codex", Content: "earlier  work\nhere", CreatedAtMS: 1791777605000}}

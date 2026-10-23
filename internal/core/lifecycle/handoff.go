@@ -120,7 +120,10 @@ func packSession(ctx context.Context, cassBin, project, query, transcript string
 		cassBin = "cass"
 	}
 	cmd := exec.CommandContext(cctx, cassBin, "pack", "--sessions-from=-", "--max-tokens=2000", "--", query)
-	// As cass.Exec runs cass: no prompts, no refresh, no progress events.
+	// As cass.Exec runs cass: no prompts, no refresh, no progress events,
+	// and a child that holds stdout open cannot keep the call past the
+	// budget and WaitDelay (nhm-gne).
+	cmd.WaitDelay = cass.WaitDelay
 	cmd.Env = append(os.Environ(), "CODING_AGENT_SEARCH_NO_UPDATE_PROMPT=1", "CASS_AUTO_REFRESH=0",
 		"CASS_INDEX_NO_PROGRESS_EVENTS=1", "NO_COLOR=1")
 	cmd.Stdin = strings.NewReader(transcript + "\n")
