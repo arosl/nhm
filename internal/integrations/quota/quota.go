@@ -147,7 +147,7 @@ func DefaultEnv() Env {
 // Collect reads every pool: claude, codex, and the unknown agy and pi.
 // counts are the live agents per kind (nil when herdr was not asked).
 func Collect(env Env, now time.Time, counts map[string]int) []Observation {
-	profiles := caamProfiles(env.Caam, "")
+	profiles := caamProfiles(env.Caam, "", caamTimeout)
 	claudeCred, codexCred := credentialOf(env, "claude", profiles), credentialOf(env, "codex", profiles)
 	claude := ReadClaude(now, claudeCred, env.RecordFile, acfsRecord(env.AcfsHome))
 	codex, err := ReadCodex(env.CodexHome, codexCred, now)

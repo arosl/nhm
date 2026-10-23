@@ -15,8 +15,14 @@ import (
 	"time"
 )
 
-// caamTimeout bounds `caam status`. The statusLine command waits for it.
-const caamTimeout = 2 * time.Second
+// caamTimeout bounds `caam status` for the verbs; caamRecordTimeout for
+// the statusLine command, which runs at every refresh of Claude's status
+// line (caam takes about 50 ms). A record without the profile still has
+// the fingerprint, which match then compares.
+const (
+	caamTimeout       = 2 * time.Second
+	caamRecordTimeout = 500 * time.Millisecond
+)
 
 // Credential names the account a pool's records are of (plan-v8 2.9): a
 // caam switch or a new login changes it, and an observation of another
@@ -76,9 +82,10 @@ func ofActive(active *Credential, creds []*Credential) (kept []bool, other *Cred
 }
 
 // ActiveCredential is the credential the kind uses now, nil when nhm
-// cannot name it.
+// cannot name it. It is the statusLine command's: caam has
+// caamRecordTimeout.
 func ActiveCredential(env Env, kind string) *Credential {
-	return credentialOf(env, kind, caamProfiles(env.Caam, kind))
+	return credentialOf(env, kind, caamProfiles(env.Caam, kind, caamRecordTimeout))
 }
 
 func credentialOf(env Env, kind string, profiles map[string]string) *Credential {
@@ -98,21 +105,21 @@ func credentialOf(env Env, kind string, profiles map[string]string) *Credential 
 // caamProfiles returns caam's active profile per tool, of one tool when
 // tool is not "". It reads only tools[].tool and .active_profile: caam's
 // identity block holds the account's email and id. No caam, a failing
-// one or a slow one gives none.
-func caamProfiles(bin, tool string) map[string]string {
+// one or one slower than limit gives none.
+func caamProfiles(bin, tool string, limit time.Duration) map[string]string {
 	if bin == "" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), caamTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	args := []string{"status", "--json"}
 	if tool != "" {
 		args = []string{"status", tool, "--json"}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
-	// A child of caam that holds stdout open does not hold the status
-	// line (nhm-fty).
-	cmd.WaitDelay = time.Second
+	// A child of caam that holds stdout open holds the call at most
+	// WaitDelay more (nhm-fty).
+	cmd.WaitDelay = min(time.Second, limit)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil

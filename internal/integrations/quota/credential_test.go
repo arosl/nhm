@@ -287,8 +287,10 @@ func TestFailingCaamFallsBackToTheFingerprint(t *testing.T) {
 	}
 }
 
-// A caam that hangs, with a child that holds its stdout, holds the
-// statusLine no longer than caamTimeout and WaitDelay (nhm-fty).
+// A caam that hangs, with a child that holds its stdout, holds a verb no
+// longer than caamTimeout and WaitDelay (nhm-fty), and the statusLine no
+// longer than caamRecordTimeout twice: the record then has the
+// fingerprint only.
 func TestCaamThatHangsNamesNoProfile(t *testing.T) {
 	dir := t.TempDir()
 	caam := filepath.Join(dir, "caam")
@@ -297,11 +299,24 @@ func TestCaamThatHangsNamesNoProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if p := caamProfiles(caam, "claude"); len(p) != 0 {
+	if p := caamProfiles(caam, "", caamTimeout); len(p) != 0 {
 		t.Fatalf("profiles = %v", p)
 	}
 	if d := time.Since(start); d > caamTimeout+5*time.Second {
-		t.Fatalf("caam held the call %v", d)
+		t.Fatalf("caam held the verb %v", d)
+	}
+	env := Env{RecordFile: filepath.Join(dir, "claude.json"), Caam: caam, ClaudeState: filepath.Join(dir, ".claude.json")}
+	write(t, env.ClaudeState, `{"oauthAccount":{"accountUuid":"uuid-a"}}`, now)
+	start = time.Now()
+	if _, err := RecordClaude(statusLine(92), env, now); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("caam held the statusLine %v", d)
+	}
+	rec, _ := os.ReadFile(env.RecordFile)
+	if want := `"credential":{"fingerprint":"` + accountFingerprint("claude", "uuid-a") + `"}`; !strings.Contains(string(rec), want) {
+		t.Fatalf("record = %s, want %s", rec, want)
 	}
 }
 
