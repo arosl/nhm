@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"io"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -73,6 +75,61 @@ func newReplayWorld(t *testing.T) *replayWorld {
 // gets them.
 const replayKickoff = "Read AGENTS.md.\n\nThen check your mail."
 
+// assertGatedKickoffs checks that each kickoff the spawn's receipts record
+// went through the delivery gate, frozen at the binding's first
+// generation (spawn.KickoffGated), as send recorded the request; want is
+// how many there are.
+func assertGatedKickoffs(t *testing.T, w *replayWorld, want int) {
+	t.Helper()
+	db, err := store.Open(w.inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	rows, err := db.SQL().QueryContext(ctx, `SELECT result_json FROM receipts WHERE operation_id = 'sp-r1' ORDER BY target_index`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var targets []spawn.Target
+	for rows.Next() {
+		var text string
+		var tg spawn.Target
+		if err := rows.Scan(&text); err != nil || json.Unmarshal([]byte(text), &tg) != nil {
+			t.Fatalf("receipt: %v %q", err, text)
+		}
+		targets = append(targets, tg)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	got := 0
+	for _, tg := range targets {
+		if tg.KickoffOp == "" {
+			continue
+		}
+		got++
+		op, err := db.Operation(ctx, tg.KickoffOp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sent struct {
+			WhenAny bool             `json:"when_any"`
+			Expect  map[string]int64 `json:"expect"`
+		}
+		if err := json.Unmarshal([]byte(op.RequestJSON), &sent); err != nil {
+			t.Fatal(err)
+		}
+		if sent.WhenAny || !reflect.DeepEqual(sent.Expect, map[string]int64{tg.BindingID: spawn.FirstGeneration}) {
+			t.Fatalf("%s's kickoff went with when_any %v, expect %v", tg.MailName, sent.WhenAny, sent.Expect)
+		}
+	}
+	if got != want {
+		t.Fatalf("%d kickoffs recorded, want %d: %+v", got, want, targets)
+	}
+}
+
 // A first run that reached none of its agents: the rerun assigns as the
 // first run would have, one agent the bead with its kickoff, the other
 // its kickoff. A rerun after that one finds every agent reached and sends
@@ -97,6 +154,7 @@ func TestSpawnAssignReplayAfterACrash(t *testing.T) {
 	if len(sent) != 2 || worked != 1 || kicked != 1 {
 		t.Fatalf("prompts = %q", sent)
 	}
+	assertGatedKickoffs(t, w, 1)
 	code, out, _ = run(w.args...)
 	if code != 0 || !strings.Contains(out, "nothing is assigned again") || len(w.h.sent()) != 2 {
 		t.Fatalf("second rerun = %d %s %q", code, out, w.h.sent())
@@ -124,6 +182,7 @@ func TestSpawnAssignReplayKicksOffTheOthersOnly(t *testing.T) {
 		!strings.HasSuffix(sent[1], replayKickoff) || strings.Contains(sent[1], "nhm-1") {
 		t.Fatalf("prompts = %q", sent)
 	}
+	assertGatedKickoffs(t, w, 1)
 
 	w2 := newReplayWorld(t)
 	func() {
