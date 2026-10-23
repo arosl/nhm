@@ -43,9 +43,12 @@ type fakeHerdr struct {
 	starts   int
 	// blocked makes the first agent.wait answer blocked.
 	blocked bool
-	screen  string
-	keys    []string
-	closed  []string
+	// screen is what the pane shows; scrollback the lines above it, which
+	// a recent read gives too.
+	screen     string
+	scrollback string
+	keys       []string
+	closed     []string
 }
 
 func newFake() *fakeHerdr {
@@ -251,8 +254,11 @@ func (f *fakeHerdr) AgentGet(_ context.Context, target string) (herdr.AgentInfo,
 	return a, nil
 }
 
-func (f *fakeHerdr) AgentRead(context.Context, herdr.AgentReadParams) (herdr.PaneRead, error) {
-	return herdr.PaneRead{Text: f.screen}, nil
+func (f *fakeHerdr) AgentRead(_ context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error) {
+	if p.Source == herdr.ReadVisible {
+		return herdr.PaneRead{Text: f.screen}, nil
+	}
+	return herdr.PaneRead{Text: f.scrollback + f.screen}, nil
 }
 
 func (f *fakeHerdr) AgentSendKeys(_ context.Context, _ string, keys ...string) error {
@@ -664,6 +670,50 @@ func TestTrustFolder(t *testing.T) {
 	res, err := Spawn(context.Background(), w.env, r)
 	if err != nil || res.Targets[0].Status != StatusReady || strings.Join(w.h.keys, " ") != "enter" {
 		t.Fatalf("with --trust-folder = %+v %v keys %v", res.Targets[0], err, w.h.keys)
+	}
+}
+
+// Claude Code's folder-trust dialog in a pane of 40x12, as herdr reads it
+// (Claude Code 2.1.309, herdr 0.9.3, nhm-exg): the dialog is taller than
+// the pane, so the question has scrolled off the screen into the
+// scrollback, and the answers stay on the screen.
+const (
+	shortPaneScrollback = `$ claude --dangerously-skip-permissions
+
+` + "───────────────────────────────────────" + `
+ Accessing workspace:
+
+ /srv/project
+
+ Quick safety check: Is this a project
+ you created or one you trust? (Like
+ your own code, a well-known open
+ source project, or work from your
+ team). If not, take a moment to
+`
+	shortPaneScreen = ` review what's in this folder first.
+
+ Claude Code'll be able to read, edit,
+ and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+`
+)
+
+func TestTrustFolderShortPane(t *testing.T) {
+	w := newWorld(t)
+	w.h.blocked = true
+	w.h.scrollback, w.h.screen = shortPaneScrollback, shortPaneScreen
+	r := req(Want{Kind: "claude", Count: 1})
+	r.NoKickoff, r.TrustFolder = true, true
+	res, err := Spawn(context.Background(), w.env, r)
+	if err != nil || res.Targets[0].Status != StatusReady || strings.Join(w.h.keys, " ") != "down enter" {
+		t.Fatalf("short pane = %+v %v keys %v", res.Targets[0], err, w.h.keys)
 	}
 }
 

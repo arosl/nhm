@@ -572,8 +572,12 @@ func startAgent(ctx context.Context, env Env, req Request, t *Target, a kinds.Ad
 			return fmt.Errorf("the agent waits at a dialog (a first-run question such as 'Trust this folder?'): answer it in pane %s%s",
 				t.PaneID, trustHint(req, a))
 		}
+		// The pane's last lines, its scrollback too: Claude Code draws the
+		// dialog inline, so in a pane shorter than the dialog (40x12) the
+		// question scrolls off the screen while the answers stay on it
+		// (nhm-exg).
 		n := 40
-		screen, err := env.Herdr.AgentRead(ctx, herdr.AgentReadParams{Target: t.PaneID, Source: herdr.ReadVisible, Lines: &n})
+		screen, err := env.Herdr.AgentRead(ctx, herdr.AgentReadParams{Target: t.PaneID, Source: herdr.ReadRecent, Lines: &n})
 		if err != nil {
 			return err
 		}
