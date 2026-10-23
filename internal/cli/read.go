@@ -129,13 +129,22 @@ const watchUsage = `Usage: nhm watch <session> [name|slot ...] [--lines N] [--in
 
 Follow the output of a session's agents (or the named ones): every
 interval, read each pane's last lines and print the lines that are new.
+
+A pane's last 10 lines are its live region: the prompt box, status line
+and spinner that a working agent redraws in place. watch prints a line
+only once it is above them, so an idle agent's last few lines wait for
+its next output. --lines N counts the lines above them (at most the
+pane's height). The first round prints those lines. A later round
+prints a line when its text is not in the last read, so a line that the
+agent redraws prints once, with its new text, and a line whose exact
+text is already there does not print again. Blank lines are left out.
 `
 
 func runWatch(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, watchUsage) }
-	lines := fs.Int("lines", 20, "lines to read per pane")
+	lines := fs.Int("lines", 20, "lines above the live region, per pane")
 	interval := fs.Duration("interval", 2*time.Second, "time between reads")
 	count := fs.Int("count", 0, "stop after N rounds (0: until interrupted)")
 	socket := fs.String("socket", "", "herdr API socket")
@@ -168,15 +177,20 @@ func runWatch(args []string, stdout, stderr io.Writer) int {
 	last := map[string][]string{}
 	for round := 1; ; round++ {
 		for _, a := range agents {
-			n := *lines
+			// The live region comes on top of --lines: a 20-line read cut
+			// by 10 lost the lines a working agent wrote between two
+			// reads (nhm-rnx).
+			n := *lines + logsLiveLines
 			read, err := r.herdr.PaneRead(ctx, herdr.PaneReadParams{PaneID: a.PaneID, Source: herdr.ReadRecent, Lines: &n})
 			if err != nil {
 				fmt.Fprintf(stderr, "nhm watch: %s: %v\n", label(a), err)
 				continue
 			}
-			cur := strings.Split(strings.TrimRight(stripControl(read.Text), "\n"), "\n")
-			for _, l := range newLines(last[a.PaneID], cur) {
-				fmt.Fprintf(stdout, "%s | %s\n", label(a), l)
+			cur := settledLines(read.Text)
+			for _, l := range freshLines(last[a.PaneID], cur) {
+				if strings.TrimSpace(l) != "" {
+					fmt.Fprintf(stdout, "%s | %s\n", label(a), l)
+				}
 			}
 			last[a.PaneID] = cur
 		}
@@ -218,27 +232,4 @@ func label(a snapshot.Agent) string {
 	default:
 		return a.PaneID
 	}
-}
-
-// newLines returns the lines of cur after the longest suffix of prev that
-// starts cur; all of cur when they do not overlap.
-func newLines(prev, cur []string) []string {
-	for k := min(len(prev), len(cur)); k > 0; k-- {
-		if equalLines(prev[len(prev)-k:], cur[:k]) {
-			return cur[k:]
-		}
-	}
-	return cur
-}
-
-func equalLines(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

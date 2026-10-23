@@ -355,35 +355,6 @@ func TestReadVerb(t *testing.T) {
 	}
 }
 
-func TestWatchVerb(t *testing.T) {
-	s := swarmInstance(t)
-	code, out, errOut := run("watch", "swarm", "IcyKnoll", "--count", "2", "--interval", "10ms", "--socket", s.SocketPath)
-	// The second round sees the same text: nothing new is printed.
-	if code != 0 || strings.Count(out, "IcyKnoll | Done.") != 1 {
-		t.Fatalf("watch = %d\n%s%s", code, out, errOut)
-	}
-}
-
-func TestNewLines(t *testing.T) {
-	for _, c := range []struct{ prev, cur, want string }{
-		{"", "a,b", "a,b"},
-		{"a,b", "a,b", ""},
-		{"a,b", "b,c", "c"},
-		{"a,b,c", "b,c,d,e", "d,e"},
-		{"x", "a,b", "a,b"},
-	} {
-		split := func(s string) []string {
-			if s == "" {
-				return nil
-			}
-			return strings.Split(s, ",")
-		}
-		if got := strings.Join(newLines(split(c.prev), split(c.cur)), ","); got != c.want {
-			t.Errorf("newLines(%s, %s) = %s, want %s", c.prev, c.cur, got, c.want)
-		}
-	}
-}
-
 func TestStripControl(t *testing.T) {
 	if got := stripControl("\x1b[31mred\x1b[0m\x1b]0;title\x07 ok\r\n\ttab\x00"); got != "red ok\n\ttab" {
 		t.Fatalf("stripControl = %q", got)

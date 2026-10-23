@@ -322,10 +322,19 @@ func printLogs(w io.Writer, res LogsResult) {
 }
 
 // logsLiveLines is the bottom of a pane that a working agent redraws in
-// place: its prompt box, status line and spinner. logs -f reads only the
-// lines above them, so the spinner never prints (ScarletOrchid's review,
-// nhm-k9d).
+// place: its prompt box, status line and spinner. logs -f and watch read
+// only the lines above them, so the spinner never prints (ScarletOrchid's
+// review, nhm-k9d). On live Claude panes a smaller region still let the
+// spinner through in nearly every read (nhm-rnx).
 const logsLiveLines = 10
+
+// settledLines is a read's lines above the live region, without control
+// sequences: the part of a pane that logs -f and watch compare from one
+// read to the next.
+func settledLines(text string) []string {
+	lines := strings.Split(strings.TrimRight(stripControl(text), "\n"), "\n")
+	return lines[:max(0, len(lines)-logsLiveLines)]
+}
 
 // freshLines is the lines of cur, in order, beyond the copies of each
 // text that prev already holds. An agent also redraws lines above its
@@ -366,8 +375,7 @@ func followLogs(ctx context.Context, h *herdr.Client, session string, agents []s
 			// A failed read is skipped, as ntm skips a failed poll.
 			return nil, false
 		}
-		lines := strings.Split(strings.TrimRight(stripControl(r.Text), "\n"), "\n")
-		return lines[:max(0, len(lines)-logsLiveLines)], true
+		return settledLines(r.Text), true
 	}
 	for _, a := range agents {
 		if cur, ok := read(a); ok {
