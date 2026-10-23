@@ -14,25 +14,31 @@ import (
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 )
 
-// backgroundWork is Claude Code 2.1.309's dialog when /exit finds
-// background work, as herdr read the screen (nhm-m7x).
+// backgroundWork is the end of a pane at Claude Code 2.1.309's dialog
+// when /exit finds background work, as herdr 0.9.5 read it in the
+// sandbox (nhm-m7x).
 const backgroundWork = `
- Background work is running
- The following will stop when you exit:
-    shell · until out=$(am check-inbox --agent IcyKnoll --rate-limit 0 --json); do sleep 30; done
- ❯ 1. Exit and stop tasks
-   2. Move to background and exit
-   3. Stay
+✻ Sautéed for 3s · done 11:03 PM · 1 shell still running
 
- Enter to confirm · Esc to cancel
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Background work is running
+   The following will stop when you exit:
+
+   shell · sleep 600
+
+   ❯ 1. Exit and stop tasks
+     2. Move to background and exit
+     3. Stay
+
+   Enter to confirm · Esc to cancel
 `
 
 // dialogPane is a herdr stub with one agent in pane w1:p1. Its exit
 // command puts dialog on the screen in place of an exit ("": the agent
 // exits); exitKeys, sent at the dialog, end the agent (nil: the dialog
-// stays). A
-// successor's ready wait runs out when startScreen is set, with that on
-// the screen.
+// stays), and so does the exitAfter'th agent.get after the exit command
+// (0: never). A successor's ready wait runs out when startScreen is set,
+// with that on the screen.
 type dialogPane struct {
 	mu          sync.Mutex
 	kind        string
@@ -40,9 +46,13 @@ type dialogPane struct {
 	screen      string
 	dialog      string
 	exitKeys    []string
+	exitAfter   int
+	gets        int
+	exiting     bool
 	startScreen string
 	prompts     []string
 	keys        [][]string
+	reads       int
 	starts      int
 }
 
@@ -59,6 +69,11 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 	s.Handle("agent.get", func(herdrtest.Request) (any, *herdrtest.Error) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		if p.exiting {
+			if p.gets++; p.gets == p.exitAfter {
+				p.running, p.exiting, p.screen = false, false, "$ \n"
+			}
+		}
 		return agent()
 	})
 	s.Handle("agent.wait", func(herdrtest.Request) (any, *herdrtest.Error) {
@@ -80,7 +95,7 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 		case p.dialog == "":
 			p.running, p.screen = false, "$ \n"
 		default:
-			p.screen = p.dialog
+			p.screen, p.exiting = p.dialog, true
 		}
 		return map[string]any{"type": "agent_prompted", "agent": p.agentJSON()}, nil
 	})
@@ -95,6 +110,7 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 		if q.Source != "recent" || q.Lines != 40 {
 			return nil, &herdrtest.Error{Code: "invalid_request", Message: fmt.Sprintf("read %s %d", q.Source, q.Lines)}
 		}
+		p.reads++
 		return map[string]any{"type": "pane_read", "read": map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
 			"source": "recent", "format": "text", "revision": 1, "text": p.screen, "truncated": false}}, nil
 	})
@@ -105,7 +121,7 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 		defer p.mu.Unlock()
 		p.keys = append(p.keys, q.Keys)
 		if p.exitKeys != nil && slices.Equal(q.Keys, p.exitKeys) && p.screen == p.dialog {
-			p.running, p.screen = false, "$ \n"
+			p.running, p.exiting, p.screen = false, false, "$ \n"
 		}
 		return map[string]any{"type": "ok"}, nil
 	})
@@ -179,32 +195,49 @@ func TestRecycleAnswersTheBackgroundWorkDialog(t *testing.T) {
 	}
 }
 
-// A dialog that recycle does not answer fails the stop at once and
-// names it: Claude's with the cursor off 'Exit and stop tasks', and
-// Codex's 'Task is still running'. No key is sent and nothing starts.
+// A dialog that recycle does not answer, Claude's with the cursor off
+// 'Exit and stop tasks', fails the stop at once and names it. No key is
+// sent and nothing starts.
 func TestRecycleNamesAnExitDialogItDoesNotAnswer(t *testing.T) {
 	ctx := context.Background()
+	w := newWorld(t)
+	b := bindKind(t, w, "claude")
 	stay := strings.Replace(strings.Replace(backgroundWork, "❯ 1.", "  1.", 1), "  3. Stay", "❯ 3. Stay", 1)
-	task := "  Task is still running\n  Choose what happens to the current task.\n\n› 1. Cancel task\n  2. Run in background\n"
-	for _, c := range []struct{ kind, screen, want string }{
-		{"claude", stay, "IcyKnoll did not exit: /exit opened Claude's 'Background work is running' dialog (the agent has background tasks), which recycle does not answer; nothing started: answer it in pane w1:p1"},
-		{"codex", task, "IcyKnoll did not exit: /quit opened Codex's 'Task is still running' dialog, which recycle does not answer; nothing started: answer it in pane w1:p1"},
-	} {
-		w := newWorld(t)
-		b := bindKind(t, w, c.kind)
-		p, h := newDialogPane(t, c.kind, c.screen, nil)
-		w.env.Herdr = h
-		began := w.clock
-		res, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "x"})
-		if err == nil || res.Stage != StageStop || res.Error != c.want {
-			t.Fatalf("%s: recycle = %+v %v", c.kind, res, err)
-		}
-		if len(p.keys) != 0 || p.starts != 0 || w.clock.Sub(began) >= stopWait {
-			t.Fatalf("%s: keys %v, starts %d, after %s", c.kind, p.keys, p.starts, w.clock.Sub(began))
-		}
-		if nb, _ := w.env.Bindings.Get(ctx, b.ID); nb.Generation != b.Generation {
-			t.Fatalf("%s: the generation moved", c.kind)
-		}
+	p, h := newDialogPane(t, "claude", stay, nil)
+	w.env.Herdr = h
+	began := w.clock
+	res, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "x"})
+	want := "IcyKnoll did not exit: /exit opened Claude's 'Background work is running' dialog (the agent has background tasks), " +
+		"which recycle does not answer; nothing started: answer it in pane w1:p1"
+	if err == nil || res.Stage != StageStop || res.Error != want {
+		t.Fatalf("recycle = %+v %v", res, err)
+	}
+	if len(p.keys) != 0 || p.starts != 0 || w.clock.Sub(began) >= stopWait {
+		t.Fatalf("keys %v, starts %d, after %s", p.keys, p.starts, w.clock.Sub(began))
+	}
+	if nb, _ := w.env.Bindings.Get(ctx, b.ID); nb.Generation != b.Generation {
+		t.Fatal("the generation moved")
+	}
+}
+
+// An agent whose output quotes the dialog above its prompt box, and
+// that takes a few seconds to exit, has no dialog open: recycle reads
+// the pane, sends no key, warns of nothing, and starts the successor
+// once the agent exits.
+func TestRecycleIgnoresAQuotedExitDialog(t *testing.T) {
+	quote := "● The bead says that /exit opened this dialog:\n\n" + strings.TrimPrefix(backgroundWork, "\n") +
+		"\n" + strings.Repeat("─", 94) + "\n❯ \n" + strings.Repeat("─", 94) + "\n  ⏵⏵ bypass permissions on · 1 shell · ↓ to manage\n"
+	w := newWorld(t)
+	b := bindKind(t, w, "claude")
+	p, c := newDialogPane(t, "claude", quote, nil)
+	p.exitAfter = 6
+	w.env.Herdr = c
+	res, err := Recycle(context.Background(), w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "x"})
+	if err != nil || res.Stage != StageDone || res.Generation != b.Generation+1 {
+		t.Fatalf("recycle = %+v %v", res, err)
+	}
+	if p.reads < 2 || len(p.keys) != 0 || p.starts != 1 || slices.ContainsFunc(res.Warnings, func(s string) bool { return strings.Contains(s, "dialog") }) {
+		t.Fatalf("reads %d, keys %v, starts %d, warnings %q", p.reads, p.keys, p.starts, res.Warnings)
 	}
 }
 

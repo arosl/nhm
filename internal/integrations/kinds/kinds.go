@@ -453,34 +453,45 @@ func codexDialog(screen string) string {
 	return ""
 }
 
+// claudeDialog is the dialog that a Claude Code screen ends with, or "".
+// Claude Code 2.1.309 draws a dialog in place of its prompt box: a top
+// rule of ▔ (U+2594), the dialog, and its footer on the screen's last
+// line (seen in the sandbox at 120x40 and 80x16, nhm-m7x). The dialog is
+// the lines below the last such rule, when the last two lines that are
+// not blank hold footer. Dialog text that the agent's output quotes has
+// the prompt box below it, so it gives "".
+func claudeDialog(screen, footer string) string {
+	lines := strings.Split(strings.TrimRight(screen, " \t\r\n"), "\n")
+	if !strings.Contains(flatScreen(strings.Join(lines[max(0, len(lines)-2):], "\n")), footer) {
+		return ""
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if rule := strings.TrimSpace(lines[i]); rule != "" && strings.Trim(rule, "▔") == "" {
+			return strings.Join(lines[i+1:], "\n")
+		}
+	}
+	return ""
+}
+
 // claudeExitDialog names the dialog that Claude Code's /exit opens when
 // the agent has background work, such as a shell that waits for mail:
-// "Exit and stop tasks", "Move to background and exit" or "Stay". Enter
-// on the first answer stops that work with the session; work moved to
-// the background would go on in the old session's name (nhm-m7x). With
-// the cursor on another answer, nhm does not answer.
+// "Exit and stop tasks", "Move to background and exit" or "Stay" (a
+// short pane shows the first answer only). Enter on the first answer
+// stops that work with the session; work moved to the background would
+// go on in the old session's name (nhm-m7x). With the cursor on another
+// answer, nhm does not answer. Only a dialog that ends the screen counts
+// (claudeDialog).
 func claudeExitDialog(screen string) (string, string, []string) {
-	flat := flatScreen(screen)
+	d := claudeDialog(screen, "Enter to confirm · Esc to cancel")
+	flat := flatScreen(d)
 	if !strings.Contains(flat, "Background work is running") || !strings.Contains(flat, "Exit and stop tasks") {
 		return "", "", nil
 	}
 	name := "Claude's 'Background work is running' dialog (the agent has background tasks)"
-	if claudeExitCursor.MatchString(screen) {
+	if claudeExitCursor.MatchString(d) {
 		return name, "Exit and stop tasks", []string{"enter"}
 	}
 	return name, "", nil
-}
-
-// codexExitDialog names the dialog that codex-cli 0.162.1 opens on an
-// exit while a task runs: cancel the task, run it in the background, or
-// stop it and exit. nhm does not answer it: the task is the agent's
-// work, and recycle stops an agent only between turns.
-func codexExitDialog(screen string) (string, string, []string) {
-	flat := flatScreen(screen)
-	if strings.Contains(flat, "Task is still running") && strings.Contains(flat, "Choose what happens to the current task") {
-		return "Codex's 'Task is still running' dialog", "", nil
-	}
-	return "", "", nil
 }
 
 func fromCodex(e Event, bound string, launch bool) Decision {
@@ -512,7 +523,7 @@ func builtins() []Adapter {
 			// --no-daemon runs Codex's hooks in its own pane (F.22, exp.3).
 			// ntm's launch: --dangerously-bypass-approvals-and-sandbox and
 			// model_reasoning_effort xhigh; --no-daemon is the fork's (F.22).
-			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Dialog: codexDialog, ExitDialog: codexExitDialog, Flags: []string{"cod"},
+			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Dialog: codexDialog, Flags: []string{"cod"},
 			LaunchArgs: []string{"--no-daemon", "--dangerously-bypass-approvals-and-sandbox"}, ModelFlag: "--model",
 			EffortArgs: []string{"-c", "model_reasoning_effort={effort}"}, DefaultEffort: "xhigh",
 			ResumeArgv:  []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "{session}"},

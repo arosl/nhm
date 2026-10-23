@@ -457,40 +457,87 @@ func TestCodexDialog(t *testing.T) {
 	}
 }
 
-// claudeBackgroundWork is Claude Code 2.1.309's dialog when /exit finds
-// background work, as herdr read the screen (nhm-m7x).
+// claudeBackgroundWork is the end of a 120x40 pane at Claude Code
+// 2.1.309's dialog when /exit finds background work, as herdr 0.9.5
+// read it in the sandbox (nhm-m7x); blank lines above the dialog cut.
 const claudeBackgroundWork = `
- Background work is running
- The following will stop when you exit:
-    shell · until out=$(am check-inbox --agent IcyKnoll --rate-limit 0 --json); do sleep 30; done
- ❯ 1. Exit and stop tasks
-   2. Move to background and exit
-   3. Stay
+❯ mock-tool: {"name": "Bash", "input": {"command": "sleep 600", "run_in_background": true,
+  "description": "Wait for mail"}}
 
- Enter to confirm · Esc to cancel
+● mock reply 1
+
+  Ran 1 shell command
+
+● mock: read 1 tool result(s)
+
+✻ Sautéed for 3s · done 11:03 PM · 1 shell still running
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Background work is running
+   The following will stop when you exit:
+
+   shell · sleep 600
+
+   ❯ 1. Exit and stop tasks
+     2. Move to background and exit
+     3. Stay
+
+   Enter to confirm · Esc to cancel
 `
 
-// codexTaskRunning holds the words of codex-cli 0.162.1's dialog on an
-// exit while a task runs, from the strings of its binary (nhm-m7x).
-const codexTaskRunning = `
-  Task is still running
-  Choose what happens to the current task.
+// claudeBackgroundWorkShort is the same dialog in an 80x16 pane, whole:
+// Claude Code shows the first answer only.
+const claudeBackgroundWorkShort = `
 
-› 1. Cancel task         Stop the current task and stay in Codex
-  2. Run in background   Exit Codex and leave the task running
+● mock: read 1 tool result(s)
+
+✻ Cogitated for 3s · done 11:03 PM · 1 shell still
+  running
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Background work is running
+   The following will stop when you exit:
+
+   shell · sleep 600
+
+   ❯ 1. Exit and stop tasks
+
+   Enter to confirm · Esc to cancel
+`
+
+// claudeQuotesTheDialog is an idle Claude Code whose output quotes the
+// dialog, whole, above its prompt box, as the sandbox showed the box:
+// no dialog is open.
+const claudeQuotesTheDialog = `
+● The bead says that /exit opened this dialog:
+
+  Background work is running
+  The following will stop when you exit:
+     shell · until out=$(am check-inbox --agent IcyKnoll ...
+  ❯ 1. Exit and stop tasks
+    2. Move to background and exit
+    3. Stay
+  Enter to confirm · Esc to cancel
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · ↓ to manage
 `
 
 func TestExitDialog(t *testing.T) {
 	c, _ := Get("claude")
-	x, _ := Get("codex")
 	name, answer, keys := c.ExitDialog(claudeBackgroundWork)
 	if !strings.HasPrefix(name, "Claude's 'Background work is running' dialog") || answer != "Exit and stop tasks" || !slices.Equal(keys, []string{"enter"}) {
 		t.Fatalf("background work = %q %q %v", name, answer, keys)
 	}
-	// In a dialog box, and wrapped in a narrow pane, it reads the same.
-	boxed := "╭────────────────╮\n│" + strings.Replace(claudeBackgroundWork, "Background work is running", "Background work\n│ is running", 1)
-	if n, _, k := c.ExitDialog(boxed); n != name || !slices.Equal(k, keys) {
-		t.Fatalf("boxed = %q %v", n, k)
+	// A short pane, a narrow one that wraps the title, and trailing blank
+	// lines read the same.
+	wrapped := strings.Replace(claudeBackgroundWorkShort, "Background work is running", "Background work is\n   running", 1)
+	for _, s := range []string{claudeBackgroundWorkShort, wrapped, claudeBackgroundWork + "\n   \n\n"} {
+		if n, a, k := c.ExitDialog(s); n != name || a != answer || !slices.Equal(k, keys) {
+			t.Fatalf("%q = %q %q %v", s, n, a, k)
+		}
 	}
 	// With the cursor on another answer, nhm names the dialog and does
 	// not answer it.
@@ -498,17 +545,21 @@ func TestExitDialog(t *testing.T) {
 	if n, a, k := c.ExitDialog(stay); n != name || a != "" || k != nil {
 		t.Fatalf("cursor on Stay = %q %q %v", n, a, k)
 	}
-	// Codex's is named, never answered.
-	if n, a, k := x.ExitDialog(codexTaskRunning); n != "Codex's 'Task is still running' dialog" || a != "" || k != nil {
-		t.Fatalf("task running = %q %q %v", n, a, k)
-	}
-	for _, s := range []struct {
-		a      Adapter
-		screen string
-	}{{c, codexTaskRunning}, {x, claudeBackgroundWork}, {c, "❯ \n  ? for shortcuts\n"}, {x, "› Ask Codex to do anything\n"}} {
-		if n, a, k := s.a.ExitDialog(s.screen); n != "" || a != "" || k != nil {
-			t.Fatalf("%s on %q = %q %q %v", s.a.Name, s.screen, n, a, k)
+	// Only a dialog that ends the screen counts: the words quoted above
+	// the prompt box, with the cursor line or without it, give none, and
+	// so does another dialog that ends the screen below the quote.
+	other := claudeQuotesTheDialog[:strings.Index(claudeQuotesTheDialog, "\n───")] + "\n" + strings.Repeat("▔", 40) +
+		"\n Bash command\n\n   make build\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Enter to confirm · Esc to cancel\n"
+	for _, s := range []string{claudeQuotesTheDialog, strings.Replace(claudeQuotesTheDialog, "  ❯ 1. Exit and stop tasks\n", "", 1), other,
+		"❯ \n  ? for shortcuts\n", ""} {
+		if n, a, k := c.ExitDialog(s); n != "" || a != "" || k != nil {
+			t.Fatalf("%q = %q %q %v", s, n, a, k)
 		}
+	}
+	// Codex's /quit opened no dialog in the sandbox, in a turn or with a
+	// background terminal: Codex names none.
+	if x, _ := Get("codex"); x.ExitDialog != nil {
+		t.Fatal("codex names an exit dialog")
 	}
 }
 
