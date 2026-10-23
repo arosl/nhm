@@ -535,6 +535,10 @@ func TestAdmission(t *testing.T) {
 	deny := func(context.Context, []string) (guards.Verdict, error) {
 		return guards.Verdict{Decision: guards.Deny, Command: "claude --x", Reason: "rule"}, nil
 	}
+	// As guards.ScreenArgv answers when dcg hangs past ScreenTimeout.
+	noAnswer := func(context.Context, []string) (guards.Verdict, error) {
+		return guards.Verdict{}, errors.New("guards: dcg test gave no answer (limit 30s): context deadline exceeded")
+	}
 	red := func(context.Context) (Capacity, error) {
 		return Capacity{Status: "red", Reasons: []string{"no memory"}}, nil
 	}
@@ -558,6 +562,10 @@ func TestAdmission(t *testing.T) {
 		{"guard missing", AdmissionEnv{Guards: missing, Screen: allow}, nil, Refuse, "guard dcg is missing"},
 		{"guard missing, exception", AdmissionEnv{Guards: missing, Screen: allow}, func(r *Request) { r.AllowUnguarded = true }, Admit, ""},
 		{"argv denied, even unguarded", AdmissionEnv{Guards: configured, Screen: deny}, func(r *Request) { r.AllowUnguarded = true }, Refuse, "DCG denies"},
+		// The operator's ruling (nhm-eid): a dcg that does not answer in
+		// time refuses the launch, --allow-unguarded or not.
+		{"argv not screened, even unguarded", AdmissionEnv{Guards: configured, Screen: noAnswer}, func(r *Request) { r.AllowUnguarded = true },
+			Refuse, "the launch argv could not be screened: guards: dcg test gave no answer"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

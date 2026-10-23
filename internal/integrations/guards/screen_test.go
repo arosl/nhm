@@ -100,6 +100,28 @@ func TestScreenArgvEndsWhenAChildHoldsStdout(t *testing.T) {
 	}
 }
 
+// The operator's ruling (nhm-eid): dcg has ScreenTimeout to answer. One
+// that writes an allow and then hangs is killed at the limit, and its
+// allow does not count: the screen fails closed.
+func TestScreenArgvRefusesAtTheTimeout(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s' '{\"decision\":\"allow\"}'\nexec sleep 30\n"
+	if err := os.WriteFile(filepath.Join(dir, "dcg"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldPath, oldTimeout := DCGPath, ScreenTimeout
+	DCGPath, ScreenTimeout = filepath.Join(dir, "dcg"), 200*time.Millisecond
+	defer func() { DCGPath, ScreenTimeout = oldPath, oldTimeout }()
+	start := time.Now()
+	v, err := ScreenArgv(context.Background(), []string{"claude"})
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the screen took %v", took)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "no answer (limit 200ms)") || v.Decision != "" {
+		t.Fatalf("verdict = %+v, %v; want no answer", v, err)
+	}
+}
+
 func TestShellJoin(t *testing.T) {
 	if got := ShellJoin([]string{"codex", "--no-daemon", "-c", "model=o3", "", "a b", "$HOME"}); got != `codex --no-daemon -c model=o3 '' 'a b' '$HOME'` {
 		t.Fatalf("ShellJoin = %s", got)
