@@ -384,6 +384,80 @@ func TestTrustKeysAndPrograms(t *testing.T) {
 	}
 }
 
+// claudeTrustWrapped is the body of Claude Code's folder-trust dialog in a
+// pane of each width, as Claude Code wraps it (E18, nhm-za8): the question
+// wraps in a pane under about 70 columns, the answers do not.
+var claudeTrustWrapped = map[int]string{
+	40: `
+ Accessing workspace:
+
+ /srv/project
+
+ Quick safety check: Is this a project
+ you created or one you trust? (Like
+ your own code, a well-known open
+ source project, or work from your
+ team). If not, take a moment to review
+ what's in this folder first.
+
+ Claude Code'll be able to read, edit,
+ and execute files here.
+
+ Security guide
+
+`,
+	60: `
+ Accessing workspace:
+
+ /srv/project
+
+ Quick safety check: Is this a project you created or one
+ you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to
+ review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files
+ here.
+
+ Security guide
+
+`,
+}
+
+func TestTrustKeysWrapped(t *testing.T) {
+	c, _ := Get("claude")
+	x, _ := Get("codex")
+	no := " ❯ No, exit\n   Yes, I trust this folder"
+	yes := "   No, exit\n ❯ Yes, I trust this folder"
+	for cols, body := range claudeTrustWrapped {
+		screen := func(answers string) string {
+			return "$ claude --dangerou\nsly-skip-permissions --effort xhigh\n\n" + strings.Repeat("─", cols) + body +
+				answers + "\n\n Enter to confirm · Esc to cancel\n"
+		}
+		if got := c.TrustKeys(screen(no)); !slices.Equal(got, []string{"down", "enter"}) {
+			t.Errorf("claude at %d columns, cursor on no = %v", cols, got)
+		}
+		if got := c.TrustKeys(screen(yes)); !slices.Equal(got, []string{"enter"}) {
+			t.Errorf("claude at %d columns, cursor on yes = %v", cols, got)
+		}
+		if got := c.TrustKeys(screen(" ❯ Something else")); got != nil {
+			t.Errorf("claude at %d columns, no trust answers = %v", cols, got)
+		}
+		if got := x.TrustKeys(screen(no)); got != nil {
+			t.Errorf("codex answered claude's dialog at %d columns: %v", cols, got)
+		}
+	}
+	codex40 := "  /srv/project\n  Trust this folder? Codex can read,\n  edit, and run files here.\n› 1. Trust and continue\n  2. Quit\n"
+	if got := x.TrustKeys(codex40); !slices.Equal(got, []string{"enter"}) {
+		t.Errorf("codex at 40 columns = %v", got)
+	}
+	// Borders drop out: a boxed question reads as one line.
+	boxed := "╭────────────╮\n│ Is this a  │\n│ project?   │\n╰────────────╯\n"
+	if got := flatScreen(boxed); got != "Is this a project?" {
+		t.Errorf("flatScreen(boxed) = %q", got)
+	}
+}
+
 func TestContinuationRules(t *testing.T) {
 	c, _ := Get("claude")
 	d := c.Continue(Event{HookEvent: "SessionStart", Source: "compact", SessionID: "s-1", Entrypoint: "cli"}, "s-1", false)

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"unicode"
 
 	"github.com/arosl/nhm/internal/integrations/kinds/claude"
 	"github.com/arosl/nhm/internal/integrations/kinds/codex"
@@ -390,7 +391,10 @@ func fromClaude(e Event, bound string, launch bool) Decision {
 }
 
 // The folder-trust dialogs, as ACFS's herdr_agents_trust_keys reads them:
-// the exact question and the selected answer, or nothing.
+// the exact question and the selected answer, or nothing. nhm looks for
+// the question on the flat screen, where ACFS looks on one line, because a
+// narrow pane wraps it (nhm-za8); the answers are short and keep their
+// lines.
 var (
 	claudeTrustCursorNo  = regexp.MustCompile(`(?m)❯ *No, exit`)
 	claudeTrustYesLine   = regexp.MustCompile(`(?m)^ *Yes, I trust this folder`)
@@ -398,8 +402,18 @@ var (
 	codexTrustCursor     = regexp.MustCompile(`(?m)› *1\. Trust and continue`)
 )
 
+// flatScreen is the screen's words in order, one space apart: line breaks
+// and runs of spaces become one space, and box-drawing characters (U+2500
+// to U+257F, a dialog's borders) are dropped. A question that a narrow
+// pane wraps reads as it does in a wide one.
+func flatScreen(screen string) string {
+	return strings.Join(strings.FieldsFunc(screen, func(r rune) bool {
+		return unicode.IsSpace(r) || (r >= 0x2500 && r <= 0x257F)
+	}), " ")
+}
+
 func claudeTrust(screen string) []string {
-	if !strings.Contains(screen, "Is this a project you created or one you trust?") {
+	if !strings.Contains(flatScreen(screen), "Is this a project you created or one you trust?") {
 		return nil
 	}
 	switch {
@@ -412,7 +426,7 @@ func claudeTrust(screen string) []string {
 }
 
 func codexTrust(screen string) []string {
-	if strings.Contains(screen, "Trust this folder?") && codexTrustCursor.MatchString(screen) {
+	if strings.Contains(flatScreen(screen), "Trust this folder?") && codexTrustCursor.MatchString(screen) {
 		return []string{"enter"}
 	}
 	return nil
