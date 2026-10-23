@@ -35,6 +35,7 @@ type world struct {
 	panes   []*pane
 	labels  map[string]string // tab id: label
 	moves   []herdr.PaneMoveParams
+	swaps   []herdr.PaneSwapParams
 	renamed []string
 	moveErr error
 }
@@ -124,6 +125,33 @@ func (w *world) PaneMove(_ context.Context, m herdr.PaneMoveParams) (herdr.PaneM
 	if !slices.ContainsFunc(w.panes, func(q *pane) bool { return q.tab == from }) {
 		delete(w.labels, from)
 		res.ClosedTabID = from
+	}
+	return res, nil
+}
+
+// PaneSwap exchanges two panes' rects, as herdr does within a tab, and
+// changes nothing across two tabs (reason cross_tab).
+func (w *world) PaneSwap(_ context.Context, s herdr.PaneSwapParams) (herdr.PaneSwapResult, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.swaps = append(w.swaps, s)
+	if w.moveErr != nil {
+		return herdr.PaneSwapResult{}, w.moveErr
+	}
+	a, b := w.find(s.SourcePaneID), w.find(s.TargetPaneID)
+	if a == nil || b == nil {
+		return herdr.PaneSwapResult{SourcePaneID: s.SourcePaneID, Reason: "not_found"}, nil
+	}
+	res := herdr.PaneSwapResult{SourcePaneID: a.id, TargetPaneID: b.id, Reason: "cross_tab"}
+	if a.tab == b.tab {
+		a.rect, b.rect = b.rect, a.rect
+		res.Changed, res.Reason = true, ""
+	}
+	res.Layout = herdr.PaneLayout{WorkspaceID: a.ws, TabID: a.tab}
+	for _, q := range w.panes {
+		if q.tab == a.tab {
+			res.Layout.Panes = append(res.Layout.Panes, herdr.LayoutPane{PaneID: q.id, Rect: q.rect})
+		}
 	}
 	return res, nil
 }

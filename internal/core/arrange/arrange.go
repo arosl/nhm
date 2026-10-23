@@ -30,12 +30,15 @@ type Result struct {
 	Warnings []string `json:"-"`
 }
 
-// Done is a move that nhm arrange made.
+// Done is a move, or a swap, that nhm arrange made.
 type Done struct {
-	MailName  string   `json:"mail_name"`
-	Slot      string   `json:"slot,omitempty"`
-	FromTab   string   `json:"from_tab_id"`
-	TabID     string   `json:"tab_id"`
+	MailName string `json:"mail_name"`
+	Slot     string `json:"slot,omitempty"`
+	FromTab  string `json:"from_tab_id"`
+	TabID    string `json:"tab_id"`
+	// Swap: MailName's pane swapped places with With's in TabID.
+	Swap      bool     `json:"swap,omitempty"`
+	With      string   `json:"with,omitempty"`
 	Cell      int      `json:"cell"`
 	ClosedTab string   `json:"closed_tab_id,omitempty"`
 	Actions   []string `json:"actions"`
@@ -82,12 +85,15 @@ func Run(ctx context.Context, env tabs.Env, req Request) (Result, error) {
 	for _, m := range res.Plan.Moves {
 		g := &res.Plan.Groups[m.Group]
 		var r tabs.Result
-		if m.NewTab {
+		switch {
+		case m.Swap:
+			r, err = tabs.SwapLocked(ctx, env, byID[m.BindingID], byID[m.WithBindingID], res.Plan.PerTab)
+		case m.NewTab:
 			r, err = tabs.NewTabLocked(ctx, env, byID[m.BindingID], g.NewTabLabel)
 			if err == nil {
 				g.TabID = r.Cell.TabID
 			}
-		} else {
+		default:
 			to := m.ToTab
 			if to == "" {
 				to = g.TabID
@@ -98,7 +104,7 @@ func Run(ctx context.Context, env tabs.Env, req Request) (Result, error) {
 		switch {
 		case err == nil:
 			res.Done = append(res.Done, Done{MailName: m.MailName, Slot: r.Binding.Slot, FromTab: r.Cell.FromTab, TabID: r.Cell.TabID,
-				Cell: r.Cell.Cell, ClosedTab: r.ClosedTabID, Actions: r.Actions})
+				Swap: m.Swap, With: m.With, Cell: r.Cell.Cell, ClosedTab: r.ClosedTabID, Actions: r.Actions})
 			if r.Cell.Cell != m.Cell {
 				err = fmt.Errorf("it went into cell %d of tab %s, not cell %d: the tab changed while nhm arrange ran", r.Cell.Cell, r.Cell.TabID, m.Cell)
 			}
@@ -125,6 +131,10 @@ func stopped(m Move, err error, done []Done, all int) error {
 	}
 	var made []string
 	for _, d := range done {
+		if d.Swap {
+			made = append(made, d.MailName+" swapped with "+d.With+" in "+d.TabID)
+			continue
+		}
 		made = append(made, d.MailName+" to "+d.TabID)
 	}
 	return fmt.Errorf("%s: %v; %d of %d moves made (%s), and nhm arrange stopped there (each move made leaves a valid layout; "+

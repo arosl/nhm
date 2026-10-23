@@ -26,6 +26,7 @@ type Herdr interface {
 	bindings.Herdr
 	PaneLayout(ctx context.Context, paneID string) (herdr.PaneLayout, error)
 	PaneMove(ctx context.Context, p herdr.PaneMoveParams) (herdr.PaneMoveResult, error)
+	PaneSwap(ctx context.Context, p herdr.PaneSwapParams) (herdr.PaneSwapResult, error)
 	TabRename(ctx context.Context, tabID, label string) (herdr.TabInfo, error)
 }
 

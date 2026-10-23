@@ -72,6 +72,7 @@ var methodResults = map[string][]string{
 	// Observed in the sandbox on herdr 0.9.3 (nhm-p1o, nhm move; nhm-qbi.11,
 	// nhm doctor --herdr-fit).
 	"pane.move":      {"pane_move"},
+	"pane.swap":      {"pane_swap"},
 	"popup.close":    {"ok"},
 	"pane.send_keys": {"ok"},
 	"plugin.list":    {"plugin_list"},

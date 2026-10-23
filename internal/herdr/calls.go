@@ -37,6 +37,10 @@ type paneMoveResult struct {
 	MoveResult PaneMoveResult `json:"move_result"`
 }
 
+type paneSwapResult struct {
+	Swap PaneSwapResult `json:"swap"`
+}
+
 type pluginListResult struct {
 	Plugins []PluginInfo `json:"plugins"`
 }
@@ -201,6 +205,15 @@ func (c *Client) PaneMove(ctx context.Context, p PaneMoveParams) (PaneMoveResult
 	var r paneMoveResult
 	err := c.call(ctx, "pane.move", p, &r, 0)
 	return r.MoveResult, err
+}
+
+// PaneSwap exchanges the places of two panes of one tab. herdr answers
+// a swap it does not make, such as one across two tabs, with Changed
+// false and a Reason, not with an error.
+func (c *Client) PaneSwap(ctx context.Context, p PaneSwapParams) (PaneSwapResult, error) {
+	var r paneSwapResult
+	err := c.call(ctx, "pane.swap", p, &r, 0)
+	return r.Swap, err
 }
 
 // PaneSendKeys sends keys to any pane, an agent's or a plugin's.

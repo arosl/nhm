@@ -279,6 +279,17 @@ type PaneMoveResult struct {
 	ClosedWorkspaceID string `json:"closed_workspace_id"`
 }
 
+// PaneSwapResult is pane.swap's answer: whether herdr swapped the two
+// panes, why not when it did not ("cross_tab", "same_pane", "not_found"),
+// and the layout of the source pane's tab after it.
+type PaneSwapResult struct {
+	Changed      bool       `json:"changed"`
+	Reason       string     `json:"reason"`
+	SourcePaneID string     `json:"source_pane_id"`
+	TargetPaneID string     `json:"target_pane_id"`
+	Layout       PaneLayout `json:"layout"`
+}
+
 // OutputMatched is pane.wait_for_output's answer.
 type OutputMatched struct {
 	PaneID      string   `json:"pane_id"`

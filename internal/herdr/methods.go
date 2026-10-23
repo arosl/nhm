@@ -92,6 +92,14 @@ type PaneMoveDestination struct {
 	Ratio        *float64 `json:"ratio,omitempty"`
 }
 
+// PaneSwapParams are pane.swap's parameters: herdr exchanges the places
+// of two panes of one tab, and their ids stay. Across two tabs it changes
+// nothing (reason "cross_tab").
+type PaneSwapParams struct {
+	SourcePaneID string `json:"source_pane_id,omitempty"`
+	TargetPaneID string `json:"target_pane_id,omitempty"`
+}
+
 // paneSendKeysParams are pane.send_keys's parameters: keys in herdr's
 // names ("esc", "ctrl+c", "a").
 type paneSendKeysParams struct {

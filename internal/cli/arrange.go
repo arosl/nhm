@@ -25,8 +25,10 @@ order, one project per tab.
 nhm arrange plans from one reading of the workspace, then moves the
 panes one at a time, as nhm move --tab does: each into its tab's next
 free cell. A group stays in the tab of its first agent when that tab
-holds the group's first agents in their cells already; otherwise the
-first agent moves to a new tab, and the others join it there. A tab
+holds the group's first agents in their cells already. A tab on the grid
+that holds them out of slot order, and nothing else, is put in order in
+place: herdr's pane.swap exchanges two of its panes at a time. Otherwise
+the first agent moves to a new tab, and the others join it there. A tab
 that is full and in order is kept, and herdr closes the tabs left empty.
 A moved agent keeps its pane, its slot and its generation; its binding
 records the new tab. A second nhm arrange moves nothing.
@@ -135,6 +137,11 @@ func arrangeText(w io.Writer, res arrange.Result) {
 	}
 	if res.DryRun {
 		for _, m := range p.Moves {
+			if m.Swap {
+				fmt.Fprintf(w, "  would swap %s (slot %s) with %s in tab %s, so %s is in cell %d\n", m.MailName, dash(m.Slot), m.With,
+					m.ToTab, m.MailName, m.Cell)
+				continue
+			}
 			to := "tab " + m.ToTab
 			switch {
 			case m.NewTab:

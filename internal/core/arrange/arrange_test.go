@@ -36,7 +36,8 @@ type world struct {
 	tabs   []string          // the tab ids, in herdr's order
 	labels map[string]string // tab id: label
 	moves  []herdr.PaneMoveParams
-	failAt int // the move, from 1, that herdr refuses; 0 for none
+	swaps  []herdr.PaneSwapParams
+	failAt int // the move or swap, from 1, that herdr refuses; 0 for none
 	// misreport is the move, from 1, that herdr makes but answers with
 	// another tab than the pane's; 0 for none.
 	misreport int
@@ -102,7 +103,7 @@ func (w *world) PaneMove(_ context.Context, m herdr.PaneMoveParams) (herdr.PaneM
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.moves = append(w.moves, m)
-	if len(w.moves) == w.failAt {
+	if len(w.moves)+len(w.swaps) == w.failAt {
 		return herdr.PaneMoveResult{}, errors.New("herdr: pane_move_failed")
 	}
 	p := w.find(m.PaneID)
@@ -152,6 +153,34 @@ func (w *world) PaneMove(_ context.Context, m herdr.PaneMoveParams) (herdr.PaneM
 		res.ClosedTabID = from
 	case 1:
 		left[0].rect = herdr.LayoutRect{Width: 240, Height: 60}
+	}
+	return res, nil
+}
+
+// PaneSwap exchanges two panes' rects, as herdr does within a tab, and
+// changes nothing across two tabs (reason cross_tab). It counts as a move
+// for failAt.
+func (w *world) PaneSwap(_ context.Context, s herdr.PaneSwapParams) (herdr.PaneSwapResult, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.swaps = append(w.swaps, s)
+	if len(w.moves)+len(w.swaps) == w.failAt {
+		return herdr.PaneSwapResult{}, errors.New("herdr: pane_swap_failed")
+	}
+	a, b := w.find(s.SourcePaneID), w.find(s.TargetPaneID)
+	if a == nil || b == nil {
+		return herdr.PaneSwapResult{SourcePaneID: s.SourcePaneID, Reason: "not_found"}, nil
+	}
+	res := herdr.PaneSwapResult{SourcePaneID: a.id, TargetPaneID: b.id, Reason: "cross_tab"}
+	if a.tab == b.tab {
+		a.rect, b.rect = b.rect, a.rect
+		res.Changed, res.Reason = true, ""
+	}
+	res.Layout = herdr.PaneLayout{WorkspaceID: "w1", TabID: a.tab}
+	for _, q := range w.panes {
+		if q.tab == a.tab {
+			res.Layout.Panes = append(res.Layout.Panes, herdr.LayoutPane{PaneID: q.id, Rect: q.rect})
+		}
 	}
 	return res, nil
 }
@@ -322,12 +351,14 @@ func TestRunArrangesSevenAgents(t *testing.T) {
 	}
 }
 
-// A tab out of slot order cannot take the rest of its group: its first
-// agent moves to a new tab, labelled with its name, and the others join
-// it there; the tab then takes the project's label.
-func TestRunOpensANewTab(t *testing.T) {
+// A tab on the grid with its agents out of slot order is sorted in place
+// with pane.swap: no pane leaves it, A4 joins it after the three, the
+// bindings keep their tab and slot, and a second run moves nothing
+// (nhm-her).
+func TestRunSortsATabInPlace(t *testing.T) {
 	h := newHarness(t)
 	h.tab("w1:tA", "proj", 6, "A1", "A2", "A3")
+	h.tab("w1:tB", "A4", 6, "A4")
 	// A1, the first slot, has the middle cell: herdr's order is A2 A1 A3.
 	for _, p := range h.world.panes {
 		switch p.id {
@@ -335,6 +366,56 @@ func TestRunOpensANewTab(t *testing.T) {
 			p.rect.X = 80
 		case "w1:pA2":
 			p.rect.X = 0
+		}
+	}
+	before := map[string]string{}
+	for _, n := range []string{"A1", "A2", "A3"} {
+		before[n] = h.binding(n).Slot
+	}
+	res, err := Run(context.Background(), h.env, Request{WorkspaceID: "w1", PerTab: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := moves(res.Plan), "A1⇄A2:1 A4→w1:tA:4"; got != want {
+		t.Errorf("moves %s, want %s", got, want)
+	}
+	if s := h.world.swaps; len(s) != 1 || s[0] != (herdr.PaneSwapParams{SourcePaneID: "w1:pA1", TargetPaneID: "w1:pA2"}) {
+		t.Errorf("pane.swap = %+v", s)
+	}
+	if len(h.world.moves) != 1 || h.world.moves[0].PaneID != "w1:pA4" {
+		t.Errorf("pane.move = %+v, want A4's only", h.world.moves)
+	}
+	if got, want := h.world.layout(6), "w1:tA proj [w1:pA1 w1:pA2 w1:pA3 w1:pA4]"; got != want {
+		t.Errorf("layout %s, want %s", got, want)
+	}
+	if len(res.Done) != 2 || !res.Done[0].Swap || res.Done[0].With != "A2" || res.Done[0].Cell != 1 {
+		t.Errorf("done %+v", res.Done)
+	}
+	for n, slot := range before {
+		if b := h.binding(n); b.TabID != "w1:tA" || b.Slot != slot || b.Generation != 1 {
+			t.Errorf("%s: tab %s slot %s generation %d, want w1:tA %s 1", n, b.TabID, b.Slot, b.Generation, slot)
+		}
+	}
+	if again, err := Run(context.Background(), h.env, Request{WorkspaceID: "w1", PerTab: 6}); err != nil || len(again.Plan.Moves) != 0 {
+		t.Errorf("a second run: %v, moves %s", err, moves(again.Plan))
+	}
+}
+
+// A tab off the grid cannot take the rest of its group: its first agent
+// moves to a new tab, labelled with its name, and the others join it
+// there; the tab then takes the project's label.
+func TestRunOpensANewTab(t *testing.T) {
+	h := newHarness(t)
+	h.tab("w1:tA", "proj", 6, "A1", "A2", "A3")
+	// Halves, not the grid's thirds, laid out by hand: A3 below A2.
+	for _, p := range h.world.panes {
+		switch p.id {
+		case "w1:pA1":
+			p.rect = herdr.LayoutRect{Width: 120, Height: 60}
+		case "w1:pA2":
+			p.rect = herdr.LayoutRect{X: 120, Width: 120, Height: 30}
+		case "w1:pA3":
+			p.rect = herdr.LayoutRect{X: 120, Y: 30, Width: 120, Height: 30}
 		}
 	}
 	res, err := Run(context.Background(), h.env, Request{WorkspaceID: "w1", PerTab: 6})
@@ -352,6 +433,9 @@ func TestRunOpensANewTab(t *testing.T) {
 	}
 	if d := h.world.moves[0].Destination; d.Type != "new_tab" || d.WorkspaceID != "w1" || d.Label != "A1" {
 		t.Errorf("the first move: %+v, want a new tab of w1 labelled A1", d)
+	}
+	if len(h.world.swaps) != 0 {
+		t.Errorf("pane.swap = %+v, want none", h.world.swaps)
 	}
 }
 
@@ -412,6 +496,17 @@ func TestRunStopsAtAFailedMove(t *testing.T) {
 	}
 	if len(res.Done) != 1 || res.Done[0].TabID != "w1:tA" || res.Done[0].FromTab != "w1:tB" {
 		t.Errorf("a misreported move: done %+v", res.Done)
+	}
+	// herdr fails the swap that sorts a tab: an error, and nothing moved.
+	hs := newHarness(t)
+	hs.tab("w1:tA", "proj", 6, "A1", "A2")
+	p1, p2 := hs.world.find("w1:pA1"), hs.world.find("w1:pA2")
+	p1.rect, p2.rect = p2.rect, p1.rect
+	hs.world.failAt = 1
+	res, err = Run(context.Background(), hs.env, Request{WorkspaceID: "w1", PerTab: 6})
+	if err == nil || errors.Is(err, tabs.ErrRefused) || !strings.Contains(err.Error(), "A1: herdr did not swap w1:pA1 and w1:pA2") ||
+		!strings.Contains(err.Error(), "nothing moved") || len(res.Done) != 0 {
+		t.Errorf("a failed swap: err %v, done %+v", err, res.Done)
 	}
 	// The first move refused: a refusal, and nothing moved.
 	h2 := newHarness(t)

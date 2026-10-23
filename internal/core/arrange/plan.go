@@ -74,7 +74,7 @@ type Group struct {
 	ids  []string // the agents' binding ids, as Agents
 }
 
-// Move is one pane move.
+// Move is one pane move, or a swap of two panes of one tab.
 type Move struct {
 	Group     int    `json:"group"` // the index in Plan.Groups
 	MailName  string `json:"mail_name"`
@@ -86,6 +86,13 @@ type Move struct {
 	// whose id is known only once the move that opens it (NewTab) is made.
 	ToTab  string `json:"to_tab_id,omitempty"`
 	NewTab bool   `json:"new_tab,omitempty"`
+	// Swap: the pane takes the place of With's pane in its tab, and
+	// With's pane takes its place (herdr's pane.swap); neither leaves the
+	// tab, ToTab, which is FromTab (nhm-her).
+	Swap          bool   `json:"swap,omitempty"`
+	With          string `json:"with,omitempty"`
+	WithBindingID string `json:"with_binding_id,omitempty"`
+	WithPaneID    string `json:"with_pane_id,omitempty"`
 	// Cell is the grid cell, 1 in reading order, where the pane ends.
 	Cell int `json:"cell"`
 }
@@ -110,10 +117,13 @@ type Left struct {
 // group's first agents in its first cells in slot order, and nothing
 // else, so the others join it cell by cell (spawn.GridOrder). It stays
 // there too when the tab's other agents all belong to earlier groups:
-// they move out first, and the first agent then fills the tab. Otherwise
-// the first agent moves to a new tab of its own, and the others join it
-// there. A tab that loses all its agents is closed by herdr. So the plan
-// moves only what it must, and a second plan of its result moves nothing.
+// they move out first, and the first agent then fills the tab. A tab on
+// the grid that holds the group's first agents and nothing else, but out
+// of slot order, is put in order in place, by swaps (sortIn, nhm-her).
+// Otherwise the first agent moves to a new tab of its own, and the others
+// join it there. A tab that loses all its agents is closed by herdr. So
+// the plan moves only what it must, and a second plan of its result
+// moves nothing.
 func Make(in Input) Plan {
 	perTab := max(in.PerTab, 1)
 	plan := Plan{PerTab: perTab, Groups: []Group{}, Moves: []Move{}, Left: []Left{}}
@@ -169,8 +179,15 @@ func Make(in Input) Plan {
 			grp.ids = append(grp.ids, a.BindingID)
 		}
 		held := stays(home, members[home], g, groupOf, k, perTab)
+		var swaps []Move
+		if held == 0 {
+			if sw, ok := sortIn(k, home, members[home], g, groupOf, perTab, byPane); ok {
+				swaps, held = sw, len(members[home])
+			}
+		}
 		if held > 0 {
 			grp.TabID = home.TabID
+			plan.Moves = append(plan.Moves, swaps...)
 		} else {
 			grp.NewTab, grp.NewTabLabel, held = true, first.MailName, 1
 			plan.Moves = append(plan.Moves, Move{Group: k, MailName: first.MailName, BindingID: first.BindingID,
@@ -180,7 +197,7 @@ func Make(in Input) Plan {
 			plan.Moves = append(plan.Moves, Move{Group: k, MailName: a.MailName, BindingID: a.BindingID, PaneID: a.PaneID,
 				Slot: a.Slot, FromTab: tabOf[a.PaneID].TabID, ToTab: grp.TabID, Cell: held + i + 1})
 		}
-		grp.Kept = !grp.NewTab && held == len(g)
+		grp.Kept = !grp.NewTab && len(swaps) == 0 && held == len(g)
 		plan.Groups = append(plan.Groups, grp)
 	}
 	return plan
@@ -264,6 +281,49 @@ func stays(home *Tab, members, g []*Agent, groupOf map[*Agent]int, k, perTab int
 		}
 	}
 	return len(order)
+}
+
+// sortIn gives the swaps that put home, the tab of group k's first agent,
+// in slot order, when swaps alone can (nhm-her): home lies on the grid
+// with no gap (spawn.GridOrder), and holds group k's first agents, as many
+// as it has panes, and nothing else. herdr's pane.swap exchanges the
+// places of two panes of a tab, and the places keep their cells, so a
+// selection sort, which brings each cell's agent there in turn, takes at
+// most one swap fewer than the tab has panes. ok is false when the tab
+// cannot be sorted so.
+func sortIn(k int, home *Tab, members, g []*Agent, groupOf map[*Agent]int, perTab int, byPane map[string]*Agent) ([]Move, bool) {
+	for _, a := range members {
+		if groupOf[a] != k {
+			return nil, false
+		}
+	}
+	order, clean := spawn.GridOrder(home.Panes, perTab)
+	if !clean || len(order) != len(members) || len(order) > len(g) {
+		return nil, false
+	}
+	first := map[string]bool{}
+	for _, a := range g[:len(order)] {
+		first[a.PaneID] = true
+	}
+	for _, pane := range order {
+		if !first[pane] {
+			return nil, false
+		}
+	}
+	swaps := []Move{}
+	cur := slices.Clone(order)
+	for i, a := range g[:len(cur)] {
+		if cur[i] == a.PaneID {
+			continue
+		}
+		other := byPane[cur[i]]
+		swaps = append(swaps, Move{Group: k, MailName: a.MailName, BindingID: a.BindingID, PaneID: a.PaneID, Slot: a.Slot,
+			FromTab: home.TabID, ToTab: home.TabID, Swap: true, With: other.MailName, WithBindingID: other.BindingID,
+			WithPaneID: other.PaneID, Cell: i + 1})
+		j := slices.Index(cur, a.PaneID)
+		cur[i], cur[j] = cur[j], cur[i]
+	}
+	return swaps, true
 }
 
 // bySlot orders agents by their slot N.M; an agent without a slot comes

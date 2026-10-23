@@ -67,6 +67,10 @@ func apply(t *testing.T, in Input, plan Plan) Input {
 	tabs := slices.Clone(in.Tabs)
 	newTab := map[int]string{}
 	for _, m := range plan.Moves {
+		if m.Swap {
+			swap(t, tabs, m, plan.PerTab)
+			continue
+		}
 		for i := range tabs {
 			tabs[i].Panes = slices.DeleteFunc(slices.Clone(tabs[i].Panes), func(p herdr.LayoutPane) bool { return p.PaneID == m.PaneID })
 			if len(tabs[i].Panes) == 1 {
@@ -99,10 +103,36 @@ func apply(t *testing.T, in Input, plan Plan) Input {
 	return Input{PerTab: in.PerTab, Tabs: tabs, Agents: in.Agents}
 }
 
-// moves is plan's moves as "<name>→<tab>:<cell>", "new" for a new tab.
+// swap makes the swap m on tabs as herdr's pane.swap does: the two panes
+// of tab m.ToTab exchange their rects. It checks that m's pane ends in
+// the cell the plan names.
+func swap(t *testing.T, tabs []Tab, m Move, perTab int) {
+	t.Helper()
+	i := slices.IndexFunc(tabs, func(tb Tab) bool { return tb.TabID == m.ToTab })
+	if i < 0 {
+		t.Fatalf("swap %+v: no tab %q", m, m.ToTab)
+	}
+	tabs[i].Panes = slices.Clone(tabs[i].Panes)
+	a := slices.IndexFunc(tabs[i].Panes, func(p herdr.LayoutPane) bool { return p.PaneID == m.PaneID })
+	b := slices.IndexFunc(tabs[i].Panes, func(p herdr.LayoutPane) bool { return p.PaneID == m.WithPaneID })
+	if a < 0 || b < 0 || a == b {
+		t.Fatalf("swap %+v: the panes are not two panes of %s", m, m.ToTab)
+	}
+	tabs[i].Panes[a].Rect, tabs[i].Panes[b].Rect = tabs[i].Panes[b].Rect, tabs[i].Panes[a].Rect
+	if order, _ := spawn.GridOrder(tabs[i].Panes, perTab); slices.Index(order, m.PaneID)+1 != m.Cell {
+		t.Fatalf("swap %+v: the pane is in cell %d of %v, the plan says %d", m, slices.Index(order, m.PaneID)+1, order, m.Cell)
+	}
+}
+
+// moves is plan's moves as "<name>→<tab>:<cell>", "new" for a new tab,
+// and a swap as "<name>⇄<with>:<cell>".
 func moves(plan Plan) string {
 	var out []string
 	for _, m := range plan.Moves {
+		if m.Swap {
+			out = append(out, fmt.Sprintf("%s⇄%s:%d", m.MailName, m.With, m.Cell))
+			continue
+		}
 		to := m.ToTab
 		if m.NewTab {
 			to = "new"
@@ -189,7 +219,11 @@ func TestPlanTheFirstAgentsTab(t *testing.T) {
 	}{
 		{"in order", 6, []Tab{tab("tA", "proj", 6, "A1", "A2"), tab("tB", "proj", 6, "A3", "A4")},
 			"tA[A1 A2 A3 A4]", "A3→tA:3 A4→tA:4"},
+		// On the grid with no gap, it holds A1 to A3: sorted in place.
 		{"out of order", 6, []Tab{tab("tA", "proj", 6, "A2", "A1", "A3"), tab("tB", "A4", 6, "A4")},
+			"tA[A1 A2 A3 A4]", "A1⇄A2:1 A4→tA:4"},
+		// It holds A1 and A3, not A1 and A2: no swap puts A2 in cell 2.
+		{"out of order, not the first agents", 6, []Tab{tab("tA", "proj", 6, "A3", "A1"), tab("tB", "proj", 6, "A2", "A4")},
 			"new[A1 A2 A3 A4]", "A1→new:1 A2→new0:2 A3→new0:3 A4→new0:4"},
 		{"a gap", 6, []Tab{gap, tab("tB", "A4", 6, "A4")},
 			"new[A1 A2 A3 A4]", "A1→new:1 A2→new0:2 A3→new0:3 A4→new0:4"},
@@ -198,6 +232,37 @@ func TestPlanTheFirstAgentsTab(t *testing.T) {
 			"new[A1 A2 A3 A4]", "A1→new:1 A2→new0:2 A3→new0:3 A4→new0:4"},
 	} {
 		in := Input{PerTab: c.perTab, Tabs: c.tabs, Agents: agents}
+		plan := Make(in)
+		if groups(plan) != c.groups || moves(plan) != c.moves {
+			t.Errorf("%s: groups %s, moves %s; want %s, %s", c.name, groups(plan), moves(plan), c.groups, c.moves)
+			continue
+		}
+		if again := Make(apply(t, in, plan)); len(again.Moves) != 0 {
+			t.Errorf("%s: a second plan moves %s", c.name, moves(again))
+		}
+	}
+}
+
+// A tab on the grid that holds a group's first agents out of slot order
+// is sorted in place with herdr's pane.swap, at most one swap fewer than
+// it has panes, and the rest of the group joins it after them (nhm-her).
+// The live case: 5 agents placed by hand, the sixth cell free, and a
+// sixth agent in a tab of its own.
+func TestPlanSortsATabInPlace(t *testing.T) {
+	six := []Agent{agent("A1", "1.1"), agent("A2", "1.2"), agent("A3", "1.3"), agent("A4", "1.4"), agent("A5", "1.5"), agent("A6", "2.1")}
+	for _, c := range []struct {
+		name          string
+		tabs          []Tab
+		groups, moves string
+	}{
+		{"reversed", []Tab{tab("tA", "proj", 6, "A6", "A5", "A4", "A3", "A2", "A1")},
+			"tA[A1 A2 A3 A4 A5 A6]", "A1⇄A6:1 A2⇄A5:2 A3⇄A4:3"},
+		{"by hand, the sixth apart", []Tab{tab("tA", "proj", 6, "A3", "A4", "A5", "A1", "A2"), tab("tB", "A6", 6, "A6")},
+			"tA[A1 A2 A3 A4 A5 A6]", "A1⇄A3:1 A2⇄A4:2 A3⇄A5:3 A4⇄A5:4 A6→tA:6"},
+		{"in order", []Tab{tab("tA", "proj", 6, "A1", "A2", "A3", "A4", "A5"), tab("tB", "A6", 6, "A6")},
+			"tA[A1 A2 A3 A4 A5 A6]", "A6→tA:6"},
+	} {
+		in := Input{PerTab: 6, Tabs: c.tabs, Agents: six}
 		plan := Make(in)
 		if groups(plan) != c.groups || moves(plan) != c.moves {
 			t.Errorf("%s: groups %s, moves %s; want %s, %s", c.name, groups(plan), moves(plan), c.groups, c.moves)
@@ -268,6 +333,12 @@ func TestPlanProjectsApart(t *testing.T) {
 // moves nothing (a randomized check by the fresh review of nhm-yr6).
 func TestPlanRandomWorkspaces(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
+	kinds := map[string]int{} // how often each kind of move came up
+	defer func() {
+		if kinds["swap"] == 0 || kinds["join"] == 0 || kinds["new tab"] == 0 {
+			t.Errorf("the random workspaces gave %v: each kind of move must come up", kinds)
+		}
+	}()
 	for iter := range 2000 {
 		n, perTab := 1+rng.Intn(14), 1+rng.Intn(9)
 		laidOut := []int{perTab, 6, 4, 3, 2, 9}[rng.Intn(6)]
@@ -297,6 +368,16 @@ func TestPlanRandomWorkspaces(t *testing.T) {
 		in := Input{PerTab: perTab, Tabs: tabs, Agents: agents}
 		t.Run(fmt.Sprint(iter), func(t *testing.T) {
 			plan := Make(in)
+			for _, m := range plan.Moves {
+				switch {
+				case m.Swap:
+					kinds["swap"]++
+				case m.NewTab:
+					kinds["new tab"]++
+				default:
+					kinds["join"]++
+				}
+			}
 			out := apply(t, in, plan)
 			if again := Make(out); len(again.Moves) != 0 {
 				t.Fatalf("per-tab %d, laid out for %d: groups %s, moves %s; a second plan moves %s", perTab, laidOut,
