@@ -15,6 +15,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/snapshot"
+	"github.com/arosl/nhm/internal/core/watcher"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -557,15 +559,17 @@ func TestWatchBead(t *testing.T) {
 	}
 }
 
-// --pattern --command scans the project each round. When a file that
-// matches changes, the command goes to the agents through core send:
-// the bound ones, in any state; an unbound agent is a failure of its own.
+// --pattern --command scans the project each round when fsnotify cannot
+// start, and says so once on stderr. When a file that matches changes,
+// the command goes to the agents through core send: the bound ones, in
+// any state; an unbound agent is a failure of its own.
 func TestWatchFilesSendsCommand(t *testing.T) {
 	project := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(project, "internal", "cli"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	f := watchServer(t, project)
+	pollWatch(t)
 	var sent []send.Request
 	old := watchSend
 	t.Cleanup(func() { watchSend = old })
@@ -617,8 +621,8 @@ func TestWatchFilesSendsCommand(t *testing.T) {
 		"Triggering command on 3 pane(s)...\n" +
 		"Failed to send to pane w1:p3: no binding: nhm send reaches bound agents only\n" +
 		"Failed to send to pane w1:p2: agent is blocked\n"
-	if code != 0 || out != want {
-		t.Fatalf("watch --pattern = %d %s\n%q\nwant\n%q", code, errOut, out, want)
+	if code != 0 || out != want || errOut != pollNote {
+		t.Fatalf("watch --pattern = %d %q\n%q\nwant\n%q", code, errOut, out, want)
 	}
 	if len(sent) != 1 || sent[0].Message != "go test ./..." || !sent[0].WhenAny || sent[0].WorkspaceID != "w1" ||
 		sent[0].ProjectRoot != project || len(sent[0].Selector.Bindings) != 2 {
@@ -648,6 +652,212 @@ func TestWatchFilesSendsCommand(t *testing.T) {
 		"dispatch  make 11"})
 	if code != 0 || fmt.Sprint(events) != want || len(sent) != 1 || len(sent[0].Selector.Bindings) != 1 {
 		t.Fatalf("watch --pattern --json = %d\n%s\nwant %s\nsends %+v", code, strings.Join(events, "\n"), want, sent)
+	}
+}
+
+// pollNote is what watch says when fsnotify cannot start in pollWatch.
+const pollNote = "nhm watch: fsnotify cannot start (too many open files); polling the project instead\n"
+
+// pollWatch makes the file watch poll: fsnotify cannot start.
+func pollWatch(t *testing.T) {
+	t.Helper()
+	old := watchNotify
+	watchNotify = func(watcher.Handler, watcher.ErrorHandler, func(string) bool) (watchNotifier, error) {
+		return nil, errors.New("too many open files")
+	}
+	t.Cleanup(func() { watchNotify = old })
+}
+
+// readyNotifier closes ready once the watch of the root is in place.
+type readyNotifier struct {
+	watchNotifier
+	ready chan struct{}
+}
+
+func (n readyNotifier) Add(path string) error {
+	err := n.watchNotifier.Add(path)
+	close(n.ready)
+	return err
+}
+
+// The file watch on fsnotify, as ntm's: a burst of writes to a matching
+// file sends --command once, after the 250ms debounce; a file that does
+// not match and the files under ignored folders, old or new, send
+// nothing; --count counts the bursts (nhm-98l).
+func TestWatchFilesNotify(t *testing.T) {
+	project := t.TempDir()
+	for _, d := range []string{"internal/cli", "vendor"} {
+		if err := os.MkdirAll(filepath.Join(project, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := watchServer(t, project)
+	var mu sync.Mutex
+	var sent []time.Time
+	old := watchSend
+	t.Cleanup(func() { watchSend = old })
+	watchSend = func(_ context.Context, _ *instanceEnv, req send.Request) (send.Result, error) {
+		mu.Lock()
+		sent = append(sent, time.Now())
+		mu.Unlock()
+		var res send.Result
+		for i, id := range req.Selector.Bindings {
+			res.Targets = append(res.Targets, send.Receipt{BindingID: id, PaneID: fmt.Sprintf("w1:p%d", i+1), Status: send.StatusSubmitted})
+		}
+		return res, nil
+	}
+	sends := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(sent)
+	}
+	ready := make(chan struct{})
+	oldNotify := watchNotify
+	t.Cleanup(func() { watchNotify = oldNotify })
+	watchNotify = func(h watcher.Handler, e watcher.ErrorHandler, m func(string) bool) (watchNotifier, error) {
+		n, err := oldNotify(h, e, m)
+		if err != nil {
+			return nil, err
+		}
+		return readyNotifier{n, ready}, nil
+	}
+	type result struct {
+		code        int
+		out, errOut string
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, out, errOut := run("watch", "swarm", "--pattern", "*.go", "--command", "go test ./...", "--count", "2", "--socket", f.s.SocketPath)
+		done <- result{code, out, errOut}
+	}()
+	select {
+	case <-ready:
+	case r := <-done:
+		t.Fatalf("watch ended before its watch was in place: %+v", r)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the watch did not start")
+	}
+	write := func(name, text string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(project, name)), 0o755); err != nil {
+			t.Error(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, name), []byte(text), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	write("notes.txt", "n")
+	write("vendor/x.go", "x")
+	write("node_modules/y.go", "y")
+	time.Sleep(3 * watcher.DefaultDebounceDuration)
+	if n := sends(); n != 0 {
+		t.Fatalf("%d sends for files that do not match or are ignored", n)
+	}
+	var burst time.Time
+	waitSends := func(want int) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); sends() < want; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d sends, want %d", sends(), want)
+			}
+		}
+	}
+	for i := range 3 {
+		write("internal/cli/watch.go", strings.Repeat("x", i+1))
+		burst = time.Now()
+	}
+	waitSends(1)
+	mu.Lock()
+	if wait := sent[0].Sub(burst); wait < watcher.DefaultDebounceDuration {
+		t.Errorf("the send came %v after the burst, before the 250ms debounce", wait)
+	}
+	mu.Unlock()
+	write("internal/cli/watch.go", "again")
+	waitSends(2)
+	var r result
+	select {
+	case r = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("watch --count 2 did not stop")
+	}
+	changed := fmt.Sprintf("File changed: %s\nTriggering command on 3 pane(s)...\n", filepath.Join(project, "internal", "cli", "watch.go")) +
+		"Failed to send to pane w1:p3: no binding: nhm send reaches bound agents only\n"
+	want := fmt.Sprintf("\nWatching files matching '*.go' in %s...\nWill run command: go test ./...\nPress Ctrl+C to stop\n", project) +
+		changed + changed
+	if r.code != 0 || r.out != want || r.errOut != "" || sends() != 2 {
+		t.Fatalf("watch --pattern on fsnotify = %d %q (%d sends)\n%q\nwant\n%q", r.code, r.errOut, sends(), r.out, want)
+	}
+}
+
+// fakeNotifier is a watcher whose Add fails with add, or with late
+// succeeds and then reports two errors: one that watch goes on after,
+// and that inotify had no watch left for a new folder.
+type fakeNotifier struct {
+	add    error
+	late   bool
+	onErr  watcher.ErrorHandler
+	closed int
+}
+
+func (n *fakeNotifier) Add(string) error {
+	if n.late {
+		n.onErr(errors.New("fsnotify: queue or buffer overflow"))
+		n.onErr(fmt.Errorf("watching new directory x: watching x: %w", watcher.ErrNoWatches))
+	}
+	return n.add
+}
+
+func (n *fakeNotifier) Close() error {
+	n.closed++
+	return nil
+}
+
+// When inotify has no watch left, at the start or for a new folder,
+// watch releases the watcher's watches, says so once on stderr, and
+// polls the project; another error of the start ends the watch, as ntm's
+// (nhm-98l).
+func TestWatchFilesFallsBackWhenWatchesRunOut(t *testing.T) {
+	project := t.TempDir()
+	f := watchServer(t, project)
+	var sent int
+	old := watchSend
+	t.Cleanup(func() { watchSend = old })
+	watchSend = func(context.Context, *instanceEnv, send.Request) (send.Result, error) {
+		sent++
+		return send.Result{}, nil
+	}
+	oldNotify := watchNotify
+	t.Cleanup(func() { watchNotify = oldNotify })
+	for _, c := range []struct {
+		name string
+		n    *fakeNotifier
+	}{
+		{"at the start", &fakeNotifier{add: fmt.Errorf("watching %s: %w", project, watcher.ErrNoWatches)}},
+		{"for a new folder", &fakeNotifier{late: true}},
+	} {
+		sent = 0
+		watchNotify = func(_ watcher.Handler, onErr watcher.ErrorHandler, _ func(string) bool) (watchNotifier, error) {
+			c.n.onErr = onErr
+			return c.n, nil
+		}
+		fastWatch(t, func(round int) {
+			if round == 1 {
+				if err := os.WriteFile(filepath.Join(project, c.name+".go"), []byte("x"), 0o600); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+		code, out, errOut := run("watch", "swarm", "--pattern", "*.go", "--command", "make", "--count", "2", "--socket", f.s.SocketPath)
+		if code != 0 || errOut != watchNoWatches+"\n" || c.n.closed == 0 || sent != 1 ||
+			!strings.Contains(out, "File changed: "+filepath.Join(project, c.name+".go")) {
+			t.Errorf("%s: watch = %d %q, closed %d, %d sends\n%s", c.name, code, errOut, c.n.closed, sent, out)
+		}
+	}
+	watchNotify = func(watcher.Handler, watcher.ErrorHandler, func(string) bool) (watchNotifier, error) {
+		return &fakeNotifier{add: os.ErrNotExist}, nil
+	}
+	code, _, errOut := run("watch", "swarm", "--pattern", "*.go", "--command", "make", "--socket", f.s.SocketPath)
+	if code != 1 || !strings.Contains(errOut, "failed to watch directory: file does not exist") {
+		t.Errorf("a start that fails otherwise = %d %q", code, errOut)
 	}
 }
 

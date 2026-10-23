@@ -12,11 +12,16 @@
 // computeDiff, and its first read prints its last --tail lines; --pane
 // takes a name, herdr name, slot or pane id and refuses a tmux index;
 // without a session, the calling pane's workspace; the project is the one
-// the session's bound agents share; a paced polling scan of the project,
-// whose matching change waits for a scan without one, in place of ntm's
-// fsnotify watcher and its debounce; --command goes through core send to
-// the bound agents, the calling pane left out; extractBeadMentions takes
-// lines; nhm's extras: agents named after the session, and --count.
+// the session's bound agents share; ntm's fsnotify watcher (nhm's
+// internal/core/watcher), whose debounce only a matching change holds
+// back, and the bursts that come during a send go as one; when fsnotify
+// cannot start or inotify has no watch left, a paced polling scan of the
+// project, whose matching change waits for a scan without one, said once
+// on stderr (ntm polls on its watcher's ticker only when fsnotify cannot
+// start, and leaves the folders past the limit unwatched); --command goes
+// through core send to the bound agents, the calling pane left out;
+// extractBeadMentions takes lines; nhm's extras: agents named after the
+// session, and --count.
 
 package cli
 
@@ -40,6 +45,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/snapshot"
+	"github.com/arosl/nhm/internal/core/watcher"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store/history"
 )
@@ -73,18 +79,22 @@ name, herdr name, slot N.M or pane id) and wins over the kinds. With
 (br show, in the session's project) when it changes: every 30s, or every
 --interval when you give one.
 
---pattern GLOB --command TEXT watches the session's project instead.
-When a file that matches GLOB changes, watch waits until a scan sees no
-change to such a file, then sends TEXT to the agents once, as nhm send
-does. A GLOB with a slash matches the path from the project's root; one
-without matches the file's name. A scan waits --interval, or five times
-the last scan's time when that is longer, so a big tree is scanned less
-often.
+--pattern GLOB --command TEXT watches the session's project instead,
+with fsnotify, as ntm does. When a file that matches GLOB changes, watch
+waits until such files have had no change for 250ms, then sends TEXT to
+the agents once, as nhm send does. A GLOB with a slash matches the path
+from the project's root; one without matches the file's name. When
+fsnotify cannot start or inotify has no watch left
+(fs.inotify.max_user_watches: one watch per folder), watch says so once
+on stderr and polls the project: it waits until a scan sees no change to
+a matching file, and a scan waits --interval, or five times the last
+scan's time when that is longer, so a big tree is scanned less often.
 
 --json prints one JSON object per event: watch_started, pane_output,
 bead_mention, bead_status, file_change, dispatch and dispatch_error.
 nhm's extras: agents named after the session, and --count N, which
-stops after N rounds.
+stops after N rounds (with --pattern: N bursts of changes, or N scans
+when watch polls).
 `
 
 // watchStreamLines and watchBeadLines are the lines a read takes after
@@ -209,7 +219,7 @@ func runWatch(args []string, stdout, stderr io.Writer) int {
 			return output(stdout, stderr, *asJSON, env, ierr, exitError, nil)
 		}
 		defer ie.db.Close()
-		runErr = watchFiles(ctx, t, o, out, root, func(ctx context.Context, targets []snapshot.Agent) (send.Result, error) {
+		runErr = watchFiles(ctx, t, o, out, stderr, root, func(ctx context.Context, targets []snapshot.Agent) (send.Result, error) {
 			req := watchRequest(ie, t, root, targets, o.command)
 			if len(req.Selector.Bindings) == 0 {
 				// No bound target: an empty selector would select every
@@ -601,23 +611,105 @@ func timedScan(root string) (map[string]fileMeta, time.Duration) {
 	return tree, time.Since(start)
 }
 
-// watchFiles is ntm's runFileWatch: a paced scan of the project. ntm's
-// watcher debounces: a change waits until the changes stop, then the
-// handler sees them all. Here the first path that matches --pattern
-// waits until a scan sees no change to a matching path, then --command
-// goes to the agents once. Other paths do not hold it back: with scans
-// seconds apart on a big tree, unrelated writes (a log, a database)
-// would hold it back for good.
-func watchFiles(ctx context.Context, t *watchAgents, o watchOptions, out watchOut, root string,
+// watchNotifier is what the file watch uses of ntm's watcher.
+type watchNotifier interface {
+	Add(path string) error
+	Close() error
+}
+
+// watchNotify starts ntm's fsnotify watcher for the file watch:
+// recursive, without ntm's ignored names, and with a debounce that only
+// the paths that match hold back. Tests replace it.
+var watchNotify = func(handler watcher.Handler, onErr watcher.ErrorHandler, match func(string) bool) (watchNotifier, error) {
+	w, err := watcher.New(handler, watcher.WithRecursive(true), watcher.WithIgnorePaths(watchIgnored),
+		watcher.WithMatch(match), watcher.WithErrorHandler(onErr))
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// watchNoWatches is the note of a file watch that polls because inotify
+// has no watch left: it takes one per folder.
+const watchNoWatches = "nhm watch: inotify has no watch left (fs.inotify.max_user_watches); polling the project instead"
+
+// watchFiles is ntm's runFileWatch: ntm's fsnotify watcher on the
+// project. When paths that match --pattern have had no change for the
+// debounce's 250ms, the first of them goes to watchDispatch, and
+// --command to the agents once; the bursts that come during a send go as
+// one, after it. When fsnotify cannot start, or inotify has no watch
+// left at the start or for a new folder, the watcher's watches are
+// released and the project is polled instead, said once on stderr.
+func watchFiles(ctx context.Context, t *watchAgents, o watchOptions, out watchOut, stderr io.Writer, root string,
 	dispatch func(context.Context, []snapshot.Agent) (send.Result, error)) error {
 	if out.json {
 		out.frame(watchJSONFrame{Event: "watch_started", Path: root, Text: o.pattern})
 	} else {
 		fmt.Fprintf(out.w, "\nWatching files matching '%s' in %s...\nWill run command: %s\nPress Ctrl+C to stop\n", o.pattern, root, o.command)
 	}
-	seen, took := timedScan(root)
-	pending := ""
+	changed := make(chan string, 1)
+	full := make(chan struct{}, 1)
+	n, err := watchNotify(func(events []watcher.Event) {
+		select {
+		case changed <- events[0].Path:
+		default:
+			// A burst waits already; this one goes with it.
+		}
+	}, func(err error) {
+		if errors.Is(err, watcher.ErrNoWatches) {
+			select {
+			case full <- struct{}{}:
+			default:
+			}
+		}
+	}, func(path string) bool { return watchEventMatchesPattern(o.pattern, root, path) })
+	if err != nil {
+		fmt.Fprintf(stderr, "nhm watch: fsnotify cannot start (%v); polling the project instead\n", err)
+		return pollFiles(ctx, t, o, out, root, 1, "", dispatch)
+	}
+	defer n.Close()
+	if err := n.Add(root); err != nil {
+		if !errors.Is(err, watcher.ErrNoWatches) {
+			return fmt.Errorf("failed to watch directory: %w", err)
+		}
+		_ = n.Close()
+		fmt.Fprintln(stderr, watchNoWatches)
+		return pollFiles(ctx, t, o, out, root, 1, "", dispatch)
+	}
 	for round := 1; ; round++ {
+		select {
+		case <-ctx.Done():
+			return nil
+		case path := <-changed:
+			watchDispatch(ctx, t, o, out, path, dispatch)
+		case <-full:
+			// Close waits for a burst that is being handed on.
+			_ = n.Close()
+			fmt.Fprintln(stderr, watchNoWatches)
+			pending := ""
+			select {
+			case pending = <-changed:
+			default:
+			}
+			return pollFiles(ctx, t, o, out, root, round, pending, dispatch)
+		}
+		if o.done(round) {
+			return nil
+		}
+	}
+}
+
+// pollFiles is the file watch's fallback: a paced scan of the project.
+// The first path that matches --pattern waits until a scan sees no
+// change to a matching path, then --command goes to the agents once.
+// Other paths do not hold it back: with scans seconds apart on a big
+// tree, unrelated writes (a log, a database) would hold it back for good.
+// The rounds go on from first, and pending is a matching path that
+// fsnotify handed on and that is not sent yet.
+func pollFiles(ctx context.Context, t *watchAgents, o watchOptions, out watchOut, root string, first int, pending string,
+	dispatch func(context.Context, []snapshot.Agent) (send.Result, error)) error {
+	seen, took := timedScan(root)
+	for round := first; ; round++ {
 		if !watchNext(ctx, scanPause(o.interval, took)) {
 			return nil
 		}
