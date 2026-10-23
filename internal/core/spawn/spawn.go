@@ -40,6 +40,10 @@ const (
 	shellPoll  = 200 * time.Millisecond
 )
 
+// dialogPoll is how often spawn reads herdr's state after it answered the
+// folder-trust dialog (leftDialog).
+const dialogPoll = 100 * time.Millisecond
+
 // Herdr is what spawn needs from herdr; *herdr.Client has it.
 type Herdr interface {
 	Snapshot(ctx context.Context) (herdr.SessionSnapshot, error)
@@ -516,6 +520,31 @@ func waitShell(ctx context.Context, env Env, pane string) bool {
 	return false
 }
 
+// leftDialog waits until herdr's state of the pane moves on from blocked,
+// the answer that showed the folder-trust dialog: a later
+// state_change_seq, or a state other than blocked. herdr keeps the
+// dialog's blocked for a moment after the keys (about 0.3 s, nhm-913), and
+// agent.wait has no baseline, so a wait at once returns that blocked. It
+// reads agent.get every dialogPoll, for at most timeout; false: the state
+// did not move.
+func leftDialog(ctx context.Context, env Env, pane string, blocked herdr.AgentInfo, timeout time.Duration) (bool, error) {
+	for i := int64(0); i <= int64(timeout/dialogPoll); i++ {
+		a, err := env.Herdr.AgentGet(ctx, pane)
+		if err != nil {
+			return false, err
+		}
+		if a.AgentStatus != herdr.StatusBlocked ||
+			a.StateChangeSeq != nil && blocked.StateChangeSeq != nil && *a.StateChangeSeq > *blocked.StateChangeSeq {
+			return true, nil
+		}
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		env.sleep(ctx, dialogPoll)
+	}
+	return false, nil
+}
+
 // IdentityPreamble opens the kickoff that spawn and recycle send: the
 // agent's Agent Mail identity, which nhm registered, and its herdr name.
 // The prompt that follows may be ACFS's palette text, which says only
@@ -587,6 +616,11 @@ func startAgent(ctx context.Context, env Env, req Request, t *Target, a kinds.Ad
 		}
 		if err := env.Herdr.AgentSendKeys(ctx, t.PaneID, keys...); err != nil {
 			return err
+		}
+		if moved, err := leftDialog(ctx, env, t.PaneID, info, req.ReadyTimeout); err != nil {
+			return err
+		} else if !moved {
+			return fmt.Errorf("the agent still waits at a dialog after nhm answered the folder-trust question: answer it in pane %s", t.PaneID)
 		}
 		if info, err = ready(); err != nil {
 			return err

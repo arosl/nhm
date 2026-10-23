@@ -43,6 +43,13 @@ type fakeHerdr struct {
 	starts   int
 	// blocked makes the first agent.wait answer blocked.
 	blocked bool
+	// After the keys, stale reads (agent.get, agent.wait) still answer the
+	// dialog's blocked, as herdr does for a moment (nhm-913); again makes
+	// every read after them answer blocked with a later state_change_seq:
+	// another dialog.
+	stale int
+	again bool
+	keyed bool
 	// screen is what the pane shows; scrollback the lines above it, which
 	// a recent read gives too.
 	screen     string
@@ -240,8 +247,9 @@ func (f *fakeHerdr) AgentWait(_ context.Context, p herdr.AgentWaitParams) (herdr
 	if f.blocked {
 		f.blocked = false
 		a.AgentStatus = herdr.StatusBlocked
+		return a, nil
 	}
-	return a, nil
+	return f.afterKeys(a), nil
 }
 
 func (f *fakeHerdr) AgentGet(_ context.Context, target string) (herdr.AgentInfo, error) {
@@ -251,7 +259,24 @@ func (f *fakeHerdr) AgentGet(_ context.Context, target string) (herdr.AgentInfo,
 	if !ok {
 		return herdr.AgentInfo{}, &herdr.Error{Code: herdr.CodeAgentNotFound}
 	}
-	return a, nil
+	return f.afterKeys(a), nil
+}
+
+// afterKeys is a read's answer once the keys are sent (stale, again).
+func (f *fakeHerdr) afterKeys(a herdr.AgentInfo) herdr.AgentInfo {
+	switch {
+	case !f.keyed:
+	case f.again:
+		seq := uint64(1)
+		if a.StateChangeSeq != nil {
+			seq = *a.StateChangeSeq + 1
+		}
+		a.AgentStatus, a.StateChangeSeq = herdr.StatusBlocked, &seq
+	case f.stale > 0:
+		f.stale--
+		a.AgentStatus = herdr.StatusBlocked
+	}
+	return a
 }
 
 func (f *fakeHerdr) AgentRead(_ context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error) {
@@ -265,6 +290,7 @@ func (f *fakeHerdr) AgentSendKeys(_ context.Context, _ string, keys ...string) e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.keys = append(f.keys, keys...)
+	f.keyed = true
 	return nil
 }
 
@@ -714,6 +740,37 @@ func TestTrustFolderShortPane(t *testing.T) {
 	res, err := Spawn(context.Background(), w.env, r)
 	if err != nil || res.Targets[0].Status != StatusReady || strings.Join(w.h.keys, " ") != "down enter" {
 		t.Fatalf("short pane = %+v %v keys %v", res.Targets[0], err, w.h.keys)
+	}
+}
+
+// After the keys, herdr answers the dialog's blocked for a moment
+// (nhm-913): the agent is ready once herdr's state moves on. A blocked
+// with a later state_change_seq is another dialog; a blocked that never
+// moves is the dialog the keys did not answer.
+func TestTrustFolderAfterTheKeys(t *testing.T) {
+	trust := func(setup func(w *world), timeout time.Duration) Target {
+		w := newWorld(t)
+		w.h.blocked = true
+		w.h.screen = "Is this a project you created or one you trust?\n ❯ Yes, I trust this folder\n   No, exit\n"
+		setup(w)
+		r := req(Want{Kind: "claude", Count: 1})
+		r.NoKickoff, r.TrustFolder, r.ReadyTimeout = true, true, timeout
+		res, err := Spawn(context.Background(), w.env, r)
+		if err != nil || strings.Join(w.h.keys, " ") != "enter" {
+			t.Fatalf("spawn = %v keys %v", err, w.h.keys)
+		}
+		return res.Targets[0]
+	}
+	if got := trust(func(w *world) { w.h.stale = 3 }, time.Minute); got.Status != StatusReady {
+		t.Fatalf("stale blocked = %+v", got)
+	}
+	if got := trust(func(w *world) { w.h.again = true }, time.Minute); got.Status != StatusUnresolved ||
+		!strings.Contains(got.Error, "waits at another dialog") {
+		t.Fatalf("another dialog = %+v", got)
+	}
+	if got := trust(func(w *world) { w.h.stale = 1 << 20 }, time.Second); got.Status != StatusUnresolved ||
+		!strings.Contains(got.Error, "still waits at a dialog after nhm answered the folder-trust question") {
+		t.Fatalf("not answered = %+v", got)
 	}
 }
 
