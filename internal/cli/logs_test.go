@@ -191,34 +191,45 @@ func TestLogsNameRunsRead(t *testing.T) {
 }
 
 // -f prints only the lines that come after the first read, each with its
-// prefix and time, or as one JSON object per line.
+// prefix and time, or as one JSON object per line. The pane's last 10
+// lines are the agent's live region: a spinner redrawn in place never
+// prints, and nothing prints twice. Blank lines are left out, as ntm's.
 func TestLogsFollowPrintsNewLines(t *testing.T) {
 	var mu sync.Mutex
 	reads := map[string]int{}
+	scroll := []string{"line 1", "", "line 3", "line 4"}
 	s, bs, _ := logsServer(t, func(pane string) string {
 		mu.Lock()
 		defer mu.Unlock()
 		reads[pane]++
+		r := reads[pane]
 		if pane != "w1:p1" {
 			return "same\n"
 		}
-		return numbered(reads[pane])
+		// The scrollback grows by a line each read; the live region
+		// below it is the same box with a spinner that changes.
+		text := strings.Join(scroll[:min(r, len(scroll))], "\n") + "\n"
+		text += strings.Repeat("│ box │\n", logsLiveLines-1)
+		return text + fmt.Sprintf("✻ Working… (%ds)\n", r)
 	})
 	interval, rounds := logsFollowInterval, logsFollowRounds
-	logsFollowInterval, logsFollowRounds = 0, 2
+	logsFollowInterval, logsFollowRounds = 0, 3
 	t.Cleanup(func() { logsFollowInterval, logsFollowRounds = interval, rounds })
 	code, out, _ := run("logs", "swarm", "-f", "--socket", s.SocketPath)
 	slot := regexp.QuoteMeta(bs[0].Slot)
 	want := regexp.MustCompile(`^Following logs from session: swarm\nPress Ctrl\+C to stop\n\n` +
-		`\[cc:` + slot + `\] \d\d:\d\d:\d\d line 2\n\[cc:` + slot + `\] \d\d:\d\d:\d\d line 3\n$`)
+		`\[cc:` + slot + `\] \d\d:\d\d:\d\d line 3\n\[cc:` + slot + `\] \d\d:\d\d:\d\d line 4\n$`)
 	if code != 0 || !want.MatchString(out) {
 		t.Fatalf("logs -f = %d %q", code, out)
 	}
-	code, out, _ = run("logs", "swarm", "--follow", "--filter", "5", "--json", "--socket", s.SocketPath)
+	mu.Lock()
+	reads = map[string]int{}
+	mu.Unlock()
+	code, out, _ = run("logs", "swarm", "--follow", "--filter", "4", "--json", "--socket", s.SocketPath)
 	var line FollowedLine
 	err := json.Unmarshal([]byte(out), &line)
 	if _, terr := time.Parse(time.RFC3339, line.Timestamp); code != 0 || err != nil || terr != nil || line.Pane != bs[0].Slot ||
-		line.AgentType != "claude" || line.Line != "line 5" {
+		line.AgentType != "claude" || line.Line != "line 4" {
 		t.Fatalf("logs -f --json = %d %q %v", code, out, err)
 	}
 }

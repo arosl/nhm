@@ -321,9 +321,17 @@ func printLogs(w io.Writer, res LogsResult) {
 	fmt.Fprintln(w, total)
 }
 
+// logsLiveLines is the bottom of a pane that a working agent redraws in
+// place: its prompt box, status line and spinner. logs -f prints a line
+// once it has scrolled above them, so a redrawn line never prints again
+// and the spinner never prints (ScarletOrchid's review, nhm-k9d).
+const logsLiveLines = 10
+
 // followLogs is ntm's logs -f: a first read sets the baseline, then each
 // interval prints the lines that are new since the last read (the
-// filter's only), each with its pane and time, or as one JSON object.
+// filter's only, and none that is blank, as ntm), each with its pane and
+// time, or as one JSON object. A line is new once it has left the live
+// region at the bottom of the pane (logsLiveLines).
 func followLogs(ctx context.Context, h *herdr.Client, session string, agents []snapshot.Agent, filterRe *regexp.Regexp, asJSON bool, stdout io.Writer) int {
 	if !asJSON {
 		fmt.Fprintf(stdout, "Following logs from session: %s\nPress Ctrl+C to stop\n\n", session)
@@ -336,7 +344,8 @@ func followLogs(ctx context.Context, h *herdr.Client, session string, agents []s
 			// A failed read is skipped, as ntm skips a failed poll.
 			return nil, false
 		}
-		return strings.Split(strings.TrimRight(stripControl(r.Text), "\n"), "\n"), true
+		lines := strings.Split(strings.TrimRight(stripControl(r.Text), "\n"), "\n")
+		return lines[:max(0, len(lines)-logsLiveLines)], true
 	}
 	for _, a := range agents {
 		if cur, ok := read(a); ok {
@@ -360,7 +369,7 @@ func followLogs(ctx context.Context, h *herdr.Client, session string, agents []s
 				continue
 			}
 			for _, l := range newLines(last[a.PaneID], cur) {
-				if filterRe != nil && !filterRe.MatchString(l) {
+				if strings.TrimSpace(l) == "" || (filterRe != nil && !filterRe.MatchString(l)) {
 					continue
 				}
 				pane, typ := logsPane(a), snapshot.NTMType(a.Kind)
