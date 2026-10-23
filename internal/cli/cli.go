@@ -42,6 +42,10 @@ Usage:
                          focus a session's workspace (without one: nhm list)
   nhm zoom <session> <slot|pane-id|name|kind> [--json]
                          focus a session's workspace and zoom one pane
+  nhm view [session] [--json]   (also tile, v)
+                         take the zoom off in every tab of a workspace, then focus it
+  nhm diff [session] <pane1> <pane2> [-u] [--code-only] [--json]
+                         compare two agents' output, as ntm's diff
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm admin takeover | admin handback (--dry-run | --yes)
@@ -168,6 +172,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runAttach(args[1:], stdout, stderr)
 	case "zoom":
 		return runZoom(args[1:], stdout, stderr)
+	case "view", "tile", "v":
+		// ntm's view, with its aliases (the operator's ruling, nhm-k9d,
+		// 2026-10-23).
+		return runView(args[1:], stdout, stderr)
+	case "diff":
+		return runDiff(args[1:], stdout, stderr)
 	case "spawn":
 		return runSpawn(args[1:], stdout, stderr)
 	case "add":
