@@ -12,8 +12,9 @@
 // computeDiff, and its first read prints its last --tail lines; --pane
 // takes a name, herdr name, slot or pane id and refuses a tmux index;
 // without a session, the calling pane's workspace; the project is the one
-// the session's bound agents share; a polling scan of the project in
-// place of ntm's fsnotify watcher; --command goes through core send to
+// the session's bound agents share; a paced polling scan of the project,
+// whose matching change waits for a scan without one, in place of ntm's
+// fsnotify watcher and its debounce; --command goes through core send to
 // the bound agents, the calling pane left out; extractBeadMentions takes
 // lines; nhm's extras: agents named after the session, and --count.
 
@@ -73,9 +74,12 @@ name, herdr name, slot N.M or pane id) and wins over the kinds. With
 --interval when you give one.
 
 --pattern GLOB --command TEXT watches the session's project instead.
-When a file that matches GLOB changes, watch sends TEXT to the agents,
-as nhm send does. A GLOB with a slash matches the path from the
-project's root; one without matches the file's name.
+When a file that matches GLOB changes, watch waits until a scan sees no
+change to such a file, then sends TEXT to the agents once, as nhm send
+does. A GLOB with a slash matches the path from the project's root; one
+without matches the file's name. A scan waits --interval, or five times
+the last scan's time when that is longer, so a big tree is scanned less
+often.
 
 --json prints one JSON object per event: watch_started, pane_output,
 bead_mention, bead_status, file_change, dispatch and dispatch_error.
@@ -578,9 +582,32 @@ func watchRequest(ie *instanceEnv, t *watchAgents, root string, targets []snapsh
 		Scope: map[string]string{"instance_id": ie.inst.ID, "workspace_id": t.ws, "project_root": root}}
 }
 
-// watchFiles is ntm's runFileWatch: each round, a scan of the project;
-// when a path that matches --pattern changed, --command goes to the
-// agents.
+// watchScanFactor paces the file watch: a scan waits at least this many
+// times the last scan's duration, so that a big tree does not keep a
+// core busy (ACFS's 43,000 paths take about 1s a scan; ScarletOrchid's
+// review, nhm-zac).
+const watchScanFactor = 5
+
+// scanPause is the wait before the next scan: --interval, or five times
+// the last scan's duration when that is longer.
+func scanPause(interval, scan time.Duration) time.Duration {
+	return max(interval, watchScanFactor*scan)
+}
+
+// timedScan is scanTree and how long it took.
+func timedScan(root string) (map[string]fileMeta, time.Duration) {
+	start := time.Now()
+	tree := scanTree(root)
+	return tree, time.Since(start)
+}
+
+// watchFiles is ntm's runFileWatch: a paced scan of the project. ntm's
+// watcher debounces: a change waits until the changes stop, then the
+// handler sees them all. Here the first path that matches --pattern
+// waits until a scan sees no change to a matching path, then --command
+// goes to the agents once. Other paths do not hold it back: with scans
+// seconds apart on a big tree, unrelated writes (a log, a database)
+// would hold it back for good.
 func watchFiles(ctx context.Context, t *watchAgents, o watchOptions, out watchOut, root string,
 	dispatch func(context.Context, []snapshot.Agent) (send.Result, error)) error {
 	if out.json {
@@ -588,12 +615,14 @@ func watchFiles(ctx context.Context, t *watchAgents, o watchOptions, out watchOu
 	} else {
 		fmt.Fprintf(out.w, "\nWatching files matching '%s' in %s...\nWill run command: %s\nPress Ctrl+C to stop\n", o.pattern, root, o.command)
 	}
-	seen := scanTree(root)
+	seen, took := timedScan(root)
+	pending := ""
 	for round := 1; ; round++ {
-		if !watchNext(ctx, o.interval) {
+		if !watchNext(ctx, scanPause(o.interval, took)) {
 			return nil
 		}
-		cur := scanTree(root)
+		var cur map[string]fileMeta
+		cur, took = timedScan(root)
 		if cur == nil || seen == nil {
 			// The root could not be read, now or at the last scan: no
 			// change is known.
@@ -603,13 +632,22 @@ func watchFiles(ctx context.Context, t *watchAgents, o watchOptions, out watchOu
 			}
 			continue
 		}
-		changed := changedPaths(seen, cur)
-		seen = cur
-		for _, p := range changed {
+		hit := ""
+		for _, p := range changedPaths(seen, cur) {
 			if watchEventMatchesPattern(o.pattern, root, p) {
-				watchDispatch(ctx, t, o, out, p, dispatch)
+				hit = p
 				break
 			}
+		}
+		seen = cur
+		switch {
+		case hit != "":
+			if pending == "" {
+				pending = hit
+			}
+		case pending != "":
+			watchDispatch(ctx, t, o, out, pending, dispatch)
+			pending = ""
 		}
 		if o.done(round) {
 			return nil

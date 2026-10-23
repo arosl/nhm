@@ -588,6 +588,10 @@ func TestWatchFilesSendsCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A file that does not match; a burst over two scans that does, sent
+	// once after the scan that sees no change to a matching file (ntm's
+	// debounce, nhm-zac review), which a file that does not match does not
+	// hold back; then a file under an ignored folder.
 	fastWatch(t, func(round int) {
 		switch round {
 		case 1:
@@ -595,13 +599,19 @@ func TestWatchFilesSendsCommand(t *testing.T) {
 		case 2:
 			write("internal/cli/watch.go")
 		case 3:
+			if err := os.WriteFile(filepath.Join(project, "internal", "cli", "watch.go"), []byte("longer"), 0o600); err != nil {
+				t.Error(err)
+			}
+		case 4:
+			write("notes2.txt")
+		case 5:
 			if err := os.MkdirAll(filepath.Join(project, "node_modules"), 0o755); err != nil {
-				t.Fatal(err)
+				t.Error(err)
 			}
 			write("node_modules/x.go")
 		}
 	})
-	code, out, errOut := run("watch", "swarm", "--pattern", "*.go", "--command", "go test ./...", "--count", "3", "--socket", f.s.SocketPath)
+	code, out, errOut := run("watch", "swarm", "--pattern", "*.go", "--command", "go test ./...", "--count", "6", "--socket", f.s.SocketPath)
 	want := fmt.Sprintf("\nWatching files matching '*.go' in %s...\nWill run command: go test ./...\nPress Ctrl+C to stop\n", project) +
 		fmt.Sprintf("File changed: %s\n", filepath.Join(project, "internal", "cli", "watch.go")) +
 		"Triggering command on 3 pane(s)...\n" +
@@ -625,7 +635,7 @@ func TestWatchFilesSendsCommand(t *testing.T) {
 			}
 		}
 	})
-	code, out, _ = run("watch", "swarm", "--pattern", "internal/*/*.go", "--command", "make", "--json", "--count", "1", "--socket", f.s.SocketPath)
+	code, out, _ = run("watch", "swarm", "--pattern", "internal/*/*.go", "--command", "make", "--json", "--count", "2", "--socket", f.s.SocketPath)
 	frames := parseFrames(t, out)
 	var events []string
 	for _, fr := range frames {
@@ -676,6 +686,20 @@ func TestScanTree(t *testing.T) {
 	}
 	if scanTree(filepath.Join(root, "gone")) != nil {
 		t.Fatal("a missing root scans as a tree")
+	}
+}
+
+// The file watch waits --interval between scans, or five times the last
+// scan's time when that is longer.
+func TestScanPause(t *testing.T) {
+	for _, c := range []struct{ interval, scan, want time.Duration }{
+		{250 * time.Millisecond, 10 * time.Millisecond, 250 * time.Millisecond},
+		{250 * time.Millisecond, time.Second, 5 * time.Second},
+		{10 * time.Second, time.Second, 10 * time.Second},
+	} {
+		if got := scanPause(c.interval, c.scan); got != c.want {
+			t.Errorf("scanPause(%v, %v) = %v, want %v", c.interval, c.scan, got, c.want)
+		}
 	}
 }
 
