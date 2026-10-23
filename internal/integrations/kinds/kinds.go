@@ -395,10 +395,9 @@ func fromClaude(e Event, bound string, launch bool) Decision {
 }
 
 // The folder-trust dialogs, as ACFS's herdr_agents_trust_keys reads them:
-// the exact question and the selected answer, or nothing. nhm looks for
-// the question on the flat screen, where ACFS looks on one line, because a
-// narrow pane wraps it (nhm-za8); the answers are short and keep their
-// lines.
+// the exact question and the selected answer, or nothing. Both look for
+// the question on the flat screen, because a narrow pane wraps it (nhm-za8;
+// ACFS acfs-nvok); the answers are short and keep their lines.
 var (
 	claudeTrustCursorNo  = regexp.MustCompile(`(?m)❯ *No, exit`)
 	claudeTrustYesLine   = regexp.MustCompile(`(?m)^ *Yes, I trust this folder`)
