@@ -36,9 +36,10 @@ type tabRoom struct {
 // joinable lists the tabs of the workspace that a new agent of the
 // request's project may join, lowest slot N first. A tab is joinable
 // when every agent in it is an active binding of the project, made by a
-// marked spawn (paneEnvKey), it has fewer than PerTab of them, and its
-// label is the project's or its one agent's name. A request with --label
-// or --group, or one agent per tab, joins nothing.
+// marked spawn (paneEnvKey), it has fewer than PerTab of them, its
+// label is the project's or its one agent's name, and its panes lie on
+// the grid of PerTab (onGrid). A request with --label or --group, or one
+// agent per tab, joins nothing.
 func joinable(ctx context.Context, env Env, workspaceID string, req Request, tabN map[string]int,
 	maxPane map[int]int) ([]*tabRoom, error) {
 	if workspaceID == "" || req.PerTab <= 1 || req.Label != "" || req.Group != "" {
@@ -125,7 +126,7 @@ func joinable(ctx context.Context, env Env, workspaceID string, req Request, tab
 				ok = false
 			}
 		}
-		if ok {
+		if ok && onGrid(ctx, env.Herdr, g.binds[0].PaneID, req.PerTab) {
 			rooms = append(rooms, &tabRoom{n: n, tabID: tab, anchor: g.binds[0].PaneID, first: -1,
 				agents: len(g.binds), maxPane: maxPane[n]})
 		}
@@ -207,26 +208,20 @@ func splitTarget(ctx context.Context, h Herdr, anchor string, perTab int) (strin
 // panes are 2 rows of 3, with the slots in reading order. Grown this way,
 // no pane of a partial tab is narrower than a column: 2 panes of 6 are
 // one third and two thirds of the width, and 4 are the first column cut
-// in two beside two full-height columns. A tab laid out otherwise (by an
-// older nhm, or by hand) keeps its panes, and the new one fills the first
-// free cell all the same.
+// in two beside two full-height columns. joinable joins only a tab on
+// the grid (onGrid); should a tab leave it during a spawn, the new pane
+// still fills the first free cell.
 //
 // herdr's panes tile the tab, so their bounds are the tab. pane.layout
 // gives the rects of the split tree in a zoomed tab too, and a closed
 // pane's room goes to its neighbour, so a tab with a closed pane gets
 // its gap filled first. ok is false when no cell is free.
 func gridSplit(panes []herdr.LayoutPane, perTab int) (pane, dir string, ratio float64, ok bool) {
-	x0, y0, x1, y1 := math.MaxInt, math.MaxInt, 0, 0
-	for _, p := range panes {
-		x0, y0 = min(x0, int(p.Rect.X)), min(y0, int(p.Rect.Y))
-		x1, y1 = max(x1, int(p.Rect.X)+int(p.Rect.Width)), max(y1, int(p.Rect.Y)+int(p.Rect.Height))
-	}
-	cols, rows := grid(perTab)
-	cw, ch := float64(x1-x0)/float64(cols), float64(y1-y0)/float64(rows)
+	x0, y0, cw, ch, cols, rows := cells(panes, perTab)
 	first := map[string]int{} // a pane's own cell: its row
 	for r := 0; r < rows; r++ {
 		for c := 0; c < cols; c++ {
-			left, top := float64(x0)+float64(c)*cw, float64(y0)+float64(r)*ch
+			left, top := x0+float64(c)*cw, y0+float64(r)*ch
 			p, found := paneAt(panes, left+cw/2, top+ch/2)
 			if !found {
 				continue
@@ -243,6 +238,50 @@ func gridSplit(panes []herdr.LayoutPane, perTab int) (pane, dir string, ratio fl
 		}
 	}
 	return "", "", 0, false
+}
+
+// cells is the grid of perTab over the panes' tab: its origin, the size
+// of a cell, and the columns and rows.
+func cells(panes []herdr.LayoutPane, perTab int) (x0, y0, cw, ch float64, cols, rows int) {
+	left, top, right, bottom := math.MaxInt, math.MaxInt, 0, 0
+	for _, p := range panes {
+		left, top = min(left, int(p.Rect.X)), min(top, int(p.Rect.Y))
+		right, bottom = max(right, int(p.Rect.X)+int(p.Rect.Width)), max(bottom, int(p.Rect.Y)+int(p.Rect.Height))
+	}
+	cols, rows = grid(perTab)
+	return float64(left), float64(top), float64(right-left) / float64(cols), float64(bottom-top) / float64(rows), cols, rows
+}
+
+// onGrid reports whether the panes of anchor's tab lie on the grid of
+// perTab: each edge within a cell of a grid line, as gridSplit's splits
+// leave them once herdr rounds them, and each pane at least a cell wide
+// and tall. A tab off the grid, laid out by nhm 0.1.8 to 0.1.10, by hand,
+// or for another --per-tab, is not joined: a split there could leave a
+// pane narrower than a column (nhm-cxh). Nor is a tab whose layout
+// cannot be read.
+func onGrid(ctx context.Context, h Herdr, anchor string, perTab int) bool {
+	l, err := h.PaneLayout(ctx, anchor)
+	if err != nil || len(l.Panes) == 0 {
+		return false
+	}
+	x0, y0, cw, ch, _, _ := cells(l.Panes, perTab)
+	// line is the grid line nearest to v, and whether v is within a cell
+	// of it.
+	line := func(v int, origin, size float64) (float64, bool) {
+		k := math.Round((float64(v) - origin) / size)
+		return k, math.Abs(float64(v)-origin-k*size) <= 1
+	}
+	for _, p := range l.Panes {
+		r := p.Rect
+		left, ok1 := line(int(r.X), x0, cw)
+		right, ok2 := line(int(r.X)+int(r.Width), x0, cw)
+		top, ok3 := line(int(r.Y), y0, ch)
+		bottom, ok4 := line(int(r.Y)+int(r.Height), y0, ch)
+		if !ok1 || !ok2 || !ok3 || !ok4 || right <= left || bottom <= top {
+			return false
+		}
+	}
+	return true
 }
 
 // paneAt is the pane whose rect holds the point (x, y).

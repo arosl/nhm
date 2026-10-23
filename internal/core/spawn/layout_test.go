@@ -89,8 +89,8 @@ func TestSeventhAgentOpensATab(t *testing.T) {
 
 // A tab is not joined when it is from before nhm-4c4 (its spawn's request
 // has no paneEnvKey), when it holds an unbound agent, when the user
-// relabelled it, or when the request has --label or --group or a tab per
-// agent.
+// relabelled it, when its panes are off the grid, or when the request has
+// --label or --group or a tab per agent.
 func TestTabsThatAreNotJoined(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -112,6 +112,13 @@ func TestTabsThatAreNotJoined(t *testing.T) {
 			w.h.agents[p.PaneID] = herdr.AgentInfo{PaneID: p.PaneID, Agent: "codex"}
 		}, nil},
 		{"user label", func(_ *testing.T, w *world, first Result) { w.h.tabLabel[first.Targets[0].TabID] = "mine" }, nil},
+		// A shell pane split off by hand, in half: the tab is off the
+		// grid of 6 (nhm-cxh).
+		{"off the grid", func(t *testing.T, w *world, first Result) {
+			if _, err := w.h.PaneSplit(ctx, herdr.PaneSplitParams{Direction: "right", TargetPaneID: first.Targets[0].PaneID}); err != nil {
+				t.Fatal(err)
+			}
+		}, nil},
 		{"group", nil, func(r *Request) { r.Group = "g" }},
 		{"label", nil, func(r *Request) { r.Label = "L" }},
 		{"a tab each", nil, func(r *Request) { r.PerTab = 1 }},
@@ -237,6 +244,8 @@ func TestSplitTarget(t *testing.T) {
 		{"origin not 0", []herdr.LayoutPane{pane("a", 10, 5, 240, 60)}, 6, nil, "a", "right", 1.0 / 3},
 		{"2x2", []herdr.LayoutPane{pane("a", 0, 0, 120, 60), pane("b", 120, 0, 120, 60)}, 4, nil, "a", "down", 0.5},
 		{"one row of 3", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 160, 60)}, 3, nil, "b", "right", 0.5},
+		{"a pane of a lower row that spans columns", []herdr.LayoutPane{pane("a", 0, 0, 80, 30), pane("b", 80, 0, 80, 30),
+			pane("c", 160, 0, 80, 30), pane("d", 0, 30, 240, 30)}, 6, nil, "d", "right", 1.0 / 3},
 		{"3x3: the second row", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 80, 60), pane("c", 160, 0, 80, 60)}, 9,
 			nil, "a", "down", 1.0 / 3},
 		{"3x3: the third row", []herdr.LayoutPane{pane("a", 0, 0, 80, 20), pane("d", 0, 20, 80, 40), pane("b", 80, 0, 80, 20),
@@ -254,6 +263,47 @@ func TestSplitTarget(t *testing.T) {
 		got, dir, ratio := splitTarget(context.Background(), layoutHerdr{l: herdr.PaneLayout{Panes: c.panes}, err: c.err}, "anchor", c.perTab)
 		if got != c.pane || dir != c.dir || math.Abs(ratio-c.ratio) > 1e-9 {
 			t.Errorf("%s: split %s %s %.4f, want %s %s %.4f", c.name, got, dir, ratio, c.pane, c.dir, c.ratio)
+		}
+	}
+}
+
+// A tab is joined only when its panes lie on the grid of the request's
+// --per-tab, so a split never leaves a pane narrower than a column
+// (nhm-cxh).
+func TestOnGrid(t *testing.T) {
+	pane := func(id string, x, y, w, h uint16) herdr.LayoutPane {
+		return herdr.LayoutPane{PaneID: id, Rect: herdr.LayoutRect{X: x, Y: y, Width: w, Height: h}}
+	}
+	for _, c := range []struct {
+		name   string
+		panes  []herdr.LayoutPane
+		perTab int
+		err    error
+		want   bool
+	}{
+		{"one pane", []herdr.LayoutPane{pane("a", 0, 0, 240, 60)}, 6, nil, true},
+		{"a tab of 2", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 160, 60)}, 6, nil, true},
+		{"a tab of 4", []herdr.LayoutPane{pane("a", 0, 0, 80, 30), pane("d", 0, 30, 80, 30), pane("b", 80, 0, 80, 60),
+			pane("c", 160, 0, 80, 60)}, 6, nil, true},
+		{"a closed pane's gap", []herdr.LayoutPane{pane("a", 0, 0, 80, 30), pane("d", 0, 30, 80, 30), pane("e", 80, 0, 80, 60),
+			pane("c", 160, 0, 80, 30), pane("f", 160, 30, 80, 30)}, 6, nil, true},
+		// herdr 0.9.3 in a 383x106 tab, as nhm's splits leave it.
+		{"herdr's rounding", []herdr.LayoutPane{pane("a", 0, 0, 128, 106), pane("b", 128, 0, 127, 106), pane("c", 255, 0, 128, 106)},
+			6, nil, true},
+		{"nhm 0.1.8 to 0.1.10: a tab of 2", []herdr.LayoutPane{pane("a", 0, 0, 76, 52), pane("b", 76, 0, 76, 52)}, 6, nil, false},
+		{"nhm 0.1.8 to 0.1.10: a tab of 3", []herdr.LayoutPane{pane("a", 0, 0, 76, 26), pane("c", 0, 26, 76, 26), pane("b", 76, 0, 76, 52)},
+			6, nil, false},
+		{"another --per-tab", []herdr.LayoutPane{pane("a", 0, 0, 120, 30), pane("b", 120, 0, 120, 30), pane("c", 0, 30, 120, 30),
+			pane("d", 120, 30, 120, 30)}, 6, nil, false},
+		{"the same tab for its own --per-tab", []herdr.LayoutPane{pane("a", 0, 0, 120, 30), pane("b", 120, 0, 120, 30),
+			pane("c", 0, 30, 120, 30), pane("d", 120, 30, 120, 30)}, 4, nil, true},
+		{"a pane narrower than a cell", []herdr.LayoutPane{pane("a", 0, 0, 80, 60), pane("b", 80, 0, 1, 60), pane("c", 81, 0, 159, 60)},
+			6, nil, false},
+		{"no layout", nil, 6, errors.New("down"), false},
+		{"empty layout", nil, 6, nil, false},
+	} {
+		if got := onGrid(context.Background(), layoutHerdr{l: herdr.PaneLayout{Panes: c.panes}, err: c.err}, "anchor", c.perTab); got != c.want {
+			t.Errorf("%s: onGrid = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

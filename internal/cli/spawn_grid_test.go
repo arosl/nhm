@@ -244,6 +244,26 @@ func TestSpawnOfSixMakesA2x3Grid(t *testing.T) {
 	checkGrid(t, st, panes, project)
 }
 
+// --per-tab 4 is a 2x2 grid. A later add with the default 6 does not
+// join that tab of 4, which is off its grid of 2 rows of 3: it opens a
+// tab (nhm-cxh).
+func TestPerTabFourMakesA2x2Grid(t *testing.T) {
+	st, sock, project := gridWorld(t, "GreenPike", "RedStone", "AmberFox", "CoralBay", "MossyFern")
+	panes := spawnSlots(t, "spawn", "swarm", "--cc=4", "--per-tab", "4", "--project", project, "--socket", sock)
+	tab0, _ := st.place(panes["2.1"])
+	for k, want := range []herdr.LayoutRect{{X: 0, Y: 0, Width: 76, Height: 26}, {X: 76, Y: 0, Width: 76, Height: 26},
+		{X: 0, Y: 26, Width: 76, Height: 26}, {X: 76, Y: 26, Width: 76, Height: 26}} {
+		slot := fmt.Sprintf("2.%d", k+1)
+		if tab, got := st.place(panes[slot]); tab != tab0 || got != want {
+			t.Errorf("slot %s in %s at %+v, want %s at %+v", slot, tab, got, tab0, want)
+		}
+	}
+	next := spawnSlots(t, "add", "swarm", "--cc=1", "--project", project, "--socket", sock)
+	if tab, r := st.place(next["3.1"]); tab == "" || tab == tab0 || r.Width != 152 {
+		t.Fatalf("the add = %v, in %s at %+v", next, tab, r)
+	}
+}
+
 // Adds of 2, then 1 at a time, grow the same grid in the same tab. A tab
 // of 2 is a third and two thirds of the width; a tab of 4 has the first
 // column cut in two beside two full-height columns (nhm-cxh).

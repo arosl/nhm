@@ -87,7 +87,10 @@ has the first column cut in two. --per-tab N has the integer square root
 of N rows and as many columns as N needs: 2 and 3 are one row, 4 is 2x2,
 8 is 2 rows of 4, 9 is 3x3. A new pane takes the first cell of the grid
 that no pane holds as its own, so after a retire it fills the gap. When
-every cell is held, the biggest pane is cut in half.
+every cell is held, the biggest pane is cut in half. A tab whose panes
+are off the grid (laid out by nhm 0.1.8 to 0.1.10, by hand, or for
+another --per-tab) is not joined: the agent opens a tab, so no pane gets
+narrower than a column.
 
 Admission runs first: a quota at 90 % or a known limit refuses (--force
 overrides the quota only); unknown quota is a warning (refused with
