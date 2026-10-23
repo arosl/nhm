@@ -16,16 +16,13 @@ func subscribeStub(t *testing.T) (*herdrtest.Server, *Client) {
 	return s, c
 }
 
-// emitWhenSubscribed emits once the stub holds a subscription; a
-// subscriber is registered just after its subscription_started reply.
+// emitWhenSubscribed emits to the test's one stream. Subscribe returns
+// after the subscription_started reply, and the stub registers a
+// subscriber before it writes that reply, so no wait is needed.
 func emitWhenSubscribed(t *testing.T, s *herdrtest.Server, kind string, data any) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for s.Emit(kind, data) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("no subscriber for %s", kind)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if n := s.Emit(kind, data); n != 1 {
+		t.Fatalf("Emit(%s) wrote to %d subscriptions, want 1", kind, n)
 	}
 }
 

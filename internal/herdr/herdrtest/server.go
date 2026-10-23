@@ -8,7 +8,8 @@
 //   - an unknown method or a missing required parameter is
 //     error.code "invalid_request", checked against the pinned schema;
 //   - events.subscribe keeps the connection open, and Emit writes events
-//     to it as lines.
+//     to it as lines. The subscription is open once its reply is written,
+//     so an Emit after the client has read the reply reaches it.
 //
 // Tests register a Handler per method. A method without a handler gets
 // error.code "stub_unhandled", except ping, which answers pong. A handler
@@ -321,15 +322,11 @@ func (s *Server) handle(c net.Conn) {
 			herr = e
 		}
 	}
-	if !s.reply(c, req.ID, result, herr) {
+	if herr == nil && req.Method == "events.subscribe" {
+		keep = s.subscribe(c, req.ID, result)
 		return
 	}
-	if herr == nil && req.Method == "events.subscribe" {
-		s.mu.Lock()
-		s.subs[c] = true
-		s.mu.Unlock()
-		keep = true
-	}
+	s.reply(c, req.ID, result, herr)
 }
 
 func (s *Server) validate(req Request) *Error {
@@ -366,7 +363,38 @@ func (s *Server) checkResult(method string, result any) *Error {
 	return nil
 }
 
-func (s *Server) reply(c net.Conn, id string, result any, e *Error) bool {
+// reply writes one reply line to c.
+func (s *Server) reply(c net.Conn, id string, result any, e *Error) {
+	line, err := replyLine(id, result, e)
+	if err != nil {
+		return
+	}
+	// Hold the lock so a reply and an Emit never interleave on one conn.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.write(c, line)
+}
+
+// subscribe answers events.subscribe and adds c to the subscriptions in
+// one hold of the lock. herdr sends events as soon as it has answered, so
+// an Emit after the client has read the reply must find c, and no event
+// may go out before the reply. It reports whether c is a subscription.
+func (s *Server) subscribe(c net.Conn, id string, result any) bool {
+	line, err := replyLine(id, result, nil)
+	if err != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.write(c, line) != nil {
+		return false
+	}
+	s.subs[c] = true
+	return true
+}
+
+// replyLine is the reply line for id: the result, or the error if e is set.
+func replyLine(id string, result any, e *Error) ([]byte, error) {
 	msg := map[string]any{"id": id}
 	if e != nil {
 		msg["error"] = e
@@ -375,12 +403,14 @@ func (s *Server) reply(c net.Conn, id string, result any, e *Error) bool {
 	}
 	line, err := json.Marshal(msg)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	// Hold the lock so a reply and an Emit never interleave on one conn.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return append(line, '\n'), nil
+}
+
+// write writes one line to c. The caller holds s.mu.
+func (s *Server) write(c net.Conn, line []byte) error {
 	_ = c.SetWriteDeadline(time.Now().Add(writeTimeout))
-	_, err = c.Write(append(line, '\n'))
-	return err == nil
+	_, err := c.Write(line)
+	return err
 }
