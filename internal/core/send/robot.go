@@ -3,6 +3,7 @@ package send
 import (
 	"time"
 
+	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/robot"
 )
@@ -80,17 +81,28 @@ func operation(res Result, p projection) *robot.OperationInfo {
 }
 
 // nhmExtras are nhm's receipt fields under "_nhm": the three separate
-// facts of plan-v8 2.12 per target.
+// facts of plan-v8 2.12 per target, and the enrichment that ntm's
+// receipt does not keep (nhm-p6r): each source's report, with its error
+// or skipped reason, and each target's items.
 func nhmExtras(res Result) map[string]any {
 	type target struct {
-		Target     string      `json:"target"`
-		MailName   string      `json:"mail_name,omitempty"`
-		PaneID     string      `json:"pane_id,omitempty"`
-		Generation int64       `json:"generation,omitempty"`
-		Submission string      `json:"submission"`
-		Gate       Gate        `json:"gate,omitempty"`
-		Completion *Completion `json:"completion_observation"`
-		TaskResult string      `json:"task_result"`
+		Target     string                   `json:"target"`
+		MailName   string                   `json:"mail_name,omitempty"`
+		PaneID     string                   `json:"pane_id,omitempty"`
+		Generation int64                    `json:"generation,omitempty"`
+		Submission string                   `json:"submission"`
+		Gate       Gate                     `json:"gate,omitempty"`
+		Completion *Completion              `json:"completion_observation"`
+		TaskResult string                   `json:"task_result"`
+		Injections []enrich.TargetInjection `json:"injections,omitempty"`
+	}
+	injections := map[int][]enrich.TargetInjection{}
+	for _, ti := range res.Injections {
+		// A source that found nothing is [], as the stored rows are.
+		if ti.Items == nil {
+			ti.Items = []enrich.Item{}
+		}
+		injections[ti.TargetIndex] = append(injections[ti.TargetIndex], ti)
 	}
 	list := []target{}
 	for _, rc := range res.Targets {
@@ -99,9 +111,11 @@ func nhmExtras(res Result) map[string]any {
 			c = &Completion{Observation: ObsNotObserved, Correlation: "none"}
 		}
 		list = append(list, target{Target: rc.Key, MailName: rc.MailName, PaneID: rc.PaneID, Generation: rc.Generation,
-			Submission: rc.Status, Gate: rc.Result.Gate, Completion: c, TaskResult: "unknown"})
+			Submission: rc.Status, Gate: rc.Result.Gate, Completion: c, TaskResult: "unknown",
+			Injections: injections[rc.TargetIndex]})
 	}
-	return map[string]any{"operation_id": res.OperationID, "workspace_id": res.WorkspaceID, "targets": list}
+	return map[string]any{"operation_id": res.OperationID, "workspace_id": res.WorkspaceID, "targets": list,
+		"memory_injection": res.MemoryInjection, "cass_injection": res.CASSInjection}
 }
 
 // SendOutput projects a send onto ntm's --robot-send answer.
