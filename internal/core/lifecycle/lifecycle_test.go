@@ -110,6 +110,15 @@ func (f *fakeHerdr) AgentPrompt(_ context.Context, p herdr.AgentPromptParams) (h
 	return herdr.AgentInfo{}, nil
 }
 
+// AgentRead shows an empty pane: the fake's agents open no dialog.
+func (f *fakeHerdr) AgentRead(_ context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error) {
+	return herdr.PaneRead{PaneID: p.Target}, nil
+}
+
+func (f *fakeHerdr) AgentSendKeys(_ context.Context, target string, keys ...string) error {
+	return fmt.Errorf("the fake herdr sends no keys (%s %v)", target, keys)
+}
+
 func (f *fakeHerdr) AgentRename(_ context.Context, target, name string) (herdr.AgentInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

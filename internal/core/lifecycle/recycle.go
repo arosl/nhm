@@ -246,8 +246,8 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 			herdr.ErrorCode(err) != herdr.CodeAgentPromptStalled {
 			return fail(StageStop, fmt.Errorf("typing %s: %w", a.ExitCommand, err))
 		}
-		if !waitExit(ctx, env, b) {
-			return fail(StageStop, fmt.Errorf("%s did not exit within %s; nothing started, the pane is as it was", b.MailName, stopWait))
+		if err := stopAgent(ctx, env, b, a, &res.Warnings); err != nil {
+			return fail(StageStop, err)
 		}
 	}
 	// Providers write the last turn on exit: the final copy, indexed.
@@ -274,6 +274,9 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	}
 	info, err := env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: b.PaneID,
 		Until: []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusBlocked}, TimeoutMS: &ms})
+	if herdr.ErrorCode(err) == herdr.CodeTimeout && a.Dialog != nil {
+		err = spawn.NamedDialog(ctx, env.Herdr, b.PaneID, a, err)
+	}
 	if err != nil {
 		return fail(StageStart, err)
 	}
@@ -337,21 +340,71 @@ func keepMarks(ctx context.Context, env Env, b bindings.Binding) []string {
 	return warnings
 }
 
-// waitExit waits until the pane's shell holds the foreground again and
-// herdr no longer lists an agent in the pane.
-func waitExit(ctx context.Context, env Env, b bindings.Binding) bool {
+// exitRead is how long the stop waits for the exit before it reads the
+// pane for a dialog, and how long between two reads.
+const exitRead = time.Second
+
+// stopAgent waits until the pane's shell holds the foreground again and
+// herdr no longer lists an agent in the pane. The exit command can open
+// a dialog in place of an exit (kinds.Adapter.ExitDialog): Claude Code's
+// /exit does when the agent has background work (nhm-m7x). While the
+// agent runs, stopAgent reads the pane's last lines every exitRead. It
+// answers a dialog that the kind answers once, with a warning, and fails
+// at once on one that nhm does not answer. The failure names the dialog
+// the pane shows.
+func stopAgent(ctx context.Context, env Env, b bindings.Binding, a kinds.Adapter, warnings *[]string) error {
 	deadline := env.now().Add(stopWait)
+	next := env.now().Add(exitRead)
+	answered := false
 	for env.now().Before(deadline) {
 		_, why := atShell(ctx, env, b.PaneID)
 		if _, aerr := env.Herdr.AgentGet(ctx, b.PaneID); why == "" && noAgent(aerr) {
-			return true
+			return nil
 		}
 		if ctx.Err() != nil {
-			return false
+			break
+		}
+		if !answered && !env.now().Before(next) {
+			next = env.now().Add(exitRead)
+			switch name, answer, keys := exitDialog(ctx, env, b.PaneID, a); {
+			case name == "":
+			case keys == nil:
+				return fmt.Errorf("%s did not exit: %s opened %s, which recycle does not answer; nothing started: answer it in pane %s",
+					b.MailName, a.ExitCommand, name, b.PaneID)
+			default:
+				if err := env.Herdr.AgentSendKeys(ctx, b.PaneID, keys...); err != nil {
+					return fmt.Errorf("%s did not exit: %s opened %s, and its answer %q failed: %w; nothing started: answer it in pane %s",
+						b.MailName, a.ExitCommand, name, answer, err, b.PaneID)
+				}
+				answered = true
+				*warnings = append(*warnings, fmt.Sprintf("%s opened %s; recycle answered %q", a.ExitCommand, name, answer))
+			}
 		}
 		env.sleep(ctx, 250*time.Millisecond)
 	}
-	return false
+	switch name, _, _ := exitDialog(ctx, env, b.PaneID, a); {
+	case name != "" && answered:
+		return fmt.Errorf("%s did not exit within %s: the pane still shows %s after recycle answered it; nothing started: answer it in pane %s",
+			b.MailName, stopWait, name, b.PaneID)
+	case name != "":
+		return fmt.Errorf("%s did not exit within %s: the pane shows %s; nothing started: answer it in pane %s", b.MailName, stopWait, name, b.PaneID)
+	}
+	return fmt.Errorf("%s did not exit within %s; nothing started, the pane is as it was", b.MailName, stopWait)
+}
+
+// exitDialog reads the dialog that the pane's last lines show, as the
+// kind names it (kinds.Adapter.ExitDialog). A kind that names none, or a
+// read that fails, gives "".
+func exitDialog(ctx context.Context, env Env, pane string, a kinds.Adapter) (name, answer string, keys []string) {
+	if a.ExitDialog == nil {
+		return "", "", nil
+	}
+	n := 40
+	screen, err := env.Herdr.AgentRead(ctx, herdr.AgentReadParams{Target: pane, Source: herdr.ReadRecent, Lines: &n})
+	if err != nil {
+		return "", "", nil
+	}
+	return a.ExitDialog(screen.Text)
 }
 
 // noAgent reports herdr's answer that a pane holds no agent: none is

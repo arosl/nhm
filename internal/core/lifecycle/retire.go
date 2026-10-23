@@ -28,6 +28,8 @@ type Herdr interface {
 	AgentStart(ctx context.Context, p herdr.AgentStartParams) (herdr.AgentStarted, error)
 	AgentWait(ctx context.Context, p herdr.AgentWaitParams) (herdr.AgentInfo, error)
 	AgentPrompt(ctx context.Context, p herdr.AgentPromptParams) (herdr.AgentInfo, error)
+	AgentRead(ctx context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error)
+	AgentSendKeys(ctx context.Context, target string, keys ...string) error
 	AgentRename(ctx context.Context, target, name string) (herdr.AgentInfo, error)
 	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
 	PaneGet(ctx context.Context, paneID string) (herdr.PaneInfo, error)

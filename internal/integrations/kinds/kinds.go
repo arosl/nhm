@@ -143,6 +143,12 @@ type Adapter struct {
 	// as blocked, on the pane's last lines, or "" when they show none
 	// (spawn's ready wait that ran out, nhm-5as).
 	Dialog func(screen string) string `json:"-"`
+	// ExitDialog names a dialog that the kind's exit command opens in
+	// place of an exit, on the pane's last lines, with the answer that
+	// lets the agent exit and the keys that choose it. The answer is ""
+	// and the keys nil when nhm does not answer the dialog; the name is
+	// "" when the lines show none (recycle's stop, nhm-m7x).
+	ExitDialog func(screen string) (name, answer string, keys []string) `json:"-"`
 	// Cannot lists what nhm cannot prove for this kind.
 	Cannot []string `json:"cannot,omitempty"`
 	// Builtin is false for a kind from config.
@@ -403,6 +409,7 @@ var (
 	claudeTrustYesLine   = regexp.MustCompile(`(?m)^ *Yes, I trust this folder`)
 	claudeTrustCursorYes = regexp.MustCompile(`(?m)❯ *Yes, I trust this folder`)
 	codexTrustCursor     = regexp.MustCompile(`(?m)› *1\. Trust and continue`)
+	claudeExitCursor     = regexp.MustCompile(`(?m)❯ *(1\. *)?Exit and stop tasks`)
 )
 
 // flatScreen is the screen's words in order, one space apart: line breaks
@@ -446,6 +453,36 @@ func codexDialog(screen string) string {
 	return ""
 }
 
+// claudeExitDialog names the dialog that Claude Code's /exit opens when
+// the agent has background work, such as a shell that waits for mail:
+// "Exit and stop tasks", "Move to background and exit" or "Stay". Enter
+// on the first answer stops that work with the session; work moved to
+// the background would go on in the old session's name (nhm-m7x). With
+// the cursor on another answer, nhm does not answer.
+func claudeExitDialog(screen string) (string, string, []string) {
+	flat := flatScreen(screen)
+	if !strings.Contains(flat, "Background work is running") || !strings.Contains(flat, "Exit and stop tasks") {
+		return "", "", nil
+	}
+	name := "Claude's 'Background work is running' dialog (the agent has background tasks)"
+	if claudeExitCursor.MatchString(screen) {
+		return name, "Exit and stop tasks", []string{"enter"}
+	}
+	return name, "", nil
+}
+
+// codexExitDialog names the dialog that codex-cli 0.162.1 opens on an
+// exit while a task runs: cancel the task, run it in the background, or
+// stop it and exit. nhm does not answer it: the task is the agent's
+// work, and recycle stops an agent only between turns.
+func codexExitDialog(screen string) (string, string, []string) {
+	flat := flatScreen(screen)
+	if strings.Contains(flat, "Task is still running") && strings.Contains(flat, "Choose what happens to the current task") {
+		return "Codex's 'Task is still running' dialog", "", nil
+	}
+	return "", "", nil
+}
+
 func fromCodex(e Event, bound string, launch bool) Decision {
 	d := codex.Classify(codex.Event{HookEvent: e.HookEvent, Source: e.Source, SessionID: e.SessionID}, bound, launch)
 	return Decision{Verdict: d.Verdict, Reason: d.Reason, Compacted: d.Compacted, Resumed: d.Resumed, TakeSession: d.TakeSession}
@@ -458,7 +495,7 @@ func builtins() []Adapter {
 			// ntm's launch: --dangerously-skip-permissions, --model,
 			// --effort xhigh, and the dcg and rch PreToolUse hooks through
 			// --settings (PreToolUse hooks run in every permission mode).
-			Name: "claude", NTMType: "claude", Program: "claude-code", TrustKeys: claudeTrust, Flags: []string{"cc"},
+			Name: "claude", NTMType: "claude", Program: "claude-code", TrustKeys: claudeTrust, ExitDialog: claudeExitDialog, Flags: []string{"cc"},
 			LaunchArgs: []string{"--dangerously-skip-permissions"}, ModelFlag: "--model",
 			EffortArgs: []string{"--effort", "{effort}"}, DefaultEffort: "xhigh", SettingsFlag: "--settings",
 			ResumeArgv: []string{"claude", "--dangerously-skip-permissions", "--resume", "{session}"}, ResumeFlags: []string{"--resume", "-r"},
@@ -475,7 +512,7 @@ func builtins() []Adapter {
 			// --no-daemon runs Codex's hooks in its own pane (F.22, exp.3).
 			// ntm's launch: --dangerously-bypass-approvals-and-sandbox and
 			// model_reasoning_effort xhigh; --no-daemon is the fork's (F.22).
-			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Dialog: codexDialog, Flags: []string{"cod"},
+			Name: "codex", NTMType: "codex", Program: "codex-cli", TrustKeys: codexTrust, Dialog: codexDialog, ExitDialog: codexExitDialog, Flags: []string{"cod"},
 			LaunchArgs: []string{"--no-daemon", "--dangerously-bypass-approvals-and-sandbox"}, ModelFlag: "--model",
 			EffortArgs: []string{"-c", "model_reasoning_effort={effort}"}, DefaultEffort: "xhigh",
 			ResumeArgv:  []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "{session}"},

@@ -457,6 +457,61 @@ func TestCodexDialog(t *testing.T) {
 	}
 }
 
+// claudeBackgroundWork is Claude Code 2.1.309's dialog when /exit finds
+// background work, as herdr read the screen (nhm-m7x).
+const claudeBackgroundWork = `
+ Background work is running
+ The following will stop when you exit:
+    shell · until out=$(am check-inbox --agent IcyKnoll --rate-limit 0 --json); do sleep 30; done
+ ❯ 1. Exit and stop tasks
+   2. Move to background and exit
+   3. Stay
+
+ Enter to confirm · Esc to cancel
+`
+
+// codexTaskRunning holds the words of codex-cli 0.162.1's dialog on an
+// exit while a task runs, from the strings of its binary (nhm-m7x).
+const codexTaskRunning = `
+  Task is still running
+  Choose what happens to the current task.
+
+› 1. Cancel task         Stop the current task and stay in Codex
+  2. Run in background   Exit Codex and leave the task running
+`
+
+func TestExitDialog(t *testing.T) {
+	c, _ := Get("claude")
+	x, _ := Get("codex")
+	name, answer, keys := c.ExitDialog(claudeBackgroundWork)
+	if !strings.HasPrefix(name, "Claude's 'Background work is running' dialog") || answer != "Exit and stop tasks" || !slices.Equal(keys, []string{"enter"}) {
+		t.Fatalf("background work = %q %q %v", name, answer, keys)
+	}
+	// In a dialog box, and wrapped in a narrow pane, it reads the same.
+	boxed := "╭────────────────╮\n│" + strings.Replace(claudeBackgroundWork, "Background work is running", "Background work\n│ is running", 1)
+	if n, _, k := c.ExitDialog(boxed); n != name || !slices.Equal(k, keys) {
+		t.Fatalf("boxed = %q %v", n, k)
+	}
+	// With the cursor on another answer, nhm names the dialog and does
+	// not answer it.
+	stay := strings.Replace(strings.Replace(claudeBackgroundWork, "❯ 1.", "  1.", 1), "  3. Stay", "❯ 3. Stay", 1)
+	if n, a, k := c.ExitDialog(stay); n != name || a != "" || k != nil {
+		t.Fatalf("cursor on Stay = %q %q %v", n, a, k)
+	}
+	// Codex's is named, never answered.
+	if n, a, k := x.ExitDialog(codexTaskRunning); n != "Codex's 'Task is still running' dialog" || a != "" || k != nil {
+		t.Fatalf("task running = %q %q %v", n, a, k)
+	}
+	for _, s := range []struct {
+		a      Adapter
+		screen string
+	}{{c, codexTaskRunning}, {x, claudeBackgroundWork}, {c, "❯ \n  ? for shortcuts\n"}, {x, "› Ask Codex to do anything\n"}} {
+		if n, a, k := s.a.ExitDialog(s.screen); n != "" || a != "" || k != nil {
+			t.Fatalf("%s on %q = %q %q %v", s.a.Name, s.screen, n, a, k)
+		}
+	}
+}
+
 func TestTrustKeysWrapped(t *testing.T) {
 	c, _ := Get("claude")
 	x, _ := Get("codex")
