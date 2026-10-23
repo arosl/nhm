@@ -13,8 +13,15 @@
 //     rollout-*.jsonl, token_count events: rate_limits.primary is the
 //     five-hour window, .secondary the weekly one).
 //
-// Only percentages, reset times and plan types are read, never a token,
-// an account id or a session's content.
+// Each record is of a credential (credential.go): record-claude writes the
+// active one into its record, and a Codex log's session_meta names the
+// account that made the session. A caam switch or a new login invalidates
+// the pool's records of the old credential (nhm-kyt), so the pool is
+// unknown until a record of the new one comes.
+//
+// Only percentages, reset times, plan types and credentials' names are
+// read and kept, never a token or a session's content. An account id is
+// read only to make its fingerprint.
 package quota
 
 import (
@@ -26,7 +33,9 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +83,12 @@ type Observation struct {
 	Weekly       *Window    `json:"weekly,omitempty"`
 	LimitReached *Limit     `json:"limit_reached,omitempty"`
 	Source       string     `json:"source,omitempty"`
+	// Credential is the pool's active credential, the one its records
+	// must be of; nil when nhm cannot name it.
+	Credential *Credential `json:"credential,omitempty"`
+	// Superseded: the pool has records, all of another credential, so
+	// it is unknown.
+	Superseded bool `json:"superseded,omitempty"`
 	// Note says why the pool is unknown, when it is.
 	Note string `json:"note,omitempty"`
 	// Agents counts the live agents of the kind, when herdr was asked.
@@ -90,8 +105,14 @@ type Env struct {
 	AcfsHome string
 	// RecordFile is nhm's own Claude record.
 	RecordFile string
-	// CodexHome holds Codex's session logs.
+	// CodexHome holds Codex's session logs and its auth.json.
 	CodexHome string
+	// ClaudeDir holds Claude's .credentials.json, and ClaudeState is
+	// Claude's .claude.json, whose oauthAccount names the account.
+	ClaudeDir   string
+	ClaudeState string
+	// Caam is the caam binary, "" without caam.
+	Caam string
 }
 
 // DefaultEnv fills an Env from the environment.
@@ -103,6 +124,16 @@ func DefaultEnv() Env {
 	}
 	if e.CodexHome == "" && home != "" {
 		e.CodexHome = filepath.Join(home, ".codex")
+	}
+	// As Claude Code and caam: CLAUDE_CONFIG_DIR holds both files.
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		e.ClaudeDir, e.ClaudeState = dir, filepath.Join(dir, ".claude.json")
+	} else if home != "" {
+		e.ClaudeDir, e.ClaudeState = filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")
+	}
+	// Never a caam in the working directory (exec.ErrDot).
+	if bin, err := exec.LookPath("caam"); err == nil {
+		e.Caam = bin
 	}
 	// nhm's state root ignores a relative XDG_STATE_HOME: the statusline
 	// that writes the record and the verbs that read it run in different
@@ -116,14 +147,16 @@ func DefaultEnv() Env {
 // Collect reads every pool: claude, codex, and the unknown agy and pi.
 // counts are the live agents per kind (nil when herdr was not asked).
 func Collect(env Env, now time.Time, counts map[string]int) []Observation {
-	claude := ReadClaude(now, env.RecordFile, acfsRecord(env.AcfsHome))
-	codex, err := ReadCodex(env.CodexHome, now)
+	profiles := caamProfiles(env.Caam, "")
+	claudeCred, codexCred := credentialOf(env, "claude", profiles), credentialOf(env, "codex", profiles)
+	claude := ReadClaude(now, claudeCred, env.RecordFile, acfsRecord(env.AcfsHome))
+	codex, err := ReadCodex(env.CodexHome, codexCred, now)
 	if err != nil || codex == nil {
 		note := "no Codex session log of the last 7 days has a rate_limits record"
 		if err != nil {
 			note = "Codex session logs: " + err.Error()
 		}
-		codex = &Observation{Pool: "codex", Kind: "codex", Note: note}
+		codex = &Observation{Pool: "codex", Kind: "codex", Credential: codexCred, Note: note}
 	}
 	obs := []Observation{*claude, *codex,
 		{Pool: "agy", Kind: "agy", Note: "agy exposes no usage"},
@@ -142,10 +175,12 @@ func acfsRecord(acfsHome string) string {
 	return filepath.Join(acfsHome, "state", "quota", "claude.json")
 }
 
-// claudeRecord is the record-claude file:
-// {"recorded_at": RFC 3339, "rate_limits": {"five_hour": {...}, "seven_day": {...}}}.
+// claudeRecord is the record-claude file: {"recorded_at": RFC 3339,
+// "credential": {...}, "rate_limits": {"five_hour": {...}, "seven_day": {...}}}.
+// ACFS's record and nhm's before nhm-kyt have no credential.
 type claudeRecord struct {
-	RecordedAt string `json:"recorded_at"`
+	RecordedAt string      `json:"recorded_at"`
+	Credential *Credential `json:"credential"`
 	RateLimits *struct {
 		FiveHour *claudeWindow `json:"five_hour"`
 		SevenDay *claudeWindow `json:"seven_day"`
@@ -157,10 +192,17 @@ type claudeWindow struct {
 	ResetsAt       json.RawMessage `json:"resets_at"`
 }
 
-// ReadClaude reads the newest of the Claude record files. A pool without
-// a readable record is unknown, with a note.
-func ReadClaude(now time.Time, files ...string) *Observation {
-	var best *Observation
+// ReadClaude reads the newest of the Claude record files that is of the
+// active credential (ofActive). A pool without a readable record is
+// unknown, with a note, as is one whose records are all of another
+// credential.
+func ReadClaude(now time.Time, active *Credential, files ...string) *Observation {
+	type record struct {
+		at   time.Time
+		file string
+		rec  claudeRecord
+	}
+	var recs []record
 	for _, f := range files {
 		if f == "" {
 			continue
@@ -177,17 +219,40 @@ func ReadClaude(now time.Time, files ...string) *Observation {
 		if err != nil {
 			continue
 		}
-		o := &Observation{Pool: "claude", Kind: "claude", ObservedAt: &at, Source: "claude statusLine (" + f + ")",
-			FiveHour: claudeWin(rec.RateLimits.FiveHour, now), Weekly: claudeWin(rec.RateLimits.SevenDay, now)}
-		if best == nil || at.After(*best.ObservedAt) {
-			best = o
+		recs = append(recs, record{at, f, rec})
+	}
+	// Newest first; of two at one time, the first file.
+	sort.SliceStable(recs, func(i, j int) bool { return recs[i].at.After(recs[j].at) })
+	creds := make([]*Credential, len(recs))
+	for i, r := range recs {
+		creds[i] = r.rec.Credential
+	}
+	kept, other := ofActive(active, creds)
+	for i, r := range recs {
+		if !kept[i] {
+			continue
 		}
+		return &Observation{Pool: "claude", Kind: "claude", ObservedAt: &r.at, Source: "claude statusLine (" + r.file + ")", Credential: active,
+			FiveHour: claudeWin(r.rec.RateLimits.FiveHour, now), Weekly: claudeWin(r.rec.RateLimits.SevenDay, now)}
 	}
-	if best == nil {
-		return &Observation{Pool: "claude", Kind: "claude",
-			Note: "no record: set `nhm quota record-claude` as Claude Code's statusLine command"}
+	if other != nil {
+		return superseded("claude", active, other)
 	}
-	return best
+	return &Observation{Pool: "claude", Kind: "claude", Credential: active,
+		Note: "no record: set `nhm quota record-claude` as Claude Code's statusLine command"}
+}
+
+// superseded is a pool whose records are all of another credential than
+// the active one: a caam switch or a new login made them another
+// account's (plan-v8 2.9).
+func superseded(kind string, active, other *Credential) *Observation {
+	// The note names the field match compared.
+	was, now := "fingerprint "+other.Fingerprint, "fingerprint "+active.Fingerprint
+	if other.Profile != "" && active.Profile != "" {
+		was, now = "profile "+other.Profile, "profile "+active.Profile
+	}
+	return &Observation{Pool: kind, Kind: kind, Credential: active, Superseded: true,
+		Note: fmt.Sprintf("the newest record is of %s, not of the active %s: a credential switch invalidates it", was, now)}
 }
 
 func claudeWin(w *claudeWindow, now time.Time) *Window {
@@ -248,16 +313,28 @@ type codexWindow struct {
 	ResetsAt      json.RawMessage `json:"resets_at"`
 }
 
+// codexMeta is the part of a session log's session_meta line that names
+// the account that made the session.
+type codexMeta struct {
+	Type    string `json:"type"`
+	Payload struct {
+		CreatorAccountID string `json:"creator_account_id"`
+	} `json:"payload"`
+}
+
 // ReadCodex reads the newest rate_limits record of the session logs
-// written in the last seven days. It returns nil when there is none.
-func ReadCodex(codexHome string, now time.Time) (*Observation, error) {
+// written in the last seven days that is of the active credential
+// (ofActive): a record is of the account its log's session_meta names. It
+// returns nil when there is no record.
+func ReadCodex(codexHome string, active *Credential, now time.Time) (*Observation, error) {
 	if codexHome == "" {
 		return nil, nil
 	}
 	root := filepath.Join(codexHome, "sessions")
 	type rec struct {
-		at time.Time
-		ev codexEvent
+		at   time.Time
+		ev   codexEvent
+		cred *Credential
 	}
 	var all []rec
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -282,8 +359,19 @@ func ReadCodex(codexHome string, now time.Time) (*Observation, error) {
 		defer f.Close()
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
+		var cred *Credential
 		for sc.Scan() {
 			line := sc.Bytes()
+			if bytes.Contains(line, []byte(`"session_meta"`)) {
+				var meta codexMeta
+				if json.Unmarshal(line, &meta) == nil && meta.Type == "session_meta" {
+					cred = nil
+					if fp := accountFingerprint("codex", meta.Payload.CreatorAccountID); fp != "" {
+						cred = &Credential{Fingerprint: fp}
+					}
+					continue
+				}
+			}
 			if !bytes.Contains(line, []byte(`"rate_limits"`)) {
 				continue
 			}
@@ -295,7 +383,7 @@ func ReadCodex(codexHome string, now time.Time) (*Observation, error) {
 			if err != nil {
 				continue
 			}
-			all = append(all, rec{at, ev})
+			all = append(all, rec{at, ev, cred})
 		}
 		return nil
 	})
@@ -305,18 +393,34 @@ func ReadCodex(codexHome string, now time.Time) (*Observation, error) {
 	if len(all) == 0 {
 		return nil, nil
 	}
+	// Newest first; of two at one time, the later in the walk.
 	sort.SliceStable(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })
-	newest := all[len(all)-1]
+	slices.Reverse(all)
+	creds := make([]*Credential, len(all))
+	for i, r := range all {
+		creds[i] = r.cred
+	}
+	kept, other := ofActive(active, creds)
+	var mine []rec
+	for i, r := range all {
+		if kept[i] {
+			mine = append(mine, r)
+		}
+	}
+	if len(mine) == 0 {
+		return superseded("codex", active, other), nil
+	}
+	newest := mine[0]
 	w := newest
-	for i := len(all) - 1; i >= 0; i-- {
-		if rl := all[i].ev.Payload.RateLimits; rl.Primary != nil || rl.Secondary != nil {
-			w = all[i]
+	for _, r := range mine {
+		if rl := r.ev.Payload.RateLimits; rl.Primary != nil || rl.Secondary != nil {
+			w = r
 			break
 		}
 	}
 	rl := w.ev.Payload.RateLimits
 	at := w.at
-	o := &Observation{Pool: "codex", Kind: "codex", PlanType: rl.PlanType, ObservedAt: &at, Source: "codex session logs",
+	o := &Observation{Pool: "codex", Kind: "codex", PlanType: rl.PlanType, ObservedAt: &at, Source: "codex session logs", Credential: active,
 		FiveHour: codexWin(rl.Primary, now), Weekly: codexWin(rl.Secondary, now)}
 	nrl := newest.ev.Payload.RateLimits
 	if t := firstNonNil(nrl.LimitReachedType, nrl.LimitReachedType2); t != nil {
@@ -378,10 +482,10 @@ func Check(obs []Observation, kind string, limitPct int) (ok bool, reason string
 }
 
 // RecordClaude is the statusLine command's work: it saves the windows of
-// Claude's statusLine input to path, and returns the status line to print.
-// It never fails the status line: a bad input saves nothing and still
-// returns what it can.
-func RecordClaude(input []byte, path string, now time.Time) (line string, err error) {
+// Claude's statusLine input to env.RecordFile, with Claude's active
+// credential, and returns the status line to print. It never fails the
+// status line: a bad input saves nothing and still returns what it can.
+func RecordClaude(input []byte, env Env, now time.Time) (line string, err error) {
 	var in struct {
 		Model *struct {
 			DisplayName string `json:"display_name"`
@@ -410,9 +514,15 @@ func RecordClaude(input []byte, path string, now time.Time) (line string, err er
 		}
 		rec := map[string]any{"recorded_at": now.UTC().Format(time.RFC3339),
 			"rate_limits": map[string]json.RawMessage{"five_hour": orNull(in.RateLimits.FiveHour), "seven_day": orNull(in.RateLimits.SevenDay)}}
+		if env.RecordFile == "" {
+			return strings.Join(parts, " · "), nil
+		}
+		if c := ActiveCredential(env, "claude"); c != nil {
+			rec["credential"] = c
+		}
 		data, merr := json.Marshal(rec)
-		if merr == nil && path != "" {
-			err = writeRecord(path, data)
+		if merr == nil {
+			err = writeRecord(env.RecordFile, data)
 		}
 	}
 	return strings.Join(parts, " · "), err

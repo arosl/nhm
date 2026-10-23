@@ -21,11 +21,16 @@ const quotaUsage = `Usage: nhm quota [--socket PATH] [--json]
 
 quota prints each pool's five-hour and weekly windows, the reset times
 (UTC), the observation's source and age, and the live agents per kind; on
-an enrolled server it also stores them for status and attention.
+an enrolled server it also stores them for status and attention. A pool
+counts only the records of its active credential (caam's active profile,
+else a short fingerprint of the account in the kind's auth file): after a
+caam switch or a new login it is unknown until a record of the new one
+comes.
 check exits 1 when the kind's five-hour window is at least --limit full
 (default 90) or the provider reports its limit reached; an unknown pool
 passes. record-claude is Claude Code's statusLine command: it saves the
-windows Claude hands it and prints a short status line; it never fails.
+windows Claude hands it, with the active credential, and prints a short
+status line; it never fails.
 `
 
 func runQuota(args []string, stdout, stderr io.Writer) int {
@@ -201,7 +206,7 @@ func runQuotaCheck(args []string, stdout, stderr io.Writer) int {
 // it prints, so it always exits 0 and prints at most one line.
 func runQuotaRecordClaude(stdout io.Writer) int {
 	input, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
-	line, _ := quota.RecordClaude(input, quota.DefaultEnv().RecordFile, time.Now())
+	line, _ := quota.RecordClaude(input, quota.DefaultEnv(), time.Now())
 	fmt.Fprintln(stdout, line)
 	return exitOK
 }

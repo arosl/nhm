@@ -109,9 +109,11 @@ func TestQuotaCheck(t *testing.T) {
 	}
 }
 
-func TestQuotaRecordClaude(t *testing.T) {
-	quotaInstance(t)
-	in := `{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":95,"resets_at":` +
+// recordClaude runs nhm quota record-claude, Claude Code's statusLine
+// command, with Claude's five-hour window at pct on stdin.
+func recordClaude(t *testing.T, pct int) (int, string) {
+	t.Helper()
+	in := `{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":` + strconv.Itoa(pct) + `,"resets_at":` +
 		strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10) + `}}}`
 	stdin := filepath.Join(t.TempDir(), "in.json")
 	if err := os.WriteFile(stdin, []byte(in), 0o600); err != nil {
@@ -126,11 +128,76 @@ func TestQuotaRecordClaude(t *testing.T) {
 	os.Stdin = f
 	defer func() { os.Stdin = old }()
 	code, out, _ := runVerb(runQuota, "record-claude")
+	return code, out
+}
+
+func TestQuotaRecordClaude(t *testing.T) {
+	quotaInstance(t)
+	code, out := recordClaude(t, 95)
 	if code != 0 || out != "Opus 5.5 · 5h 95%\n" {
 		t.Fatalf("record-claude = %d %q", code, out)
 	}
 	if code, _, errOut := runVerb(runQuota, "check", "claude"); code != 1 || !strings.Contains(errOut, "95% used") {
 		t.Fatalf("check after record = %d %s", code, errOut)
+	}
+}
+
+// ACFS E13 (nhm-kyt): at 92 % on caam's profile e13a a Claude spawn is
+// refused; after `caam activate claude e13b` that record is e13a's, so
+// the pool is unknown (plan-v8 2.9), and the dry run is admitted with a
+// warning for the operator and refused for a robot (2.2).
+func TestQuotaCaamSwitchMakesThePoolUnknown(t *testing.T) {
+	s, _, _ := newSendInstance(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	bin := t.TempDir()
+	t.Setenv("PATH", bin) // a fake caam, and no dcg: --allow-unguarded
+	status := filepath.Join(bin, "status.json")
+	// Shell builtins only: PATH holds nothing else.
+	writeAll(t, filepath.Join(bin, "caam"), "#!/bin/sh\nIFS= read -r line <'"+status+"'\nprintf '%s\\n' \"$line\"\n")
+	if err := os.Chmod(filepath.Join(bin, "caam"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	activate := func(profile string) {
+		writeAll(t, status, `{"tools":[{"tool":"claude","logged_in":true,"active_profile":"`+profile+`"}]}`)
+	}
+	project := t.TempDir()
+	dryRun := func(extra ...string) (int, map[string]any) {
+		t.Helper()
+		args := append([]string{"spawn", "swarm", "--cc=1", "--project", project, "--prompt", "say hi", "--allow-unguarded",
+			"--dry-run", "--json", "--socket", s.SocketPath}, extra...)
+		code, out, errOut := run(args...)
+		ad, _ := decodeEnvelope(t, out)["result"].(map[string]any)["admission"].(map[string]any)
+		if ad == nil || ad["decision"] == "" {
+			t.Fatalf("%v = %d %s %s", extra, code, out, errOut)
+		}
+		return code, ad
+	}
+
+	activate("e13a")
+	if code, _ := recordClaude(t, 92); code != 0 {
+		t.Fatalf("record-claude = %d", code)
+	}
+	if code, ad := dryRun(); code != exitAdmission || ad["decision"] != "refuse" || !strings.Contains(ad["reason"].(string), "92% used") {
+		t.Fatalf("on e13a = %d %v", code, ad)
+	}
+
+	activate("e13b")
+	code, out, _ := runVerb(runQuota, "--json", "--socket", s.SocketPath)
+	claude := envelopeOf(t, out)["result"].(map[string]any)["pools"].([]any)[0].(map[string]any)
+	if _, has := claude["observed_at"]; code != 0 || has || claude["superseded"] != true ||
+		claude["credential"].(map[string]any)["profile"] != "e13b" {
+		t.Fatalf("quota after the switch = %d %v", code, claude)
+	}
+	code, ad := dryRun()
+	warnings, _ := json.Marshal(ad["warnings"])
+	if code != 0 || ad["decision"] != "admit" || !strings.Contains(string(warnings),
+		"claude quota unknown (the newest record is of profile e13a, not of the active profile e13b: a credential switch invalidates it): admitted") {
+		t.Fatalf("on e13b = %d %v", code, ad)
+	}
+	if code, ad := dryRun("--require-observations"); code != exitAdmission || ad["decision"] != "refuse" ||
+		!strings.Contains(ad["reason"].(string), "a robot call needs an observation") {
+		t.Fatalf("a robot on e13b = %d %v", code, ad)
 	}
 }
 

@@ -116,10 +116,17 @@ func (s *Seen) Save() error {
 
 // Store writes the observations into the quota table, one row per pool
 // and window, so status and attention see them. An unknown pool writes
-// nothing. A pool at a fresh limit-reached record is "limited" in every
-// window.
+// nothing; a superseded one deletes its rows, which are of another
+// credential (nhm-kyt). A pool at a fresh limit-reached record is
+// "limited" in every window.
 func Store(ctx context.Context, db *sql.DB, obs []Observation) error {
 	for _, o := range obs {
+		if o.Superseded {
+			if _, err := db.ExecContext(ctx, `DELETE FROM quota WHERE pool_id = ?`, o.Pool); err != nil {
+				return fmt.Errorf("quota: store %s: %w", o.Pool, err)
+			}
+			continue
+		}
 		if !o.Known() {
 			continue
 		}

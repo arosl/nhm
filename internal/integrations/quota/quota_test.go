@@ -47,7 +47,7 @@ func TestReadCodexTakesTheNewestRecord(t *testing.T) {
 			codexLine(now.Add(-time.Hour), 93, now.Add(2*time.Hour), ""), now.Add(-time.Hour))
 	// Older than a week: ignored even with a newer timestamp inside.
 	write(t, filepath.Join(sessions, "rollout-old.jsonl"), codexLine(now, 1, now.Add(time.Hour), ""), now.Add(-8*24*time.Hour))
-	o, err := ReadCodex(home, now)
+	o, err := ReadCodex(home, nil, now)
 	if err != nil || o == nil {
 		t.Fatalf("ReadCodex = %+v %v", o, err)
 	}
@@ -69,7 +69,7 @@ func TestCodexResetAndLimitReached(t *testing.T) {
 	// The window reset an hour ago; a limit record from three hours ago.
 	write(t, filepath.Join(sessions, "rollout-x.jsonl"),
 		codexLine(now.Add(-3*time.Hour), 100, now.Add(-time.Hour), `,"rate_limit_reached_type":"primary"`), now.Add(-3*time.Hour))
-	o, err := ReadCodex(home, now)
+	o, err := ReadCodex(home, nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestCodexResetAndLimitReached(t *testing.T) {
 	// A fresh limit record refuses whatever the window says.
 	write(t, filepath.Join(sessions, "rollout-y.jsonl"),
 		codexLine(now.Add(-10*time.Minute), 10, now.Add(time.Hour), `,"rate_limit_reached_type":"secondary"`), now.Add(-10*time.Minute))
-	o, _ = ReadCodex(home, now)
+	o, _ = ReadCodex(home, nil, now)
 	if ok, why := Check([]Observation{*o}, "codex", 90); ok || !strings.Contains(why, "limit reached: secondary") {
 		t.Fatalf("fresh limit = %v %s", ok, why)
 	}
@@ -93,14 +93,14 @@ func TestClaudeRecordRoundTrip(t *testing.T) {
 	nhmFile := filepath.Join(dir, "nhm", "quota", "claude.json")
 	in := `{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":91.5,"resets_at":` + epoch(now.Add(time.Hour)) +
 		`},"seven_day":{"used_percentage":40,"resets_at":` + epoch(now.Add(96*time.Hour)) + `}}}`
-	line, err := RecordClaude([]byte(in), nhmFile, now)
+	line, err := RecordClaude([]byte(in), Env{RecordFile: nhmFile}, now)
 	if err != nil || line != "Opus 5.5 · 5h 91% · 7d 40%" {
 		t.Fatalf("line = %q %v", line, err)
 	}
 	// An older ACFS record loses to nhm's newer one.
 	acfs := filepath.Join(dir, "acfs", "state", "quota", "claude.json")
 	write(t, acfs, `{"recorded_at":"2026-10-11T00:00:00Z","rate_limits":{"five_hour":{"used_percentage":5}}}`, now)
-	o := ReadClaude(now.Add(time.Minute), nhmFile, acfs)
+	o := ReadClaude(now.Add(time.Minute), nil, nhmFile, acfs)
 	if !o.Known() || *o.FiveHour.UsedPct != 91.5 || *o.Weekly.UsedPct != 40 || !strings.Contains(o.Source, nhmFile) {
 		t.Fatalf("claude = %+v", o)
 	}
@@ -108,13 +108,13 @@ func TestClaudeRecordRoundTrip(t *testing.T) {
 		t.Fatal("91.5% passed a 90% limit")
 	}
 	// A bad input saves nothing and still prints nothing harmful.
-	if line, err := RecordClaude([]byte("garbage"), filepath.Join(dir, "x.json"), now); line != "" || err != nil {
+	if line, err := RecordClaude([]byte("garbage"), Env{RecordFile: filepath.Join(dir, "x.json")}, now); line != "" || err != nil {
 		t.Fatalf("garbage = %q %v", line, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "x.json")); err == nil {
 		t.Fatal("garbage was saved")
 	}
-	if o := ReadClaude(now, filepath.Join(dir, "none.json")); o.Known() || o.Note == "" {
+	if o := ReadClaude(now, nil, filepath.Join(dir, "none.json")); o.Known() || o.Note == "" {
 		t.Fatalf("no record = %+v", o)
 	}
 }
