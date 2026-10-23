@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -112,8 +113,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	m := r.model(ctx, "")
 	if !m.HerdrOK() {
-		return robotFail(stdout, robot.ErrCodeDependencyMissing, "herdr did not answer: "+m.Sources[snapshot.SourceHerdr].Error,
-			"start the herdr server; nhm doctor checks it", *format, robotError, now)
+		if msg, hint := herdrRefusal(m, *status, *snap); msg != "" {
+			return robotFail(stdout, robot.ErrCodeDependencyMissing, msg, hint, *format, robotError, now)
+		}
 	}
 	switch {
 	case *status:
@@ -166,6 +168,26 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		reads[a.PaneID] = read
 	}
 	return robotWrite(stdout, snapshot.TailFor(one, *ws, reads, errs, *format, now), robotOK)
+}
+
+// herdrRefusal is the error of a read that herdr did not answer, or ""
+// when the read answers as ntm's does with tmux down (nhm-fyq):
+// --robot-status always succeeds, as buildLiveStatus swallows a failed
+// collection, and --robot-snapshot succeeds when no server runs, as
+// ListSessions then lists none, but not when herdr is not installed. Such
+// an answer has no sessions, herdr in degraded_sources and its error under
+// _nhm.sources.
+func herdrRefusal(m *snapshot.Model, status, snap bool) (msg, hint string) {
+	switch {
+	case status:
+		return "", ""
+	case snap && m.HerdrDown():
+		if _, err := exec.LookPath(herdrBin()); err != nil {
+			return "herdr is not installed", "install herdr to enable snapshot"
+		}
+		return "", ""
+	}
+	return "herdr did not answer: " + m.Sources[snapshot.SourceHerdr].Error, "start the herdr server; nhm doctor checks it"
 }
 
 // hasRobotFlag reports whether args hold the robot flag name.

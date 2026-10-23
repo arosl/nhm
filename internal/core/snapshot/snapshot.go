@@ -241,6 +241,9 @@ type Model struct {
 	// herdrOK is false when the herdr stage failed: agent data is then
 	// the bindings' last word, not herdr's.
 	herdrOK bool
+	// herdrDown is true when the herdr stage found no server
+	// (herdr.ServerDown).
+	herdrDown bool
 	// boards are nhm's live boards by pane id: no agent rows.
 	boards map[string]bool
 	// panes are herdr's live panes by id: an absent binding whose pane
@@ -257,6 +260,11 @@ type peer struct{ id, project string }
 
 // HerdrOK reports whether herdr answered.
 func (m *Model) HerdrOK() bool { return m.herdrOK }
+
+// HerdrDown reports whether herdr did not answer because no server runs:
+// its socket does not exist, or nothing accepts on it. A server that
+// answers badly is not down.
+func (m *Model) HerdrDown() bool { return m.herdrDown }
 
 // Degraded lists the sources that are not fresh (skipped ones excluded).
 func (m *Model) Degraded() []string {
@@ -285,6 +293,7 @@ func Build(ctx context.Context, deps Deps, opts Options) *Model {
 	m.stage(SourceHerdr, now, orDefault(opts.HerdrTimeout, defaultHerdrTimeout), ctx, func(c context.Context) error {
 		var err error
 		snap, err = deps.Herdr.Snapshot(c)
+		m.herdrDown = herdr.ServerDown(err)
 		return err
 	})
 	m.herdrOK = m.Sources[SourceHerdr].Status == Fresh
