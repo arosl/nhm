@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeDCG installs a dcg that answers with body and exit code, and
@@ -55,6 +56,47 @@ func TestScreenArgv(t *testing.T) {
 	}
 	if _, err := ScreenArgv(context.Background(), nil); err == nil {
 		t.Fatal("empty argv passed")
+	}
+}
+
+// A child of dcg that holds stdout open (nhm-fty) does not hold the screen:
+// not past the caller's context, and not past dcg's own exit, when the
+// verdict dcg gave still counts.
+func TestScreenArgvEndsWhenAChildHoldsStdout(t *testing.T) {
+	for _, c := range []struct {
+		name, script string
+		timeout      time.Duration
+		allow        bool
+	}{
+		{"killed at the deadline", "#!/bin/sh\nsleep 30\nprintf '%s' '{\"decision\":\"allow\"}'\n", 200 * time.Millisecond, false},
+		{"dcg answered and exited", "#!/bin/sh\nsleep 30 &\nprintf '%s' '{\"decision\":\"allow\"}'\n", 0, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "dcg"), []byte(c.script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			old := DCGPath
+			DCGPath = filepath.Join(dir, "dcg")
+			defer func() { DCGPath = old }()
+			ctx := context.Background()
+			if c.timeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, c.timeout)
+				defer cancel()
+			}
+			start := time.Now()
+			v, err := ScreenArgv(ctx, []string{"claude"})
+			if took := time.Since(start); took > 5*time.Second {
+				t.Fatalf("the screen took %v", took)
+			}
+			if c.allow && (err != nil || v.Decision != Allow) {
+				t.Fatalf("verdict = %+v, %v; want allow", v, err)
+			}
+			if !c.allow && err == nil {
+				t.Fatalf("a killed dcg gave %+v", v)
+			}
+		})
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Screen decisions.
@@ -45,6 +46,10 @@ func ScreenArgv(ctx context.Context, argv []string) (Verdict, error) {
 	}
 	line := ShellJoin(argv)
 	cmd := exec.CommandContext(ctx, path, "test", "--stdin", "--robot", "--dialect", "posix")
+	// A child of dcg (or of a wrapper script) that holds stdout open must
+	// not hold the screen (nhm-fty): WaitDelay after the caller's context
+	// ends, or after dcg exits, the pipes are closed.
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = strings.NewReader(line)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut

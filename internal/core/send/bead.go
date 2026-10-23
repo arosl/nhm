@@ -23,6 +23,10 @@ func BrShow(ctx context.Context, projectRoot, id string) (Bead, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "br", "show", id, "--json")
 	cmd.Dir = projectRoot
+	// A child of br (or of a wrapper script) that holds stdout open must
+	// not keep the call past beadTimeout (nhm-fty): after WaitDelay the
+	// pipes are closed.
+	cmd.WaitDelay = time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
