@@ -11,6 +11,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 )
@@ -24,7 +25,9 @@ your Agent Mail inbox." once if it has mail that no nudge announced and it
 is idle or done. A working, blocked or unknown agent keeps its pending
 mail, and so does one in its 120-second cooldown or at the rate limit
 (three nudges per sender and thread per hour): nhm maintain delivers it
-later. Each decision is printed, with its reason.
+later. Each decision is printed, with its reason. With --json, each
+nudge has an operation_id; for a nudge that herdr took, nhm wait
+--after-op waits for the turn it started.
 
 --once is the default and the only mode: nhm maintain --loop is the
 runner. Needs nhm to own the herdr server.
@@ -95,7 +98,8 @@ type wakeResult struct {
 // wakeEnv is the wake side of the instance; withMail adds the Agent
 // Mail client that reads inboxes.
 func (ie *instanceEnv) wakeEnv(withMail bool) (wake.Env, error) {
-	w := wake.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, Config: wake.DefaultConfig(), Now: time.Now}
+	w := wake.Env{DB: ie.db, Bindings: bindings.NewStore(ie.db), Herdr: ie.herdr, Config: wake.DefaultConfig(), Now: time.Now,
+		Inode: func() uint64 { return wait.SocketInode(ie.herdr.SocketPath) }}
 	if withMail {
 		mail, err := agentmail.NewClient("")
 		if err != nil {

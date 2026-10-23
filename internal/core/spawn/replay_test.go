@@ -6,12 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/store"
 )
 
 // A replay of spawn --assign (nhm-vcf) counts an agent as reached when a
 // receipt of another operation names its binding; the spawn's own
-// receipts, and other agents' receipts, do not count.
+// receipts, other agents' receipts and a mail nudge's receipt (nhm-qaa)
+// do not count.
 func TestReachedBindings(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -24,15 +26,17 @@ func TestReachedBindings(t *testing.T) {
 	claim("sp-1", Verb)
 	claim("send-1", "send")
 	claim("sp-2", Verb)
+	claim("wake-1", wake.Verb)
 	for i, b := range []string{"bnd-a", "bnd-b", "bnd-c", ""} {
 		if err := writeTarget(ctx, w.db, "sp-1", Target{Index: i, BindingID: b, Status: StatusReady}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// A send reached bnd-b; another spawn's receipt names bnd-x only.
+	// A send reached bnd-b; a nudge told bnd-c of its mail; another
+	// spawn's receipt names bnd-x only.
 	if _, err := w.db.SQL().ExecContext(ctx, `INSERT INTO receipts (operation_id, target_index, binding_id, generation, status, updated_at)
-		VALUES ('send-1', 0, 'bnd-b', 1, 'pending', ?), ('send-1', 1, NULL, NULL, 'refused', ?)`,
-		store.FormatTime(now), store.FormatTime(now)); err != nil {
+		VALUES ('send-1', 0, 'bnd-b', 1, 'pending', ?), ('send-1', 1, NULL, NULL, 'refused', ?), ('wake-1', 0, 'bnd-c', 1, 'submitted', ?)`,
+		store.FormatTime(now), store.FormatTime(now), store.FormatTime(now)); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeTarget(ctx, w.db, "sp-2", Target{Index: 0, BindingID: "bnd-x", Status: StatusReady}, now); err != nil {

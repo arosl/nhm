@@ -13,6 +13,7 @@ import (
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/wait"
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -175,13 +176,19 @@ func TestWaitIdleMeetsDone(t *testing.T) {
 // nhm.send writes it.
 func sendReceipt(t *testing.T, inst store.Instance, opID, status string, b bindings.Binding, base *wait.Baseline) {
 	t.Helper()
+	opReceipt(t, inst, "send", opID, status, b, base)
+}
+
+// opReceipt records an operation of the verb with one receipt for b.
+func opReceipt(t *testing.T, inst store.Instance, verb, opID, status string, b bindings.Binding, base *wait.Baseline) {
+	t.Helper()
 	db, err := store.Open(inst.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	ctx := context.Background()
-	if _, err := db.ClaimOperation(ctx, store.ClaimRequest{ID: opID, Verb: "send", Request: opID}, time.Now()); err != nil {
+	if _, err := db.ClaimOperation(ctx, store.ClaimRequest{ID: opID, Verb: verb, Request: opID}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	var baseJSON any
@@ -238,6 +245,48 @@ func TestWaitVerbCompleteAfterOp(t *testing.T) {
 
 	if code, _, errOut := runVerb(runWait, "--after-op", "op-missing", "--socket", s.SocketPath); code != 2 || !strings.Contains(errOut, "no receipts") {
 		t.Fatalf("unknown op = %d %s", code, errOut)
+	}
+}
+
+// --after-op takes a nudge's operation (nhm-qaa). Its receipt is
+// submitted, but the nudge did not wait for the turn to start: a turn
+// that this wait saw start is complete, one that had already ended is
+// ambiguous, where a send's would be complete.
+func TestWaitAfterANudge(t *testing.T) {
+	var mu sync.Mutex
+	reads := 0
+	s, inst, bs := waitInstance(t, func(pane string) map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		reads++
+		if reads < 3 {
+			return agentMap(pane, "claude", "working", 11, 0)
+		}
+		return agentMap(pane, "claude", "done", 12, 12)
+	})
+	icy := bs[0]
+	base := &wait.Baseline{BindingID: icy.ID, Generation: icy.Generation, PaneID: "w1:p1", State: "idle", StateChangeSeq: 10}
+	opReceipt(t, inst, wake.Verb, "op-wake-1", wait.Submitted, icy, base)
+	code, out, errOut := runVerb(runWait, "--after-op", "op-wake-1", "--until", "complete", "--poll", "10ms", "--socket", s.SocketPath, "--json")
+	tg := decodeEnvelope(t, out)["result"].(map[string]any)["targets"].([]any)[0].(map[string]any)
+	if code != 0 || tg["outcome"] != "complete" || tg["correlation"] != "strong" || tg["started_seq"].(float64) != 11 {
+		t.Fatalf("seen start = %d %v %s", code, tg, errOut)
+	}
+	// The turn had ended before the wait's first read.
+	opReceipt(t, inst, wake.Verb, "op-wake-2", wait.Submitted, icy, base)
+	code, out, _ = runVerb(runWait, "--after-op", "op-wake-2", "--until", "complete", "--socket", s.SocketPath)
+	if code != exitAmbiguous || !strings.Contains(out, "IcyKnoll (0.1): ambiguous (weak)") {
+		t.Fatalf("unseen start = %d %s", code, out)
+	}
+	sendReceipt(t, inst, "op-send-1", wait.Submitted, icy, base)
+	if code, out, _ = runVerb(runWait, "--after-op", "op-send-1", "--until", "complete", "--socket", s.SocketPath); code != 0 ||
+		!strings.Contains(out, "IcyKnoll (0.1): complete (strong)") {
+		t.Fatalf("a send's = %d %s", code, out)
+	}
+	// A state wait after the nudge: the done after its baseline meets idle.
+	if code, out, _ = runVerb(runWait, "--after-op", "op-wake-2", "--until", "idle", "--socket", s.SocketPath); code != 0 ||
+		!strings.Contains(out, "IcyKnoll (0.1): done") {
+		t.Fatalf("idle after the nudge = %d %s", code, out)
 	}
 }
 

@@ -131,6 +131,10 @@ type Target struct {
 	Baseline *Baseline
 	// Submission is the receipt's status; empty without --after-op.
 	Submission string
+	// StartUnseen: the submission did not wait for the turn to start (a
+	// wake nudge, nhm-qaa), so even a submitted receipt shows no start;
+	// the wait must see it.
+	StartUnseen bool
 }
 
 // Request is one wait.
@@ -279,7 +283,7 @@ func (w *waiter) run(ctx context.Context, t Target) Result {
 	seq := w.base.StateChangeSeq
 	w.r.BaselineSeq = &seq
 	w.r.Generation = w.base.Generation
-	w.started = t.Submission == Submitted
+	w.started = t.Submission == Submitted && !t.StartUnseen
 
 	for {
 		if r, done := w.check(ctx); done {

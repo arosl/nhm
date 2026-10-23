@@ -19,10 +19,10 @@ import (
 	"github.com/arosl/nhm/internal/herdr"
 )
 
-// Baseline is what nhm reads of an agent before a submission (send
-// stores it in the receipt's baseline_json) or at the start of a wait
-// without --after-op. A completion counts only when its completion_seq
-// is past StateChangeSeq.
+// Baseline is what nhm reads of an agent before a submission (send, and
+// a wake nudge that herdr took, store it in the receipt's baseline_json)
+// or at the start of a wait without --after-op. A completion counts only
+// when its completion_seq is past StateChangeSeq.
 type Baseline struct {
 	BindingID      string            `json:"binding_id"`
 	Generation     int64             `json:"generation"`
@@ -82,7 +82,9 @@ func SocketInode(path string) uint64 {
 }
 
 // Submission statuses of a receipt (plan-v8 2.3). Only "submitted" means
-// that herdr saw the agent working or blocked after the prompt.
+// that herdr saw the agent working or blocked after the prompt. A wake
+// nudge's prompt does not wait, so its "submitted" means only that herdr
+// took the line (Target.StartUnseen, nhm-qaa).
 const (
 	Submitted         = "submitted"
 	PossiblySubmitted = "possibly_submitted"

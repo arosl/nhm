@@ -21,7 +21,9 @@
 // operations table; its request names the binding, the message ids and
 // the sender-thread pairs that the rate limit counts. A nudge that herdr
 // submitted, or possibly submitted, announces its ids: they never cause
-// another nudge. A refused or failed attempt leaves them pending.
+// another nudge. A refused or failed attempt leaves them pending. A
+// submitted nudge also gets a receipt, as a send's target does, so nhm
+// wait --after-op can wait for the turn it started (nhm-qaa).
 //
 // The caller holds the owner lock and checks that nhm owns the instance;
 // no SQLite transaction stays open across a herdr or Agent Mail call.
@@ -40,6 +42,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/send"
+	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -118,7 +121,10 @@ type Env struct {
 	// Mail reads inboxes; nil: no inbox is read.
 	Mail   Mail
 	Config Config
-	Now    func() time.Time
+	// Inode returns herdr's socket inode for a nudge's baseline (0 when
+	// unknown). nil: not recorded.
+	Inode func() uint64
+	Now   func() time.Time
 }
 
 func (e Env) now() time.Time {
@@ -126,6 +132,13 @@ func (e Env) now() time.Time {
 		return e.Now()
 	}
 	return time.Now()
+}
+
+func (e Env) inode() uint64 {
+	if e.Inode != nil {
+		return e.Inode()
+	}
+	return 0
 }
 
 func (e Env) config() Config {
@@ -254,6 +267,13 @@ type nudgeRequest struct {
 	Pairs      []string `json:"pairs"`
 }
 
+// nudgeReceipt is what a submitted nudge's receipt holds (nhm-qaa): the
+// binding at its generation and the baseline read before the prompt.
+type nudgeReceipt struct {
+	b    bindings.Binding
+	base wait.Baseline
+}
+
 // nudgeScope is a wake operation's scope.
 type nudgeScope struct {
 	BindingID string `json:"binding_id"`
@@ -361,6 +381,12 @@ func Nudge(ctx context.Context, env Env, b bindings.Binding, trigger string) (De
 		return d, setWakeAfter(ctx, env, b.ID, h.after)
 	}
 	d.OperationID, d.Pending = opID, claimed
+	// The receipt's baseline is the gate's read, as a send's is. Without
+	// herdr's sequence no wait can use it, so the nudge gets no receipt.
+	var rc *nudgeReceipt
+	if base, err := wait.Capture(b, agent, env.inode(), env.now()); err == nil {
+		rc = &nudgeReceipt{b: b, base: base}
+	}
 	// Without a wait: the sender spends nothing, and the gate above saw
 	// the agent idle or done.
 	_, perr := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: b.PaneID, Text: Prompt})
@@ -373,7 +399,7 @@ func Nudge(ctx context.Context, env Env, b bindings.Binding, trigger string) (De
 	// a prompt that went out must not stay attempt_started.
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
-	return d, finish(fctx, env, opID, b.ID, claimed, status, env.now())
+	return d, finish(fctx, env, opID, b.ID, claimed, status, rc, env.now())
 }
 
 func anyInFlight(rows []pendingRow) bool {
@@ -563,7 +589,11 @@ func release(ctx context.Context, env Env, bindingID string, ids []string) error
 // the operation did. So a prompt herdr refused after a stale settle makes
 // its mail pending again (nothing was typed), and a late outcome never
 // overwrites one that another path wrote.
-func finish(ctx context.Context, env Env, opID, bindingID string, ids []string, status string, now time.Time) error {
+//
+// A submitted nudge with rc writes its receipt in the same transaction.
+// A possibly submitted one gets none: its receipt would count as a send
+// that may have reached its target (the snapshot's uncertain receipts).
+func finish(ctx context.Context, env Env, opID, bindingID string, ids []string, status string, rc *nudgeReceipt, now time.Time) error {
 	ts := store.FormatTime(now)
 	tx, err := env.DB.SQL().BeginTx(ctx, nil)
 	if err != nil {
@@ -591,6 +621,16 @@ func finish(ctx context.Context, env Env, opID, bindingID string, ids []string, 
 		status, announced, ts, bindingID, string(list), send.StatusAttemptStarted, send.StatusPossiblySubmitted)
 	if err != nil {
 		return fmt.Errorf("wake: finish %s: %w", opID, err)
+	}
+	if rc != nil && status == send.StatusSubmitted {
+		base, _ := json.Marshal(rc.base)
+		res, _ := json.Marshal(send.ReceiptResult{Key: rc.b.MailName, MailName: rc.b.MailName, PaneID: rc.b.PaneID,
+			Kind: rc.b.Kind, Gate: send.GateReady, TaskResult: "unknown"})
+		if _, err := tx.ExecContext(ctx, `INSERT INTO receipts (operation_id, target_index, binding_id, generation,
+			status, baseline_json, result_json, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?)`,
+			opID, rc.b.ID, rc.b.Generation, status, string(base), string(res), ts); err != nil {
+			return fmt.Errorf("wake: finish %s: receipt: %w", opID, err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("wake: finish %s: %w", opID, err)
@@ -764,6 +804,11 @@ func Prune(ctx context.Context, env Env) (int, error) {
 		return 0, fmt.Errorf("wake: prune: %w", err)
 	}
 	for _, id := range oldOps {
+		// A submitted nudge's receipt goes first: it references the
+		// operation.
+		if _, err := db.ExecContext(ctx, `DELETE FROM receipts WHERE operation_id = ?`, id); err != nil {
+			return 0, fmt.Errorf("wake: prune: %w", err)
+		}
 		if _, err := db.ExecContext(ctx, `DELETE FROM operations WHERE operation_id = ? AND verb = ?`, id, Verb); err != nil {
 			return 0, fmt.Errorf("wake: prune: %w", err)
 		}

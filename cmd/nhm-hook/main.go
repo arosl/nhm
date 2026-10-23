@@ -34,6 +34,7 @@ import (
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/hooks"
+	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
@@ -194,8 +195,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 // wakeEnv is the wake side of an opened instance. Settle reads an inbox,
 // so it gets an Agent Mail client; mail-sent reads none.
 func wakeEnv(env hooks.Env, getenv func(string) string, withMail bool) (wake.Env, error) {
-	w := wake.Env{DB: env.DB, Bindings: env.Bindings, Herdr: herdr.New(getenv("HERDR_SOCKET_PATH")),
-		Config: wake.DefaultConfig(), Now: env.Now}
+	h := herdr.New(getenv("HERDR_SOCKET_PATH"))
+	w := wake.Env{DB: env.DB, Bindings: env.Bindings, Herdr: h, Config: wake.DefaultConfig(), Now: env.Now,
+		Inode: func() uint64 { return wait.SocketInode(h.SocketPath) }}
 	if withMail {
 		mail, err := agentmail.NewClient(env.ConfigHome)
 		if err != nil {

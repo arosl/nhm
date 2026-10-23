@@ -539,10 +539,11 @@ func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.R
 // spawn and before it sent them anything. The caller holds the
 // operation's lock, so the first run is over and its records are final.
 // An agent is untouched when its target is ready, no kickoff is recorded,
-// no receipt of another operation and no ledger row of any status names
-// its binding, and the binding is still the spawn's occupant (active at
-// its first generation, in its pane and the spawn's workspace) with
-// herdr's agent ready for a prompt; every other agent counts as touched.
+// no receipt of another operation (a mail nudge's aside) and no ledger
+// row of any status names its binding, and the binding is still the
+// spawn's occupant (active at its first generation, in its pane and the
+// spawn's workspace) with herdr's agent ready for a prompt; every other
+// agent counts as touched.
 // It fills res.WorkspaceID, which the stored outcome does not keep, from
 // the first binding. A read that fails is an error: nothing is sent then.
 func replayUntouched(ctx context.Context, ie *instanceEnv, res *spawn.Result) ([]int, error) {

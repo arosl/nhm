@@ -12,6 +12,7 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/templates"
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
@@ -897,11 +898,14 @@ func stored(ctx context.Context, db *store.DB, opID string) (Result, error) {
 // another operation names: a send (a kickoff, a bead's dispatch, nhm
 // send), a reap. send writes its receipt before it types anything, so a
 // binding that is not in the set has had no prompt from nhm since the
-// spawn (nhm-vcf).
+// spawn (nhm-vcf), other than mail nudges. A nudge's receipt (nhm-qaa)
+// does not count: a nudge gives no work, and nudges had no receipts
+// before.
 func ReachedBindings(ctx context.Context, db *store.DB, opID string) (map[string]bool, error) {
 	rows, err := db.SQL().QueryContext(ctx, `SELECT DISTINCT r.binding_id FROM receipts r
 		JOIN receipts s ON s.binding_id = r.binding_id
-		WHERE s.operation_id = ? AND r.operation_id != ?`, opID, opID)
+		JOIN operations o ON o.operation_id = r.operation_id
+		WHERE s.operation_id = ? AND r.operation_id != ? AND o.verb != ?`, opID, opID, wake.Verb)
 	if err != nil {
 		return nil, fmt.Errorf("spawn: receipts of %s's agents: %w", opID, err)
 	}

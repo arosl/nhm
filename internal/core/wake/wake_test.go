@@ -12,6 +12,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/send"
+	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/store"
@@ -281,6 +282,77 @@ func TestPossiblySubmittedIsAnnouncedAndVisible(t *testing.T) {
 	}
 }
 
+// A nudge that herdr took gets a receipt, as a send's target does
+// (nhm-qaa): the binding, its generation and the baseline read before the
+// prompt. A refused or possibly submitted nudge gets none, and nor does
+// one without herdr's sequence. Prune removes the receipt with its
+// operation.
+func TestASubmittedNudgeHasAReceipt(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.env.Inode = func() uint64 { return 77 }
+	withSeq := func(pane string, seq uint64) {
+		a := w.h.agents[pane]
+		a.StateChangeSeq = &seq
+		w.h.agents[pane] = a
+	}
+	icy := w.bind(t, "IcyKnoll", "w1:p1", "pi", herdr.StatusDone)
+	withSeq("w1:p1", 9)
+	w.bind(t, "BlueLake", "w1:p2", "pi", herdr.StatusIdle)
+	withSeq("w1:p2", 4)
+	w.bind(t, "SageOak", "w1:p3", "pi", herdr.StatusIdle)
+	withSeq("w1:p3", 4)
+	w.bind(t, "RedFox", "w1:p4", "pi", herdr.StatusIdle)
+	w.h.promptErr["w1:p2"] = &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotReady}
+	w.h.promptErr["w1:p3"] = &herdr.Error{Method: "agent.prompt", Code: "timeout"}
+	rep, err := MailSent(ctx, w.env, []Sent{sent(1, "GoldLark", "t1", "IcyKnoll", "BlueLake", "SageOak", "RedFox")})
+	if err != nil || len(rep.Decisions) != 4 {
+		t.Fatalf("report = %+v, %v", rep, err)
+	}
+	ops := map[string]Decision{}
+	for _, d := range rep.Decisions {
+		ops[d.MailName] = d
+	}
+	if ops["IcyKnoll"].Outcome != send.StatusSubmitted || ops["BlueLake"].Outcome != send.StatusRefused ||
+		ops["SageOak"].Outcome != send.StatusPossiblySubmitted || ops["RedFox"].Outcome != send.StatusSubmitted {
+		t.Fatalf("decisions = %+v", rep.Decisions)
+	}
+	opID := ops["IcyKnoll"].OperationID
+	rs, err := wait.Receipts(ctx, w.env.DB.SQL(), opID)
+	if err != nil || len(rs) != 1 {
+		t.Fatalf("receipts = %+v, %v", rs, err)
+	}
+	r := rs[0]
+	if r.BindingID != icy.ID || r.Generation != icy.Generation || r.Status != send.StatusSubmitted || r.Baseline == nil ||
+		r.Baseline.StateChangeSeq != 9 || r.Baseline.State != herdr.StatusDone || r.Baseline.SocketInode != 77 ||
+		r.Baseline.Generation != icy.Generation {
+		t.Fatalf("receipt = %+v, baseline %+v", r, r.Baseline)
+	}
+	// The recent-operations view names the agent from the result.
+	var name string
+	if err := w.env.DB.SQL().QueryRow(`SELECT json_extract(result_json, '$.mail_name') FROM receipts WHERE operation_id = ?`,
+		opID).Scan(&name); err != nil || name != "IcyKnoll" {
+		t.Fatalf("result mail_name = %q, %v", name, err)
+	}
+	for _, n := range []string{"BlueLake", "SageOak", "RedFox"} {
+		if _, err := wait.Receipts(ctx, w.env.DB.SQL(), ops[n].OperationID); !errors.Is(err, wait.ErrNoReceipts) {
+			t.Errorf("%s (%s): receipts err = %v, want none", n, ops[n].Outcome, err)
+		}
+	}
+	// Past Keep, Prune deletes the operation and its receipt.
+	w.now = w.now.Add(w.env.Config.Keep + time.Hour)
+	if _, err := Prune(ctx, w.env); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := w.env.DB.SQL().QueryRow(`SELECT COUNT(*) FROM receipts`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("receipts left = %d, %v", left, err)
+	}
+	if _, err := w.env.DB.Operation(ctx, opID); err == nil {
+		t.Fatal("the nudge's operation was not pruned")
+	}
+}
+
 func TestRefusedStaysPendingAndIsRetried(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -436,7 +508,7 @@ func TestFinishAfterAStaleSettleKeepsTheTruth(t *testing.T) {
 	if n, err := ResolveStale(ctx, w.env); err != nil || n != 1 {
 		t.Fatalf("stale = %d, %v", n, err)
 	}
-	if err := finish(ctx, w.env, opID, b.ID, claimed, send.StatusRefused, w.now); err != nil {
+	if err := finish(ctx, w.env, opID, b.ID, claimed, send.StatusRefused, nil, w.now); err != nil {
 		t.Fatal(err)
 	}
 	if op, _ := w.env.DB.Operation(ctx, opID); op.Status != send.StatusRefused {
@@ -463,7 +535,7 @@ func TestStaleNeverOverwritesAnOutcome(t *testing.T) {
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim = %v, %v", claimed, err)
 	}
-	if err := finish(ctx, w.env, opID, b.ID, claimed, send.StatusFailed, w.now); err != nil {
+	if err := finish(ctx, w.env, opID, b.ID, claimed, send.StatusFailed, nil, w.now); err != nil {
 		t.Fatal(err)
 	}
 	w.now = w.now.Add(w.env.Config.InFlight + time.Second)

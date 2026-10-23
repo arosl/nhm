@@ -12,6 +12,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/wait"
+	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
 )
 
@@ -104,6 +105,11 @@ is herdr's done only.
 --until complete waits for a completion after the baseline by the same
 binding generation. It is "complete" only when nhm also saw the turn
 start; otherwise it is "ambiguous". A blocked agent is never complete.
+
+--after-op takes a send's operation, or the operation of a nudge that
+herdr took (nhm wake --json gives it as operation_id). A nudge does not
+wait for its turn to start, so that turn is "complete" only when this
+wait sees it start.
 
 Results per agent: idle, done, generating, healthy, complete, ambiguous,
 timeout, replaced (a new occupant), continuity_lost (herdr restarted or
@@ -227,6 +233,13 @@ func opTargets(ctx context.Context, ie *instanceEnv, store *bindings.Store, opID
 	if err != nil {
 		return nil, err
 	}
+	op, err := ie.db.Operation(ctx, opID)
+	if err != nil {
+		return nil, err
+	}
+	// A nudge types its line without a wait for the turn's start
+	// (nhm-qaa): herdr took it, but nobody saw the turn begin.
+	nudge := op.Verb == wake.Verb
 	var list []bindings.Binding
 	byID := map[string]wait.Receipt{}
 	for _, r := range receipts {
@@ -251,7 +264,7 @@ func opTargets(ctx context.Context, ie *instanceEnv, store *bindings.Store, opID
 	targets := make([]wait.Target, len(list))
 	for i, b := range list {
 		r := byID[b.ID]
-		targets[i] = wait.Target{Binding: b, Baseline: r.Baseline, Submission: r.Status}
+		targets[i] = wait.Target{Binding: b, Baseline: r.Baseline, Submission: r.Status, StartUnseen: nudge}
 	}
 	return targets, nil
 }
