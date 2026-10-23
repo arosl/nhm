@@ -133,8 +133,8 @@ interval, read each pane's last lines and print the lines that are new.
 A pane's last 10 lines are its live region: the prompt box, status line
 and spinner that a working agent redraws in place. watch prints a line
 only once it is above them, so an idle agent's last few lines wait for
-its next output. --lines N counts the lines above them (at most the
-pane's height). The first round prints those lines. A later round
+its next output. --lines N counts the lines above them (fewer when the
+pane holds fewer). The first round prints those lines. A later round
 prints a line when its text is not in the last read, so a line that the
 agent redraws prints once, with its new text, and a line whose exact
 text is already there does not print again. Blank lines are left out.
