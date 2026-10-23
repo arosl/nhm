@@ -218,6 +218,9 @@ func brBead(ctx context.Context, projectRoot, id string) (enrich.Bead, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "br", "show", id, "--json")
 	cmd.Dir = projectRoot
+	// As send.BrShow: a child that holds stdout open ends with the
+	// timeout (nhm-fty).
+	cmd.WaitDelay = time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

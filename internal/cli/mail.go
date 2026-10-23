@@ -197,7 +197,11 @@ func firstOf(values ...string) string {
 
 // workTree is the cwd's git work tree, or the cwd.
 func workTree(ctx context.Context) string {
-	if out, err := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel").Output(); err == nil {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	// A child of git that holds stdout open cannot hold the call more
+	// than WaitDelay past ctx or past git's exit (nhm-fty).
+	cmd.WaitDelay = time.Second
+	if out, err := cmd.Output(); err == nil {
 		if top := strings.TrimSpace(string(out)); top != "" {
 			return top
 		}

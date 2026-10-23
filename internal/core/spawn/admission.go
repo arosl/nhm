@@ -360,7 +360,11 @@ func CommandCapacity(argv []string) func(ctx context.Context) (Capacity, error) 
 	return func(ctx context.Context) (Capacity, error) {
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		// A provider is often a script: a child of it that holds stdout
+		// open must not keep the spawn past the timeout (nhm-fty).
+		cmd.WaitDelay = time.Second
+		out, err := cmd.Output()
 		var c Capacity
 		if jerr := json.Unmarshal(out, &c); jerr != nil || c.Status == "" {
 			if err == nil {

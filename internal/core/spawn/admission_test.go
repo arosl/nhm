@@ -1,15 +1,35 @@
 package spawn
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The package's tests never read the caller's own Claude settings.
 func init() { ClaudeSettingsPath = func() string { return "" } }
+
+// A capacity provider is often a script: a child of it that holds stdout
+// open does not keep the spawn past its context (nhm-fty).
+func TestCommandCapacityEndsWhenAChildHoldsStdout(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "capacity")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 30\necho '{\"status\":\"green\"}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if c, err := CommandCapacity([]string{bin, "--guard", "--json"})(ctx); err == nil {
+		t.Fatalf("a killed provider gave %+v", c)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the provider took %v after its context ended", took)
+	}
+}
 
 func withClaudeSettings(t *testing.T, content string) {
 	t.Helper()

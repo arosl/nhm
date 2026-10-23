@@ -4,7 +4,7 @@
 // only ResolveProjectDir and what it calls (FindProjectConfigRoot,
 // FindBeadsRoot, FindGitRoot with its cache) are kept, for the bv port's
 // normalizeTriageDir. NTMDir, ExpandPath, EnsureDir and the project scoring
-// are left out.
+// are left out. findGitRootUncached sets cmd.WaitDelay (nhm-fty).
 
 // Package util is the part of ntm's util package that nhm's port of ntm's
 // bv package calls.
@@ -77,6 +77,7 @@ func findGitRootUncached(startDir string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = startDir
+	cmd.WaitDelay = time.Second // nhm-fty: a child of git that holds stdout open
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
