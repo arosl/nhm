@@ -95,6 +95,8 @@ Usage:
                          one agent's unread mail by thread; --mark-read marks it read
   nhm doctor [-v] [--json]
                          ntm's ecosystem check, on herdr and nhm's setup
+  nhm doctor contention [--terminate-pid N --confirm [--force]] [--json]
+                         the processes that hold beads, cargo or rsync
   nhm deps [-v] [--json] (also check)
                          the tools and agent CLIs installed, as ntm's deps
   nhm tutorial           where ACFS's lessons are (ntm's tutorial is about tmux)

@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/arosl/nhm/internal/core/contention"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 )
 
@@ -147,5 +149,85 @@ func TestDoctorExitsOneOnlyWhenUnhealthy(t *testing.T) {
 	}
 	if code, _, errOut := run("doctor", "stray"); code != exitError || !strings.Contains(errOut, `unknown command "stray" for "nhm doctor"`) {
 		t.Fatalf("doctor stray = %d %q", code, errOut)
+	}
+}
+
+// fakeContention points doctor contention at a /proc of the given
+// processes: pid → command line (NUL-separated) and cwd.
+func fakeContention(t *testing.T, procs map[string][2]string) {
+	t.Helper()
+	root := t.TempDir()
+	for pid, p := range procs {
+		dir := filepath.Join(root, pid)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(p[0]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(p[1], filepath.Join(dir, "cwd")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := contentionScanner
+	contentionScanner = func() contention.Scanner { return contention.Scanner{Root: root, Now: time.Now, ClockTicks: 100} }
+	t.Cleanup(func() { contentionScanner = old })
+}
+
+// ntm's doctor contention: its table, its JSON and its refusals.
+func TestDoctorContention(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	fakeContention(t, map[string][2]string{})
+	if code, out, errOut := run("doctor", "contention"); code != 0 || out != "No shared-resource contention detected.\n" || errOut != "" {
+		t.Fatalf("no holders = %d %q %q", code, out, errOut)
+	}
+	if code, out, _ := run("doctor", "contention", "--json"); code != 0 || out != "{\"holders\":[]}\n" {
+		t.Fatalf("no holders --json = %d %q", code, out)
+	}
+
+	fakeContention(t, map[string][2]string{
+		"42": {"br\x00ready\x00", filepath.Join(cwd, "sub")},
+		"7":  {"/usr/bin/cargo\x00build\x00", "/elsewhere"},
+	})
+	code, out, errOut := run("doctor", "contention")
+	want := "PID\tAGE\tRESOURCE\tIN_SWARM\tCWD\tCOMMAND\n" +
+		"7\t0s\tcargo_registry\tfalse\t/elsewhere\t/usr/bin/cargo build\n" +
+		"42\t0s\tbeads_db\ttrue\t" + filepath.Join(cwd, "sub") + "\tbr ready\n"
+	if code != 0 || out != want || errOut != "" {
+		t.Fatalf("holders = %d %q %q", code, out, errOut)
+	}
+	code, out, _ = run("doctor", "contention", "--json")
+	var got struct {
+		Holders []contention.Holder `json:"holders"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); code != 0 || err != nil || len(got.Holders) != 2 || got.Holders[1].PID != 42 || !got.Holders[1].InSwarm {
+		t.Fatalf("holders --json = %d %v %q", code, err, out)
+	}
+
+	for _, c := range []struct {
+		args []string
+		err  string
+	}{
+		{[]string{"--terminate-pid", "42"}, "Error: refusing termination without --confirm\n"},
+		{[]string{"--terminate-pid", "42", "--confirm"}, "Error: refusing to terminate in-swarm PID 42 without --force\n"},
+		{[]string{"--terminate-pid", "1", "--confirm"}, "Error: PID 1 is not a detected contention holder\n"},
+	} {
+		if code, out, errOut := run(append([]string{"doctor", "contention"}, c.args...)...); code != exitError || out != "" || errOut != c.err {
+			t.Fatalf("%v = %d %q %q", c.args, code, out, errOut)
+		}
+	}
+	code, out, _ = run("doctor", "contention", "--terminate-pid", "1", "--confirm", "--json")
+	var refusal struct {
+		Success   *bool  `json:"success"`
+		Error     string `json:"error"`
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.Unmarshal([]byte(out), &refusal); code != exitError || err != nil || refusal.Success == nil || *refusal.Success ||
+		refusal.Error != "PID 1 is not a detected contention holder" || refusal.ErrorCode != "INTERNAL_ERROR" {
+		t.Fatalf("--json refusal = %d %v %q", code, err, out)
+	}
+	if code, _, errOut := run("doctor", "contention", "extra"); code != exitError || !strings.Contains(errOut, `unknown command "extra" for "nhm doctor contention"`) {
+		t.Fatalf("contention extra = %d %q", code, errOut)
 	}
 }

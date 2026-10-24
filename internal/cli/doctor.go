@@ -21,6 +21,7 @@ import (
 )
 
 const doctorUsage = `Usage: nhm doctor [-v|--verbose] [--socket PATH] [--no-mail] [--json]
+       nhm doctor contention [--terminate-pid N --confirm [--force]] [--json]
        nhm doctor --herdr-fit [--placements] [--socket PATH] [--json]
 
 ntm's doctor on herdr: Tools (bv and br required, the other flywheel
@@ -34,6 +35,12 @@ Defaults and Design Invariants. Each line is ✓, ⚠, ✗ or ?, and a box
 ends it: Overall: HEALTHY, or UNHEALTHY with the counts. -v adds each
 invariant's details. --json prints ntm's DoctorReport. It exits 1 only
 when the report is unhealthy. --no-mail skips the Agent Mail check.
+
+doctor contention lists the processes that hold a shared resource: the
+beads database, cargo's registry, rsync, or an uninterruptible wait. A
+holder whose directory is in this one is in the swarm. --terminate-pid
+sends SIGTERM to a listed holder: only with --confirm, and one in the
+swarm only with --force too.
 
 --herdr-fit checks that the running herdr still fits nhm's interactive
 surfaces (the X0 fit test): its protocol and version, nhm's plugin, and a

@@ -3,7 +3,8 @@
 // DepCheck, DaemonCheck, ConfigCheck, doctorExitFailure, runDoctor,
 // performDoctorCheck's counts and verdict, checkTools' statuses,
 // checkDependencies' go, grok and omp checks, daemonVerdict, checkDaemons,
-// the .beads check of checkConfiguration, renderDoctorTUITo) and
+// the .beads check of checkConfiguration, renderDoctorTUITo,
+// newDoctorContentionCmd) and
 // internal/invariants/invariants.go (the six invariants' ids and names,
 // checkGracefulDegradation's rule, the unverified status) at commit
 // 9d5ed977; see LICENSE in this directory and PROVENANCE.md. Local changes:
@@ -15,6 +16,8 @@
 // per-tool health and capability probes; the safety defaults and the
 // invariants read nhm's guards, store and herdr, and the ones with no nhm
 // evidence are unverified. --socket, --no-mail and --herdr-fit stay nhm's.
+// contention scans through internal/core/contention, and prints each
+// command without control characters.
 package cli
 
 import (
@@ -35,6 +38,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	"github.com/arosl/nhm/internal/core/contention"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/guards"
@@ -192,6 +196,57 @@ This command helps diagnose issues before spawning sessions.`,
 	fl.BoolVar(&noMail, "no-mail", false, "skip the Agent Mail check (nhm)")
 	fl.BoolVar(&fit, "herdr-fit", false, "check that the running herdr fits nhm's interactive surfaces (nhm)")
 	fl.BoolVar(&placements, "placements", false, "with --herdr-fit: also open a tab, a split and an overlay (sandbox, CI; nhm)")
+	cmd.AddCommand(newDoctorContentionCmd())
+	return cmd
+}
+
+// contentionScanner reads the processes of doctor contention (ntm's
+// newDoctorContentionCmd); tests give a fake /proc.
+var contentionScanner = contention.DefaultScanner
+
+func newDoctorContentionCmd() *cobra.Command {
+	var terminatePID int
+	var confirm, force bool
+	cmd := &cobra.Command{
+		Use:   "contention",
+		Short: "Find processes holding shared build and Beads resources",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			holders, err := contentionScanner().Holders(ctx, cwd)
+			if err != nil {
+				return err
+			}
+			if terminatePID > 0 {
+				if err := contention.Terminate(holders, terminatePID, confirm, force); err != nil {
+					return err
+				}
+			}
+			out := cmd.OutOrStdout()
+			if wantJSON(cmd) {
+				return json.NewEncoder(out).Encode(struct {
+					Holders []contention.Holder `json:"holders"`
+				}{Holders: holders})
+			}
+			if len(holders) == 0 {
+				fmt.Fprintln(out, "No shared-resource contention detected.")
+				return nil
+			}
+			fmt.Fprintln(out, "PID\tAGE\tRESOURCE\tIN_SWARM\tCWD\tCOMMAND")
+			for _, h := range holders {
+				fmt.Fprintf(out, "%d\t%s\t%s\t%t\t%s\t%s\n", h.PID, h.Age, h.Resource, h.InSwarm, h.CWD, stripControl(h.Command))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&terminatePID, "terminate-pid", 0, "Send SIGTERM to a listed PID (requires --confirm)")
+	cmd.Flags().BoolVar(&confirm, "confirm", false, "Confirm termination of --terminate-pid")
+	cmd.Flags().BoolVar(&force, "force", false, "Allow termination of an in-swarm PID (requires --confirm)")
 	return cmd
 }
 
