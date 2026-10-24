@@ -13,7 +13,8 @@
 // the operator's path ruling, 2026-10-24), and nothing in nhm writes
 // them yet; the plan is internal/robot's SpawnStaggerPlan; the pacer is
 // exported for the assignment phase (Pacer), with nhm's clock and sleep;
-// ntm's legacy --stagger[=D] mode is not taken here (the human spawn's).
+// the legacy --stagger[=D] interval is a parameter of its own
+// (nhm-2p6.4.14), not a field of a request type.
 package spawn
 
 import (
@@ -69,11 +70,12 @@ type SpawnStagger struct {
 	Provider string        // smart only: rate-limit bucket Interval was learned from
 }
 
-// ResolveSpawnStagger resolves a mode and a fixed delay for a batch of
-// agents of ntm types. Smart mode takes the learned delay of the strictest
-// provider in the batch from learned (nil: no learned history), else that
-// provider's built-in default delay.
-func ResolveSpawnStagger(mode string, delay time.Duration, agentTypes []string, learned map[string]time.Duration) SpawnStagger {
+// ResolveSpawnStagger resolves a mode, a fixed delay and the legacy
+// --stagger interval for a batch of agents of ntm types. Smart mode takes
+// the learned delay of the strictest provider in the batch from learned
+// (nil: no learned history), else that provider's built-in default delay.
+// The legacy interval applies only when the mode is none.
+func ResolveSpawnStagger(mode string, delay, legacy time.Duration, agentTypes []string, learned map[string]time.Duration) SpawnStagger {
 	switch mode {
 	case StaggerFixed:
 		return SpawnStagger{Mode: StaggerFixed, Interval: delay}
@@ -84,6 +86,9 @@ func ResolveSpawnStagger(mode string, delay time.Duration, agentTypes []string, 
 			interval = defaultDelay(provider)
 		}
 		return SpawnStagger{Mode: StaggerSmart, Interval: interval, Provider: provider}
+	}
+	if legacy > 0 {
+		return SpawnStagger{Mode: StaggerLegacy, Interval: legacy}
 	}
 	return SpawnStagger{Mode: StaggerNone}
 }
@@ -188,7 +193,7 @@ func (s SpawnStagger) Delay(order int) time.Duration {
 // target in order, and builds its reportable schedule. An unreadable
 // rate-limit history degrades smart mode to the built-in provider delay
 // and says so.
-func PlanStagger(mode string, delay time.Duration, dir string, targets []Target) (SpawnStagger, *robot.SpawnStaggerPlan) {
+func PlanStagger(mode string, delay, legacy time.Duration, dir string, targets []Target) (SpawnStagger, *robot.SpawnStaggerPlan) {
 	agentTypes := make([]string, 0, len(targets))
 	for _, t := range targets {
 		agentTypes = append(agentTypes, ntmType(t.Kind))
@@ -203,7 +208,7 @@ func PlanStagger(mode string, delay time.Duration, dir string, targets []Target)
 			learned = loaded
 		}
 	}
-	stagger := ResolveSpawnStagger(mode, delay, agentTypes, learned)
+	stagger := ResolveSpawnStagger(mode, delay, legacy, agentTypes, learned)
 	plan := &robot.SpawnStaggerPlan{
 		Mode:       stagger.Mode,
 		IntervalMs: stagger.Interval.Milliseconds(),

@@ -46,7 +46,7 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc|--cod|--grok|--omp|--pi=N[:
                  [--assign [--strategy S] [--limit N] [--init-prompt T] [--assign-agent TYPE]
                   [--assign-cc-only|--assign-cod-only|--assign-gmi-only|--assign-agy-only]
                   [--assign-verbose|--assign-quiet] [--assign-timeout D] [--yes]]
-                 [--stagger-mode fixed|smart] [--stagger-delay D] [--ready-timeout D]
+                 [--stagger[=D]] [--stagger-mode none|fixed|smart] [--stagger-delay D] [--ready-timeout D]
                  [--trust-folder] [--force] [--ignore-capacity] [--allow-unguarded]
                  [--require-observations] [--project DIR] [--op-id ID] [--dry-run]
                  [--socket PATH] [--json]
@@ -198,10 +198,20 @@ type spawnFlags struct {
 	role                    string
 	dryRun, asJSON          bool
 	safety                  bool
+	// staggerLegacy is spawn's --stagger[=D]; staggerOn says it was given.
+	staggerLegacy time.Duration
+	staggerOn     bool
+	// defaultsNote is ntm's "Using default configuration: …" when the
+	// project's [defaults] gave the agents.
+	defaultsNote string
+	fs           *pflag.FlagSet
 }
 
+// changed reports whether the user set the flag.
+func (f *spawnFlags) changed(name string) bool { return f.fs != nil && f.fs.Changed(name) }
+
 func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
-	f := &spawnFlags{}
+	f := &spawnFlags{fs: fs}
 	fs.Var(&agentFlag{wants: &f.wants}, "agent", "KIND=N[:MODEL[:EFFORT]] (repeatable)")
 	fs.StringVar(&f.effort, "effort", "", "reasoning effort (default: each kind's, ntm's xhigh for claude and codex)")
 	fs.StringVar(&f.role, "role", "", "reviewer: the agents work no beads (reap may retire them)")
@@ -231,8 +241,11 @@ func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
 	fs.BoolVar(&f.assignCodOnly, "assign-cod-only", false, "with --assign: only Codex agents")
 	fs.BoolVar(&f.assignGmiOnly, "assign-gmi-only", false, "with --assign: only Gemini agents")
 	fs.BoolVar(&f.assignAgyOnly, "assign-agy-only", false, "with --assign: only Antigravity agents")
-	fs.StringVar(&f.staggerMode, "stagger-mode", "", "fixed or smart")
-	fs.DurationVar(&f.staggerDelay, "stagger-delay", 0, "the delay between starts")
+	// ntm's spawn flags and defaults (bd-2wih); add takes them too, with no
+	// [spawn] defaults, as ntm's add has no stagger.
+	fs.StringVar(&f.staggerMode, "stagger-mode", spawn.StaggerNone, "Stagger mode: smart (adaptive), fixed, or none (unset: [spawn] stagger_mode)")
+	fs.DurationVar(&f.staggerDelay, "stagger-delay", spawn.DefaultStaggerDelay,
+		"Fixed delay between agents (used with --stagger-mode=fixed; unset: [spawn] stagger_delay)")
 	fs.DurationVar(&f.readyWait, "ready-timeout", 60*time.Second, "the wait for each agent to be ready")
 	fs.BoolVar(&f.trustFolder, "trust-folder", false, "answer the kind's folder-trust dialog")
 	fs.BoolVar(&f.force, "force", false, "start over a quota at 90 % (not over a limit)")
@@ -295,16 +308,46 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 		}
 		req.Prompt = text
 	}
+	cfg, err := loadSpawnConfig()
+	if err != nil {
+		return req, err
+	}
 	// The agents start in the order of their flags, as ntm's do.
 	req.Agents = append([]spawn.Want(nil), f.wants...)
+	if !add {
+		// ntm's spawn: the [spawn] stagger defaults go beneath the flags,
+		// and an explicit --stagger also chooses the mode
+		// (resolveSpawnStaggerDefaults); --stagger is the legacy interval.
+		if req.StaggerMode, req.StaggerDelay, err = resolveSpawnStaggerDefaults(cfg, f.staggerMode,
+			f.changed("stagger-mode") || f.changed("stagger"), f.staggerDelay, f.changed("stagger-delay")); err != nil {
+			return req, err
+		}
+		if f.staggerOn {
+			req.StaggerLegacy = f.staggerLegacy
+		}
+		// With no agent flag, the counts of the project's [defaults]
+		// agents (ntm's .ntm/config.toml).
+		if len(req.Agents) == 0 {
+			dir := f.project
+			if dir == "" {
+				dir, _ = os.Getwd()
+			}
+			counts, err := loadProjectDefaults(dir)
+			if err != nil {
+				return req, err
+			}
+			if req.Agents, err = countMapWants(counts); err != nil {
+				return req, err
+			}
+			if len(req.Agents) > 0 {
+				f.defaultsNote = "Using default configuration: " + formatSpawnCountSummary(counts)
+			}
+		}
+	}
 	// ntm's spawn sends each kind's [prompts] default ahead of --prompt;
 	// its add sends --prompt only. --assign sends --prompt ahead of the
 	// work (AssignPrefix).
 	if !add && !f.noKickoff && !f.assign {
-		cfg, err := loadSpawnConfig()
-		if err != nil {
-			return req, err
-		}
 		if req.DefaultPrompts, err = cfg.Prompts.defaultPrompts(req.Agents); err != nil {
 			return req, err
 		}
@@ -387,10 +430,19 @@ func newSpawnVerbCmd(verb, short string) *cobra.Command {
 	}
 	f = addSpawnFlags(cmd.Flags())
 	if verb == "spawn" {
-		// ntm's spawn only; its add has no --safety.
-		cmd.Flags().BoolVar(&f.safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
+		addSpawnOnlyFlags(cmd.Flags(), f)
 	}
 	return cmd
+}
+
+// addSpawnOnlyFlags adds the flags of ntm's spawn that its add does not
+// have: --safety and --stagger.
+func addSpawnOnlyFlags(fs *pflag.FlagSet, f *spawnFlags) {
+	fs.BoolVar(&f.safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
+	// --stagger enables ntm's documented 90s; --stagger=2m a duration.
+	staggerValue := newOptionalDurationValue(90*time.Second, &f.staggerLegacy, &f.staggerOn)
+	fs.Var(staggerValue, "stagger", "Stagger prompt delivery between agents (default 90s when enabled)")
+	fs.Lookup("stagger").NoOptDefVal = staggerValue.NoOptDefVal()
 }
 
 // spawnVerb runs spawn or add. An argument error is returned, as ntm's
@@ -400,6 +452,9 @@ func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) (i
 	req, err := f.request(session, verb == "add")
 	if err != nil {
 		return exitError, err
+	}
+	if f.defaultsNote != "" && !f.asJSON {
+		fmt.Fprintln(stdout, f.defaultsNote)
 	}
 	if !f.assign {
 		return runSpawnNTM(context.Background(), verb, req, f.project, f.socket, f.asJSON, stdout, stderr), nil
@@ -1222,7 +1277,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	// --spawn-assign-work's work prompts go out on ntm's stagger schedule,
 	// in launch order; a dry run reports the plan.
 	if *assign && (*dryRun || out.Success) {
-		stagger, splan := spawn.PlanStagger(req.StaggerMode, req.StaggerDelay, res.ProjectRoot, res.Targets)
+		stagger, splan := spawn.PlanStagger(req.StaggerMode, req.StaggerDelay, 0, res.ProjectRoot, res.Targets)
 		out.Stagger = splan
 		if !*dryRun {
 			plan.Pacer = spawn.NewPacer(stagger, splan, nil, nil)

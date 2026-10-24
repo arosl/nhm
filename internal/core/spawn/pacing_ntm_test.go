@@ -2,10 +2,10 @@
 // internal/robot/spawn_pacing_test.go at commit 9d5ed977:
 // TestResolveSpawnStaggerModes and
 // TestResolveSpawnStaggerSmartProviderPriority; see LICENSE in this
-// directory and PROVENANCE.md. Local changes (nhm-2p6.4.10): this header;
-// package and imports; the learned delays are a map, in place of ntm's
-// tracker; the legacy --stagger cases are left out (not taken here); no
-// subtests; nhm's tests of LoadLearnedDelays and the Pacer follow.
+// directory and PROVENANCE.md. Local changes (nhm-2p6.4.10,
+// nhm-2p6.4.14): this header; package and imports; the learned delays are
+// a map, in place of ntm's tracker; the legacy interval is a parameter;
+// no subtests; nhm's tests of LoadLearnedDelays and the Pacer follow.
 package spawn
 
 import (
@@ -23,6 +23,7 @@ func TestResolveSpawnStaggerModes(t *testing.T) {
 		name         string
 		mode         string
 		delay        time.Duration
+		legacy       time.Duration
 		learned      map[string]time.Duration
 		wantMode     string
 		wantInterval time.Duration
@@ -30,14 +31,17 @@ func TestResolveSpawnStaggerModes(t *testing.T) {
 	}{
 		{name: "empty mode is none", delay: time.Minute, wantMode: "none"},
 		{name: "explicit none ignores the fixed delay", mode: "none", delay: time.Minute, wantMode: "none"},
+		{name: "legacy interval applies under none", mode: "none", legacy: 90 * time.Second, wantMode: "legacy", wantInterval: 90 * time.Second},
+		{name: "explicit fixed wins over legacy", mode: "fixed", delay: 5 * time.Second, legacy: 90 * time.Second, wantMode: "fixed",
+			wantInterval: 5 * time.Second},
 		{name: "fixed uses the delay", mode: "fixed", delay: 20 * time.Second, wantMode: "fixed", wantInterval: 20 * time.Second},
 		{name: "fixed zero delay is unpaced", mode: "fixed", wantMode: "fixed"},
-		{name: "smart reads the learned delay", mode: "smart", learned: learned, wantMode: "smart", wantInterval: 22500 * time.Millisecond,
-			wantProvider: "anthropic"},
+		{name: "smart reads the learned delay", mode: "smart", legacy: 90 * time.Second, learned: learned, wantMode: "smart",
+			wantInterval: 22500 * time.Millisecond, wantProvider: "anthropic"},
 		{name: "smart without history uses the built-in delay", mode: "smart", wantMode: "smart", wantInterval: DefaultDelayAnthropic,
 			wantProvider: "anthropic"},
 	} {
-		got := ResolveSpawnStagger(tc.mode, tc.delay, claude, tc.learned)
+		got := ResolveSpawnStagger(tc.mode, tc.delay, tc.legacy, claude, tc.learned)
 		if got.Mode != tc.wantMode || got.Interval != tc.wantInterval || got.Provider != tc.wantProvider {
 			t.Fatalf("%s: ResolveSpawnStagger = %+v, want mode %q interval %v provider %q", tc.name, got, tc.wantMode, tc.wantInterval,
 				tc.wantProvider)
@@ -69,7 +73,7 @@ func TestResolveSpawnStaggerSmartProviderPriority(t *testing.T) {
 		{types: []string{"opencode"}, want: "anthropic", interval: DefaultDelayAnthropic},
 		{types: []string{"oc", "pi"}, want: "anthropic", interval: DefaultDelayAnthropic},
 	} {
-		got := ResolveSpawnStagger(StaggerSmart, 0, tc.types, nil)
+		got := ResolveSpawnStagger(StaggerSmart, 0, 0, tc.types, nil)
 		if got.Provider != tc.want || got.Interval != tc.interval {
 			t.Fatalf("types %v: smart stagger = %+v, want provider %q at %v", tc.types, got, tc.want, tc.interval)
 		}
@@ -96,7 +100,7 @@ func TestLoadLearnedDelays(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stagger, plan := PlanStagger(StaggerSmart, 0, dir, []Target{{Kind: "claude", Slot: "1.1"}})
+	stagger, plan := PlanStagger(StaggerSmart, 0, 0, dir, []Target{{Kind: "claude", Slot: "1.1"}})
 	if stagger.Interval != DefaultDelayAnthropic || plan.Warning == "" || plan.Provider != "anthropic" {
 		t.Fatalf("a bad file = %+v %+v", stagger, plan)
 	}
@@ -108,7 +112,7 @@ func TestLoadLearnedDelays(t *testing.T) {
 func TestPacerHoldsEachSlotToItsOffset(t *testing.T) {
 	now := time.Date(2026, 10, 24, 6, 0, 0, 0, time.UTC)
 	var waits []time.Duration
-	stagger, plan := PlanStagger(StaggerFixed, 10*time.Second, "", []Target{{Kind: "claude", Slot: "1.1"}, {Kind: "codex", Slot: "1.2"},
+	stagger, plan := PlanStagger(StaggerFixed, 10*time.Second, 0, "", []Target{{Kind: "claude", Slot: "1.1"}, {Kind: "codex", Slot: "1.2"},
 		{Kind: "claude", Slot: "1.3"}})
 	p := NewPacer(stagger, plan, func() time.Time { return now }, func(_ context.Context, d time.Duration) error {
 		waits = append(waits, d)

@@ -34,6 +34,9 @@ const (
 	StaggerNone  = "none"
 	StaggerFixed = "fixed"
 	StaggerSmart = "smart"
+	// StaggerLegacy is ntm's mode of spawn's --stagger[=D]: a plan's mode,
+	// never a request's.
+	StaggerLegacy = "legacy"
 )
 
 // Request is one spawn, add or new.
@@ -86,6 +89,9 @@ type Request struct {
 	AssignOptions string
 	StaggerMode   string
 	StaggerDelay  time.Duration
+	// StaggerLegacy is ntm's spawn --stagger[=D] interval: it paces the
+	// prompts in mode "legacy" when StaggerMode is none; 0 is off.
+	StaggerLegacy time.Duration
 	ReadyTimeout  time.Duration
 	// NoWait starts the agents and does not wait for them to be ready:
 	// --robot-spawn without --spawn-wait or a prompt, as ntm's. It takes
@@ -165,6 +171,9 @@ func (r *Request) Validate() error {
 	}
 	if err := ValidateStaggerDelay(r.StaggerDelay); err != nil {
 		return fmt.Errorf("--stagger-delay %w", err)
+	}
+	if err := ValidateStaggerDelay(r.StaggerLegacy); err != nil {
+		return fmt.Errorf("--stagger %w", err)
 	}
 	if r.NoWait && !r.NoKickoff && (r.Prompt != "" || len(r.DefaultPrompts) > 0 || r.KickoffTemplate != "") {
 		return fmt.Errorf("a kickoff needs the agents ready: a spawn that does not wait sends none")

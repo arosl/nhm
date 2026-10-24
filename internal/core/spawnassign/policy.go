@@ -5,7 +5,8 @@
 // (AssignConfig, WorkSourceConfig.Policy) at commit 9d5ed977; see LICENSE in
 // this directory and PROVENANCE.md. Local changes: only the [assign] section
 // is read; the global file is nhm's config; an unknown key under [assign]
-// refuses.
+// refuses; FindProjectConfig is exported for spawn's [defaults] agents
+// (nhm-2p6.4.14).
 
 package spawnassign
 
@@ -108,6 +109,11 @@ func decodeAssign(path string, s *assignSection, missingOK bool) error {
 	}
 	return nil
 }
+
+// FindProjectConfig is findProjectConfig, for the spawn's [defaults]
+// agents (nhm-2p6.4.14): the path of the nearest .ntm/config.toml from
+// startDir, "" when there is none.
+func FindProjectConfig(startDir string) (string, error) { return findProjectConfig(startDir) }
 
 // findProjectConfig walks up from startDir to the nearest .ntm/config.toml,
 // as ntm's FindProjectConfig does: a lookup failure other than absence is an

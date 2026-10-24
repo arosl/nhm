@@ -271,7 +271,7 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 			for order, i := range prompted {
 				targets[order] = res.Targets[i]
 			}
-			stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.ProjectRoot, targets)
+			stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.StaggerLegacy, req.ProjectRoot, targets)
 			for order, i := range prompted {
 				res.Targets[i].DelayMS = stagger.Delay(order).Milliseconds()
 			}
@@ -362,7 +362,7 @@ func kickoffs(ctx context.Context, env Env, req Request, res *Result, kick kicko
 	for order, i := range ready {
 		targets[order] = res.Targets[i]
 	}
-	stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.ProjectRoot, targets)
+	stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.StaggerLegacy, req.ProjectRoot, targets)
 	res.Stagger = plan
 	pacer := NewPacer(stagger, plan, env.now, func(ctx context.Context, d time.Duration) error {
 		env.sleep(ctx, d)
@@ -999,6 +999,9 @@ func fingerprint(req Request) map[string]any {
 	}
 	if req.KickoffTemplate != "" {
 		fp["kickoff_template"] = req.KickoffTemplate
+	}
+	if req.StaggerLegacy > 0 {
+		fp["stagger_legacy_ms"] = req.StaggerLegacy.Milliseconds()
 	}
 	return fp
 }

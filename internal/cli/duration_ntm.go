@@ -1,16 +1,85 @@
 // Taken in part from ntm (github.com/Dicklesworthstone/ntm)
 // internal/util/duration.go at commit 9d5ed977: ParseDuration and
-// ParseDurationWithDefault; see LICENSE in this directory and
-// PROVENANCE.md. Local changes (nhm-2p6.4.2): this header; package and
+// ParseDurationWithDefault; and internal/cli/spawn.go at the same commit:
+// optionalDurationValue; see LICENSE in this directory and PROVENANCE.md.
+// Local changes (nhm-2p6.4.2, nhm-2p6.4.14): this header; package and
 // imports; unexported names; a bare number logs no deprecation warning,
-// as ntm's robot calls discard their diagnostics (suppressRobotDiagnostics).
+// as ntm's robot calls discard their diagnostics (suppressRobotDiagnostics);
+// the stagger bound is core/spawn's MaxStaggerDelay.
 package cli
 
 import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/arosl/nhm/internal/core/spawn"
 )
+
+// optionalDurationValue is a duration flag that may stand alone: spawn's
+// --stagger enables the default (90s), --stagger=2m a duration, and
+// --stagger=0 turns it off.
+type optionalDurationValue struct {
+	defaultDuration time.Duration
+	duration        *time.Duration
+	enabled         *bool
+}
+
+func newOptionalDurationValue(defaultDur time.Duration, dur *time.Duration, enabled *bool) *optionalDurationValue {
+	*dur = defaultDur // Set default
+	return &optionalDurationValue{
+		defaultDuration: defaultDur,
+		duration:        dur,
+		enabled:         enabled,
+	}
+}
+
+func (v *optionalDurationValue) String() string {
+	if v.duration != nil && *v.enabled {
+		return v.duration.String()
+	}
+	return ""
+}
+
+func (v *optionalDurationValue) Set(s string) error {
+	*v.enabled = true
+	if s == "" {
+		*v.duration = v.defaultDuration
+		return nil
+	}
+	// Handle "0" as disable
+	if s == "0" {
+		*v.enabled = false
+		*v.duration = 0
+		return nil
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration: %w", err)
+	}
+	if dur < 0 {
+		return fmt.Errorf("stagger duration cannot be negative")
+	}
+	if dur > spawn.MaxStaggerDelay {
+		return fmt.Errorf("stagger duration cannot exceed %s", spawn.MaxStaggerDelay)
+	}
+	*v.duration = dur
+	return nil
+}
+
+func (v *optionalDurationValue) Type() string {
+	return "duration"
+}
+
+// IsBoolFlag allows --stagger without =value
+func (v *optionalDurationValue) IsBoolFlag() bool {
+	return true
+}
+
+// NoOptDefVal is the default when --stagger is used without a value
+func (v *optionalDurationValue) NoOptDefVal() string {
+	return v.defaultDuration.String()
+}
 
 // parseNTMDuration parses human-friendly duration strings.
 // Supports: 30s, 5m, 1h, 1d, 1w and standard Go durations (e.g., 1h30m).
