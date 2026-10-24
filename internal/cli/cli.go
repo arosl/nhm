@@ -78,6 +78,8 @@ Usage:
                          the rules each session got; tell CM how they did
   nhm modes list|explain <mode> [--json]
                          ntm's reasoning-mode catalog
+  nhm template list|ls [-a] | show <name> [-b] [--json]
+                         ntm's prompt templates: the ones send -t takes
   nhm ensemble presets [--json]
                          ntm's ensemble presets
   nhm activity <session> [--json]

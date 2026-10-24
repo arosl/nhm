@@ -119,6 +119,64 @@ func (l *Loader) Load(key string) (*Template, error) {
 	return nil, &TemplateNotFoundError{Name: name}
 }
 
+// List is every template that Load finds, in Load's order, as ntm's
+// `template list` lists them: the project's, the user's, the palette
+// catalogs' prompts, then the builtins; the first of a name wins. A
+// directory or catalog that is not there adds none; a file that does not
+// parse fails the list.
+func (l *Loader) List() ([]*Template, error) {
+	seen := map[string]bool{}
+	var out []*Template
+	add := func(t *Template) {
+		if !seen[t.Name] {
+			seen[t.Name] = true
+			out = append(out, t)
+		}
+	}
+	for _, d := range []struct {
+		dir    string
+		source TemplateSource
+	}{{l.ProjectDir, SourceProject}, {l.UserDir, SourceUser}} {
+		if d.dir == "" {
+			continue
+		}
+		entries, err := os.ReadDir(d.dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".md")
+			t, err := loadFile(filepath.Join(d.dir, e.Name()), d.source, name)
+			if err != nil {
+				return nil, err
+			}
+			add(t)
+		}
+	}
+	for _, path := range l.Catalogs {
+		entries, err := ReadCatalog(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			add(&Template{Name: e.Key, Description: e.Label, Body: e.Body, Source: SourceUser, SourcePath: path})
+		}
+	}
+	for _, t := range ListBuiltins() {
+		add(t)
+	}
+	return out, nil
+}
+
 func loadFile(path string, source TemplateSource, name string) (*Template, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {

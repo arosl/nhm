@@ -66,6 +66,7 @@ var verbUsage = map[string]string{
 	"memory":        memoryUsage,
 	"feedback":      feedbackUsage,
 	"modes":         modesUsage,
+	"template":      templateUsage,
 	"ensemble":      ensembleUsage,
 }
 

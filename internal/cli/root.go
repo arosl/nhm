@@ -367,7 +367,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd(), newMemoryCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}

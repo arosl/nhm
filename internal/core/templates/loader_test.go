@@ -2,8 +2,10 @@ package templates
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +126,54 @@ func TestLoaderIgnoresARelativeConfigHome(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", config)
 	if got, want := NewLoader("").UserDir, filepath.Join(config, "nhm", "templates"); got != want {
 		t.Fatalf("absolute: UserDir = %q, want %q", got, want)
+	}
+}
+
+// List gives what Load finds, in Load's order: the project's files, the
+// user's, the catalogs' prompts, then ntm's builtins; the first of a name
+// wins.
+func TestLoaderList(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	l := NewLoader(project)
+	all, err := l.List()
+	if err != nil || len(all) != len(ListBuiltins()) || all[0].Source != SourceBuiltin {
+		t.Fatalf("no files: %d templates, %v", len(all), err)
+	}
+	write(t, filepath.Join(home, AcfsCatalog), catalog)
+	write(t, filepath.Join(home, ".config", "nhm", "templates", "hello.md"), "user file")
+	write(t, filepath.Join(home, ".config", "nhm", "templates", "notes.txt"), "not a template")
+	write(t, filepath.Join(project, ".nhm", "templates", "b_proj.md"), "---\nname: b_proj\ndescription: Project B\n---\nB")
+	write(t, filepath.Join(project, ".nhm", "templates", "a_proj.md"), "A")
+	all, err = l.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, tm := range all[:6] {
+		got = append(got, tm.Name+":"+tm.Source.String())
+	}
+	if want := "[a_proj:project b_proj:project hello:user fresh_review:user code_review:user explain:builtin]"; fmt.Sprint(got) != want {
+		t.Fatalf("list = %v, want %s", got, want)
+	}
+	if all[1].Description != "Project B" || all[2].Body != "user file" || all[3].SourcePath != filepath.Join(home, AcfsCatalog) ||
+		all[3].Description != "Fresh Review" {
+		t.Fatalf("fields: %+v %+v %+v", all[1], all[2], all[3])
+	}
+	// code_review is a builtin too, and hello is in the catalog: each is
+	// listed once.
+	n := 0
+	for _, tm := range all {
+		if tm.Name == "code_review" || tm.Name == "hello" {
+			n++
+		}
+	}
+	if n != 2 || len(all) != len(ListBuiltins())+4 {
+		t.Fatalf("code_review listed %d times; %d templates", n, len(all))
+	}
+	write(t, filepath.Join(project, ".nhm", "templates", "bad.md"), "---\nname: [unclosed\n---\nx")
+	if _, err := l.List(); err == nil || !strings.Contains(err.Error(), "parsing template") {
+		t.Fatalf("a bad file: %v", err)
 	}
 }

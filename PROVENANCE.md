@@ -256,6 +256,7 @@ The same rules apply to code from pt and dcg.
 | `internal/core/spawn/LICENSE` | `LICENSE` | none |
 | `internal/core/spawn/agent_spec_ntm.go` | `internal/cli/agent_spec.go` (in part) | provenance header; package and imports; a `Want` of an nhm kind for ntm's `AgentSpec` of an `AgentType`; the kind's adapter says whether it takes the `@effort` suffix (an effort flag) and whether its model is pinned (`PinnedModel`), for ntm's type switches; the pinned model's refusal names the kind's ntm type and flag (nhm-2p6.4.1) |
 | `internal/core/spawn/agent_spec_ntm_test.go` | `internal/cli/agent_spec_test.go` (in part) | provenance header; package and imports; the spec cases through `ParseCount` with an nhm kind, one table per test (nhm-2p6.4.1) |
+| `internal/cli/template_ntm.go` | `internal/cli/template.go` | provenance header; nhm's loader and places (`.nhm/templates`, `~/.config/nhm/templates`, the palette catalogs, the builtins; the operator's ruling, 2026-10-24); the cwd's project, else the cwd; the help names nhm, without ntm's lists of built-in, bead and per-pane variables; nhm's usage text beside cobra's help; output to cobra's writer |
 
 ## Files from herdr
 
