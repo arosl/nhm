@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/store"
+	"github.com/arosl/nhm/internal/ui/palette"
 )
 
 // sessionsInstance is an instance with two workspaces, alpha (focused)
@@ -55,6 +58,43 @@ func sessionsInstance(t *testing.T, dir string) *instanceEnv {
 	}
 	t.Cleanup(func() { _ = ie.db.Close() })
 	return ie
+}
+
+// On a terminal, with two sessions and nothing to infer, ntm's selector
+// picks one: the attached session first. A cancel resolves nothing, with
+// no error and nothing said.
+func TestResolveSessionPickerOnHerdr(t *testing.T) {
+	ie := sessionsInstance(t, t.TempDir())
+	t.Chdir(t.TempDir())
+	var offered []palette.Session
+	answer := "w2"
+	oldTerm, oldSel := sessionTerminals, sessionSelector
+	t.Cleanup(func() { sessionTerminals, sessionSelector = oldTerm, oldSel })
+	sessionTerminals = func(io.Writer) bool { return true }
+	sessionSelector = func(items []palette.Session) (string, error) {
+		offered = items
+		return answer, nil
+	}
+	var out, errOut bytes.Buffer
+	r, err := resolveSession(context.Background(), ie, "", false, &out, &errOut)
+	if err != nil || r.WorkspaceID != "w2" || !r.Prompted || errOut.String() != "Using session \"beta\" (selected from list)\n" {
+		t.Fatalf("pick: %+v, %v, stderr %q", r, err, errOut.String())
+	}
+	want := []palette.Session{{ID: "w1", Name: "alpha", Windows: 1, Attached: true}, {ID: "w2", Name: "beta", Windows: 1}}
+	if !slices.Equal(offered, want) {
+		t.Errorf("offered %+v, want %+v", offered, want)
+	}
+	answer = ""
+	errOut.Reset()
+	r, err = resolveSession(context.Background(), ie, "", false, &out, &errOut)
+	if err != nil || r.Session != "" || r.Reason != "cancelled" || errOut.Len() != 0 {
+		t.Fatalf("cancel: %+v, %v, stderr %q", r, err, errOut.String())
+	}
+	// With JSON there is no selector, even on a terminal.
+	if _, err := resolveSession(context.Background(), ie, "", true, &out, &errOut); err == nil ||
+		!strings.HasPrefix(err.Error(), "session name required") {
+		t.Fatalf("JSON: %v", err)
+	}
 }
 
 func TestResolveSessionOnHerdr(t *testing.T) {

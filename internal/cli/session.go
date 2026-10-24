@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/session"
+	"github.com/arosl/nhm/internal/ui/palette"
 )
 
 // resolveSession is ntm's session resolution (core/session) on this
@@ -27,13 +29,39 @@ func resolveSession(ctx context.Context, ie *instanceEnv, name string, asJSON bo
 	if err != nil {
 		return session.Resolution{}, err
 	}
-	o := session.Options{JSON: asJSON, Current: current, Cwd: cwd, Interactive: interactive(stdout)}
+	o := session.Options{JSON: asJSON, Current: current, Cwd: cwd, Interactive: sessionTerminals(stdout), Picker: pickSession}
 	r, err := session.Resolve(ctx, name, func(context.Context) ([]session.Session, error) { return ss, nil }, o)
 	if err != nil {
 		return r, err
 	}
 	r.ExplainIfInferred(stderr, asJSON)
 	return r, nil
+}
+
+// sessionTerminals and sessionSelector are the picker's terminal check and
+// ntm's session selector (ported in ui/palette); tests replace them.
+var (
+	sessionTerminals = interactive
+	sessionSelector  = palette.RunSessionSelector
+)
+
+// pickSession shows ntm's session selector over the sessions, in the
+// order given (attached first). Esc or q cancels.
+func pickSession(_ context.Context, offered []session.Session) (session.Session, bool, error) {
+	items := make([]palette.Session, 0, len(offered))
+	for _, s := range offered {
+		items = append(items, palette.Session{ID: s.WorkspaceID, Name: s.Name, Windows: s.Tabs, Attached: s.Attached})
+	}
+	id, err := sessionSelector(items)
+	if err != nil || id == "" {
+		return session.Session{}, false, err
+	}
+	for _, s := range offered {
+		if s.WorkspaceID == id {
+			return s, true, nil
+		}
+	}
+	return session.Session{}, false, fmt.Errorf("the selector returned workspace %s, which it was not offered", id)
 }
 
 // herdrSessions lists herdr's workspaces as ntm's sessions and, with
@@ -65,7 +93,8 @@ func herdrSessions(ctx context.Context, ie *instanceEnv, withCurrent bool) ([]se
 		if name == "" {
 			name = w.WorkspaceID
 		}
-		out = append(out, session.Session{Name: name, WorkspaceID: w.WorkspaceID, Attached: w.Focused, ProjectDirs: dirs[w.WorkspaceID]})
+		out = append(out, session.Session{Name: name, WorkspaceID: w.WorkspaceID, Attached: w.Focused, Tabs: int(w.TabCount),
+			ProjectDirs: dirs[w.WorkspaceID]})
 	}
 	if !withCurrent {
 		return out, "", nil

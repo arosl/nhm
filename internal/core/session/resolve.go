@@ -35,6 +35,9 @@ type Session struct {
 	WorkspaceID string
 	// Attached is herdr's focused workspace, ntm's attached session.
 	Attached bool
+	// Tabs is the workspace's tab count, which ntm's picker shows as the
+	// session's window count.
+	Tabs int
 	// ProjectDirs are the project roots of the session's bound agents.
 	ProjectDirs []string
 }
