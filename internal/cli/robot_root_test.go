@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -29,9 +31,10 @@ func TestRobotCall(t *testing.T) {
 	}
 }
 
-// ntm's root flags in front of a robot flag: the call runs; --redact and
-// --allow-secret are not built (ntm's NOT_IMPLEMENTED, exit 2); a bad
-// value is the robot's INVALID_FLAG. Nothing goes to stderr.
+// ntm's root flags in front of a robot flag: the call runs, with --config
+// in effect for it; --redact and --allow-secret are not built (ntm's
+// NOT_IMPLEMENTED, exit 2); a bad value is the robot's INVALID_FLAG.
+// Nothing goes to stderr.
 func TestRootFlagsInFrontOfARobotFlag(t *testing.T) {
 	t.Setenv("NHM_CONFIG", "")
 	decode := func(out string) map[string]any {
@@ -67,5 +70,18 @@ func TestRootFlagsInFrontOfARobotFlag(t *testing.T) {
 		if m := decode(out); code != c.exit || m["error_code"] != c.code || errOut != "" {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", c.args, code, out, errOut)
 		}
+	}
+
+	// robot spawn takes a flag per kind: --config's kinds count.
+	cfg := kindConfig(t, "zzrobot")
+	t.Chdir(t.TempDir()) // no project: a dry run stops there
+	if _, out, _ := run("--robot-spawn=s", "--spawn-zzrobot=1", "--dry-run"); !strings.Contains(out, "spawn-zzrobot") {
+		t.Errorf("without --config: %q", out)
+	}
+	if _, out, _ := run("--config", cfg, "--robot-spawn=s", "--spawn-zzrobot=1", "--dry-run"); strings.Contains(out, "spawn-zzrobot") {
+		t.Errorf("with --config: %q", out)
+	}
+	if v := os.Getenv("NHM_CONFIG"); v != "" {
+		t.Errorf("NHM_CONFIG outlived the run: %q", v)
 	}
 }

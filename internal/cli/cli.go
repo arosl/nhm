@@ -157,7 +157,8 @@ next releases.
 // Run executes nhm with args (without the program name) and returns the
 // exit code. The robot flags have their own grammar (runRobot), after
 // the root flags in front of them (runRobotCall); every other call goes
-// through ntm's root (root.go).
+// through ntm's root (root.go), built after --config takes effect
+// (configFirst).
 func Run(args []string, stdout, stderr io.Writer) int {
 	if code, ok := remoteRobotCall(args, stdout, stderr); ok {
 		return code
@@ -165,5 +166,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if lead, rest, ok := robotCall(args); ok {
 		return runRobotCall(lead, rest, stdout, stderr)
 	}
+	restore := configFirst(args)
+	defer restore()
 	return newRoot(stdout, stderr).execute(args, stdout, stderr)
 }

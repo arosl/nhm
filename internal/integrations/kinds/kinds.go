@@ -782,7 +782,8 @@ func (r *Registry) ByFlag(flag string) (Adapter, bool) {
 }
 
 var (
-	defaultOnce sync.Once
+	defaultMu   sync.Mutex
+	defaultPath string // the config file defaultReg was read from
 	defaultReg  *Registry
 	defaultErr  error
 )
@@ -801,18 +802,28 @@ func ConfigPath() (string, error) {
 }
 
 // Default is the process's registry: the built-ins plus the [kinds.*]
-// tables of nhm's config file, read once. A config that does not load
-// adds nothing; ConfigError says why.
+// tables of nhm's config file, read once per file, so a config that the
+// root's --config names (NHM_CONFIG) replaces one read before. A config
+// that does not load adds nothing; ConfigError says why.
 func Default() *Registry {
-	defaultOnce.Do(func() {
-		path, err := ConfigPath()
-		if err != nil {
-			defaultReg, defaultErr = NewRegistry(), err
-			return
-		}
+	r, _ := loadDefault()
+	return r
+}
+
+func loadDefault() (*Registry, error) {
+	path, err := ConfigPath()
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	if defaultReg != nil && path == defaultPath {
+		return defaultReg, defaultErr
+	}
+	defaultPath = path
+	if err != nil {
+		defaultReg, defaultErr = NewRegistry(), err
+	} else {
 		defaultReg, defaultErr = withConfig(path)
-	})
-	return defaultReg
+	}
+	return defaultReg, defaultErr
 }
 
 // withConfig is the built-ins plus a config file's kinds. A config that
@@ -828,8 +839,8 @@ func withConfig(path string) (*Registry, error) {
 // ConfigError is why the config's kinds did not load, or nil. nhm doctor
 // reports it.
 func ConfigError() error {
-	Default()
-	return defaultErr
+	_, err := loadDefault()
+	return err
 }
 
 // Get returns a kind's adapter from Default.

@@ -221,7 +221,7 @@ func guardChecks(ctx context.Context) []doctorCheck {
 		env.ProjectRoot = s.ProjectRoot
 	}
 	var checks []doctorCheck
-	for _, kind := range guards.Kinds {
+	for _, kind := range guards.Kinds() {
 		for _, r := range guards.Check(kind, env) {
 			c := doctorCheck{Name: "guard " + kind + " " + r.Guard, Detail: string(r.State), guard: r.State}
 			switch r.State {

@@ -84,8 +84,9 @@ func (e Env) withDefaults() Env {
 	return e
 }
 
-// Kinds lists the kinds Check reports, in the kind registry's order.
-var Kinds = kinds.Names()
+// Kinds lists the kinds Check reports, in the kind registry's order. It
+// reads the registry when called, after the root's --config.
+func Kinds() []string { return kinds.Names() }
 
 // checkers read a settings format: the kind registry names the file
 // (Adapter.GuardSettings); each format needs its own reader.
