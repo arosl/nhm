@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
+
 	"github.com/arosl/nhm/internal/integrations/kinds"
 )
 
@@ -20,27 +22,38 @@ func TestEveryVerbFlagIsReservedForKinds(t *testing.T) {
 			isKindFlag[n] = true
 		}
 	}
-	sets := map[string]func(*flag.FlagSet){
-		"send":        func(fs *flag.FlagSet) { addSendFlags(fs) },
-		"spawn":       func(fs *flag.FlagSet) { addSpawnFlags(fs) },
-		"robot-spawn": func(fs *flag.FlagSet) { addRobotSpawnFlags(fs) },
-	}
-	for verb, add := range sets {
+	// Each verb's flag names; spawn and add are on the shared parser.
+	names := func(verb string) []string {
+		var out []string
+		if verb == "spawn" {
+			fs := pflag.NewFlagSet(verb, pflag.ContinueOnError)
+			addSpawnFlags(fs)
+			fs.VisitAll(func(f *pflag.Flag) { out = append(out, f.Name) })
+			return out
+		}
 		fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		add(fs)
-		fs.VisitAll(func(f *flag.Flag) {
-			name := f.Name
+		if verb == "send" {
+			addSendFlags(fs)
+		} else {
+			addRobotSpawnFlags(fs)
+		}
+		fs.VisitAll(func(f *flag.Flag) { out = append(out, f.Name) })
+		return out
+	}
+	for _, verb := range []string{"send", "spawn", "robot-spawn"} {
+		for _, flagName := range names(verb) {
+			name := flagName
 			if verb == "robot-spawn" {
 				name = strings.TrimPrefix(name, "spawn-")
 			}
 			if isKindFlag[name] {
-				return
+				continue
 			}
 			if !kinds.Reserved(name) {
-				t.Errorf("%s flag --%s is not reserved: a kind from config could take it", verb, f.Name)
+				t.Errorf("%s flag --%s is not reserved: a kind from config could take it", verb, flagName)
 			}
-		})
+		}
 	}
 }
 
@@ -55,11 +68,11 @@ func TestKindNamedAfterAFlagDoesNotPanic(t *testing.T) {
 	}
 	for _, add := range []func(*flag.FlagSet){
 		func(fs *flag.FlagSet) { addSendFlags(fs) },
-		func(fs *flag.FlagSet) { addSpawnFlags(fs) },
 		func(fs *flag.FlagSet) { addRobotSpawnFlags(fs) },
 	} {
 		fs := flag.NewFlagSet("x", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		add(fs)
 	}
+	addSpawnFlags(pflag.NewFlagSet("spawn", pflag.ContinueOnError))
 }

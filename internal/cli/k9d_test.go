@@ -78,16 +78,19 @@ func TestDashboardAndLogsAreAliases(t *testing.T) {
 }
 
 // spawn refuses ACFS's --count form and several sessions in one call, as
-// ntm 9d5ed977 does: their row is waived (the operator's ruling, nhm-k9d,
-// 2026-10-23).
+// ntm 9d5ed977 does, with ntm's error text and exit 1, on the shared
+// parser (the operator's ruling on waiver 1, 2026-10-24; nhm-2p6.4.5).
 func TestSpawnRefusesCountAndSeveralSessions(t *testing.T) {
 	t.Setenv("HERDR_SOCKET_PATH", "")
-	for _, args := range [][]string{
-		{"spawn", "acfs-sim", "--count", "3", "--label", "swarm-3", "--dry-run"},
-		{"spawn", "p1", "--cc=2", "p2", "--cod=1", "p3", "--agy=1"},
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"spawn", "acfs-sim", "--count", "3", "--label", "swarm-3", "--dry-run"}, "Error: unknown flag: --count"},
+		{[]string{"spawn", "p1", "--cc=2", "p2", "--cod=1", "p3", "--agy=1"}, "Error: accepts 1 arg(s), received 3\n"},
 	} {
-		if code, _, errOut := run(args...); code != exitRefused || !strings.Contains(errOut, "Usage: nhm spawn") {
-			t.Errorf("%v = %d %q", args, code, errOut)
+		if code, _, errOut := run(tt.args...); code != exitError || !strings.HasPrefix(errOut, tt.want) {
+			t.Errorf("%v = %d %q", tt.args, code, errOut)
 		}
 	}
 }

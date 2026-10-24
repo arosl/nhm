@@ -1,11 +1,12 @@
 package cli
 
 import (
-	"flag"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/arosl/nhm/internal/core/spawn"
 )
@@ -15,17 +16,16 @@ import (
 func parseSpawnArgs(t *testing.T, args ...string) (spawn.Request, error) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
+	fs := pflag.NewFlagSet("spawn", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	f := addSpawnFlags(fs)
-	pos, err := parseInterleaved(fs, args)
-	if err != nil {
+	if err := fs.Parse(args); err != nil {
 		return spawn.Request{}, err
 	}
-	if len(pos) != 1 {
-		t.Fatalf("positional = %q", pos)
+	if fs.NArg() != 1 {
+		t.Fatalf("positional = %q", fs.Args())
 	}
-	return f.request(pos[0], false)
+	return f.request(fs.Arg(0), false)
 }
 
 // ntm's count flags add up: each value is a spec of its own, kept in the

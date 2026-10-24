@@ -89,7 +89,7 @@ func TestSpawnIgnoreCapacity(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	args := []string{"spawn", "swarm", "--cc=1", "--project", t.TempDir(), "--no-kickoff", "--allow-unguarded", "--dry-run", "--socket", s.SocketPath}
 	code, _, errOut := run(args...)
-	if code != exitAdmission || !strings.Contains(errOut, "admission refused the spawn: capacity red: MemAvailable 3000 MiB < 4096 MiB") ||
+	if code != exitError || !strings.Contains(errOut, "Error: admission refused the spawn: capacity red: MemAvailable 3000 MiB < 4096 MiB") ||
 		!strings.Contains(errOut, capacityWayOutFlag) || !strings.Contains(errOut, capacityWayOutConfig) {
 		t.Fatalf("red = %d %s", code, errOut)
 	}

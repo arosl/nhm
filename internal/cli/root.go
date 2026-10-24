@@ -286,8 +286,6 @@ func legacyVerbs() []legacyVerb {
 		// 2026-10-23).
 		{name: "view", aliases: []string{"tile", "v"}, run: runView},
 		{name: "diff", run: runDiff},
-		{name: "spawn", run: runSpawn},
-		{name: "add", run: runAdd},
 		{name: "new", run: runNew},
 		{name: "admin", run: runAdmin},
 		{name: "status", run: runStatus},
@@ -433,7 +431,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}

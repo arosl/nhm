@@ -41,7 +41,7 @@ func TestSpawnAssignPreflightComesFirst(t *testing.T) {
 	} {
 		code, out, _ := run(append(append([]string(nil), base...), extra...)...)
 		env := decodeEnvelope(t, out)
-		if code != exitRefused || !strings.Contains(env["error"].(string), "verify actionable spawn work") || env["result"] != nil {
+		if code != exitError || !strings.Contains(env["error"].(string), "verify actionable spawn work") || env["result"] != nil {
 			t.Fatalf("%v: exit %d, %v", extra, code, env)
 		}
 	}
@@ -298,7 +298,7 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 		t.Fatalf("rerun = %d %s %q", code, out, h.sent())
 	}
 	// Other choices under the same id are refused.
-	if code, _, _ = run(append(append([]string(nil), args...), "--strategy", "speed")...); code != exitRefused {
+	if code, _, _ = run(append(append([]string(nil), args...), "--strategy", "speed")...); code != exitError {
 		t.Fatalf("other choices = %d", code)
 	}
 }

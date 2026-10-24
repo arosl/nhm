@@ -178,7 +178,8 @@ func TestQuotaCaamSwitchMakesThePoolUnknown(t *testing.T) {
 	if code, _ := recordClaude(t, 92); code != 0 {
 		t.Fatalf("record-claude = %d", code)
 	}
-	if code, ad := dryRun(); code != exitAdmission || ad["decision"] != "refuse" || !strings.Contains(ad["reason"].(string), "92% used") {
+	// spawn's admission refusal exits 1, ntm's code (nhm-2p6.4.5).
+	if code, ad := dryRun(); code != exitError || ad["decision"] != "refuse" || !strings.Contains(ad["reason"].(string), "92% used") {
 		t.Fatalf("on e13a = %d %v", code, ad)
 	}
 
@@ -195,7 +196,7 @@ func TestQuotaCaamSwitchMakesThePoolUnknown(t *testing.T) {
 		"claude quota unknown (the newest record is of profile e13a, not of the active profile e13b: a credential switch invalidates it): admitted") {
 		t.Fatalf("on e13b = %d %v", code, ad)
 	}
-	if code, ad := dryRun("--require-observations"); code != exitAdmission || ad["decision"] != "refuse" ||
+	if code, ad := dryRun("--require-observations"); code != exitError || ad["decision"] != "refuse" ||
 		!strings.Contains(ad["reason"].(string), "a robot call needs an observation") {
 		t.Fatalf("a robot on e13b = %d %v", code, ad)
 	}

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/arosl/nhm/internal/core"
@@ -39,7 +41,7 @@ import (
 const spawnLockWait = 10 * time.Second
 
 const spawnUsage = `Usage: nhm spawn <session> [--cc|--cod|--grok|--omp|--pi=N[:MODEL[:EFFORT]]]… [--oc=N[:MODEL]]… [--agy=N]…
-                 [--agent KIND=N[:MODEL[:EFFORT]]]… [--label L] [--group G] [--per-tab N]
+                 [--agent KIND=N[:MODEL[:EFFORT]]]… [-l|--label L] [--tab-label L] [--group G] [--per-tab N]
                  [--prompt T | --prompt-file F | --no-kickoff] [--no-user]
                  [--assign [--strategy S] [--limit N] [--init-prompt T] [--assign-agent TYPE]
                   [--assign-cc-only|--assign-cod-only|--assign-gmi-only|--assign-agy-only]
@@ -56,9 +58,12 @@ N:MODEL@EFFORT for a kind that takes an effort; N is at least 1. Repeated
 flags add up, and the agents start in the order of their flags. agy's
 model is pinned, so it takes a count only.
 
-Start agents in a herdr workspace (the session, by label). For each agent:
-an Agent Mail identity first, a pane, the binding, agent.start, the labels,
-then the kickoff: --prompt, or ACFS's default_new_agent palette prompt.
+Start agents in a herdr workspace (the session, by label). -l L makes the
+session <session>--L, as ntm's goal label; a session name may not hold
+"--". Every agent starts first: an Agent Mail identity, a pane, the
+binding, agent.start, the labels. Then the spawn waits for them to be
+ready, and sends each its kickoff, paced by --stagger-mode: --prompt, or
+ACFS's default_new_agent palette prompt.
 
 --assign claims a bead for each agent and sends it, after your yes, as
 ntm's spawn --assign does, with ntm's choice of beads. The work is
@@ -83,10 +88,11 @@ ready for a prompt, gets its kickoff alone; no bead is assigned again.
 Agents of one project share a tab, a pane each, up to --per-tab (6): a new
 agent joins a tab of its project that has room, or opens a tab. A tab with
 one agent has the agent's name; with more, the project's directory name.
---label or --group always opens new tabs, and a tab from before this rule
-is never joined. --per-tab 1 gives each agent its own tab. A --label that
-is the project's directory name reads as the shared label: a later spawn
-may join that tab, and nhm maintain gives it its last agent's name.
+--tab-label or --group always opens new tabs, and a tab from before this
+rule is never joined. --per-tab 1 gives each agent its own tab. A
+--tab-label that is the project's directory name reads as the shared
+label: a later spawn may join that tab, and nhm maintain gives it its last
+agent's name.
 
 The panes of a tab fill an even grid in reading order, also across adds:
 --per-tab 6 is 2 rows of 3, slots N.1 to N.3 on top and N.4 to N.6 below.
@@ -117,8 +123,8 @@ If an agent fails, the agents before it stay, the rest are not started,
 and only what this spawn created and nothing uses is removed. Runs only
 when nhm owns this herdr instance.
 
-Exit codes: 0 every agent ready; 1 an error or a partial spawn; 2 refused
-before anything started; 3 admission refused.
+Exit codes, ntm's: 0 every agent ready; 1 an error, a refusal (admission
+too) or a partial spawn, with "Error: <msg>" on stderr.
 `
 
 // specFlag is a kind's count flag (--cc, --cod, …): each value is an
@@ -162,7 +168,7 @@ func (a *agentFlag) Type() string { return "KIND=N[:model[:effort]]" }
 // spawnFlags are the flags of spawn and add.
 type spawnFlags struct {
 	wants                   []spawn.Want
-	label, group            string
+	label, tabLabel, group  string
 	perTab                  int
 	prompt, promptFile      string
 	noKickoff, assign, yes  bool
@@ -189,12 +195,15 @@ type spawnFlags struct {
 	dryRun, asJSON          bool
 }
 
-func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
+func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
 	f := &spawnFlags{}
 	fs.Var(&agentFlag{wants: &f.wants}, "agent", "KIND=N[:MODEL[:EFFORT]] (repeatable)")
 	fs.StringVar(&f.effort, "effort", "", "reasoning effort (default: each kind's, ntm's xhigh for claude and codex)")
 	fs.StringVar(&f.role, "role", "", "reviewer: the agents work no beads (reap may retire them)")
-	fs.StringVar(&f.label, "label", "", "the tabs' label")
+	// ntm's goal label (bd-1933u): the session <session>--L, in the same
+	// project. nhm's tabs take --tab-label.
+	fs.StringVarP(&f.label, "label", "l", "", "Goal label for multi-session support (e.g., --label frontend makes the session PROJECT--frontend)")
+	fs.StringVar(&f.tabLabel, "tab-label", "", "the tabs' label")
 	fs.StringVar(&f.group, "group", "", "a group token on the panes")
 	fs.IntVar(&f.perTab, "per-tab", spawn.DefaultPerTab, "the most agents of a project in one tab (1: a tab each)")
 	fs.StringVar(&f.prompt, "prompt", "", "the kickoff prompt")
@@ -232,7 +241,6 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.StringVar(&f.opID, "op-id", "", "operation id, for an idempotent retry")
 	fs.StringVar(&f.socket, "socket", "", "herdr API socket")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print the plan and the admission; create nothing")
-	fs.BoolVar(&f.asJSON, "json", false, "nhm's JSON envelope")
 	// The kinds' count flags last: a flag spawn has stays spawn's, so a
 	// kind named after one never redefines it (kinds.Reserved refuses it
 	// too).
@@ -247,7 +255,18 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 }
 
 func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
-	req := spawn.Request{Session: session, Add: add, Label: f.label, Group: f.group, PerTab: f.perTab, Effort: f.effort, Role: f.role,
+	// ntm's checks: "--" is reserved for labels, and -l makes the session
+	// <session>--<label> (config.ValidateProjectName, ValidateLabel).
+	if err := sessionlabel.ValidateProjectName(session); err != nil {
+		return spawn.Request{}, err
+	}
+	if f.label != "" {
+		if err := sessionlabel.ValidateLabel(f.label); err != nil {
+			return spawn.Request{}, fmt.Errorf("invalid label: %w", err)
+		}
+		session = sessionlabel.FormatSessionName(session, f.label)
+	}
+	req := spawn.Request{Session: session, Add: add, Label: f.tabLabel, Group: f.group, PerTab: f.perTab, Effort: f.effort, Role: f.role,
 		NoKickoff: f.noKickoff, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
 		ReadyTimeout: f.readyWait, TrustFolder: f.trustFolder, Force: f.force, AllowUnguarded: f.allowUnguarded,
 		IgnoreCapacity: f.ignoreCapacity, RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID}
@@ -298,31 +317,55 @@ func spawnEnrichment(f *spawnFlags) (send.Enrichment, error) {
 	return e, nil
 }
 
-func runSpawn(args []string, stdout, stderr io.Writer) int {
-	return spawnVerb("spawn", args, stdout, stderr)
-}
-func runAdd(args []string, stdout, stderr io.Writer) int {
-	return spawnVerb("add", args, stdout, stderr)
+// verbOutput is output for spawn and add on the shared parser: nhm's
+// envelope with --json (until nhm-2p6.4.8 gives them ntm's), else the
+// text; an error is ntm's "Error: <msg>" on stderr; and every error or
+// partial outcome exits 1, ntm's code.
+func verbOutput(stdout, stderr io.Writer, asJSON bool, env envelope, err error, code int, text func(io.Writer)) int {
+	if code != exitOK || err != nil {
+		code = exitError
+	}
+	if asJSON || err == nil {
+		return output(stdout, stderr, asJSON, env, err, code, text)
+	}
+	_ = output(stdout, stderr, false, env, nil, code, nil) // its warnings
+	fmt.Fprintln(stderr, "Error:", err)
+	return code
 }
 
-func spawnVerb(verb string, args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, spawnUsage) }
-	f := addSpawnFlags(fs)
-	pos, err := parseInterleaved(fs, args)
-	if err != nil {
-		return exitRefused
+// newSpawnCmd and newAddCmd are ntm's spawn and add on the shared parser:
+// ntm's flag and argument errors, and exit 1 for every error.
+func newSpawnCmd() *cobra.Command {
+	return newSpawnVerbCmd("spawn", "Create session and spawn AI agents in panes")
+}
+
+func newAddCmd() *cobra.Command {
+	return newSpawnVerbCmd("add", "Add more agents to an existing session")
+}
+
+func newSpawnVerbCmd(verb, short string) *cobra.Command {
+	var f *spawnFlags
+	cmd := &cobra.Command{
+		Use:   verb + " <session-name>",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			f.asJSON = wantJSON(cmd)
+			if code := spawnVerb(verb, args[0], f, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != exitOK {
+				return verbExit{code: code}
+			}
+			return nil
+		},
 	}
+	f = addSpawnFlags(cmd.Flags())
+	return cmd
+}
+
+func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) int {
 	env := envelope{Command: verb}
-	refuse := func(err error) int { return output(stdout, stderr, f.asJSON, env, err, exitRefused, nil) }
-	if len(pos) != 1 {
-		fmt.Fprint(stderr, spawnUsage)
-		return exitRefused
-	}
-	req, err := f.request(pos[0], verb == "add")
+	req, err := f.request(session, verb == "add")
 	if err != nil {
-		return refuse(err)
+		return verbOutput(stdout, stderr, f.asJSON, env, err, exitError, nil)
 	}
 	// ntm takes the assignment flags without --assign and does nothing
 	// with them; so does nhm.
@@ -555,6 +598,9 @@ func (ie *instanceEnv) spawnEnv(projectRoot string) (spawn.Env, error) {
 // owner).
 func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket string, asJSON bool, env envelope, stdout, stderr io.Writer,
 	assign *humanAssign) int {
+	// spawn and add are on the shared parser: every output below is
+	// verbOutput's, with ntm's error text and exit 1.
+	output := verbOutput
 	ie, err := openInstance(socket)
 	if err != nil {
 		return output(stdout, stderr, asJSON, env, err, exitError, nil)

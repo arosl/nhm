@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
+
 	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
@@ -47,14 +49,12 @@ func newReplayWorld(t *testing.T) *replayWorld {
 	ownNhm(t, inst)
 	w := &replayWorld{s: s, inst: inst, h: h, args: []string{"spawn", "swarm", "--cc=2", "--per-tab=1", "--project", project,
 		"--allow-unguarded", "--assign", "--yes", "--init-prompt", "Then check your mail.", "--op-id", "sp-r1", "--socket", s.SocketPath}}
-	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := pflag.NewFlagSet("spawn", pflag.ContinueOnError)
 	f := addSpawnFlags(fs)
-	pos, err := parseInterleaved(fs, w.args[1:])
-	if err != nil {
+	if err := fs.Parse(w.args[1:]); err != nil {
 		t.Fatal(err)
 	}
-	req, err := f.request(pos[0], false)
+	req, err := f.request(fs.Arg(0), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestSpawnAssignReplayWaitsForTheFirstRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, errOut := run(w.args...)
-	if code != exitRefused || !strings.Contains(errOut, "operation sp-r1 still runs in another nhm process; nothing started") ||
+	if code != exitError || !strings.Contains(errOut, "Error: operation sp-r1 still runs in another nhm process; nothing started") ||
 		len(w.h.sent()) != 0 {
 		t.Fatalf("rerun under the lock = %d\n%s\n%s", code, out, errOut)
 	}

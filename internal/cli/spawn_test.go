@@ -149,13 +149,14 @@ func TestSpawnVerb(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "would start 1 agents in swarm (w1)") || !strings.Contains(out, "claude agent (default model) slot 2.1 planned") {
 		t.Fatalf("dry run = %d %s %s", code, out, errOut)
 	}
-	// Without --allow-unguarded, the missing guards refuse: exit 3.
-	if code, _, errOut = run("spawn", "swarm", "--cc=1", "--project", project, "--dry-run", "--socket", sock); code != exitAdmission ||
-		!strings.Contains(errOut, "admission refused the spawn: claude guard dcg is missing") {
+	// Without --allow-unguarded, the missing guards refuse; every error is
+	// ntm's "Error: …" with exit 1 (nhm-2p6.4.5).
+	if code, _, errOut = run("spawn", "swarm", "--cc=1", "--project", project, "--dry-run", "--socket", sock); code != exitError ||
+		!strings.Contains(errOut, "Error: admission refused the spawn: claude guard dcg is missing") {
 		t.Fatalf("unguarded = %d %s", code, errOut)
 	}
 	// A real spawn needs nhm as the owner.
-	if code, _, _ = run("spawn", "swarm", "--cc=1", "--project", project, "--allow-unguarded", "--socket", sock); code != 2 {
+	if code, _, _ = run("spawn", "swarm", "--cc=1", "--project", project, "--allow-unguarded", "--socket", sock); code != exitError {
 		t.Fatalf("under the Bash = %d", code)
 	}
 	ownNhm(t, inst)
@@ -183,10 +184,30 @@ func TestSpawnVerb(t *testing.T) {
 		{"spawn", "swarm", "--cc=1", "--with-cass", "--no-cass-context", "--socket", sock},
 		{"spawn"},
 		{"add", "nowhere", "--cc=1", "--project", project, "--allow-unguarded", "--socket", sock},
+		{"spawn", "my--proj", "--cc=1", "--socket", sock},
+		{"spawn", "swarm", "-l", "bad--label", "--cc=1", "--socket", sock},
 	} {
-		if code, _, _ := run(args...); code != 2 {
-			t.Errorf("%v = %d, want 2", args, code)
+		if code, _, errOut := run(args...); code != exitError || !strings.HasPrefix(errOut, "Error: ") {
+			t.Errorf("%v = %d %q, want 1 and ntm's Error:", args, code, errOut)
 		}
+	}
+}
+
+// ntm's -l/--label makes the session <session>--<label> in the same
+// project, for spawn and add; nhm's tab label is --tab-label
+// (nhm-2p6.4.5).
+func TestSpawnLabelMakesSessionSuffix(t *testing.T) {
+	req, err := parseSpawnArgs(t, "proj", "-l", "frontend", "--tab-label", "Front", "--cc=1")
+	if err != nil || req.Session != "proj--frontend" || req.Label != "Front" {
+		t.Fatalf("label = %q %q %v", req.Session, req.Label, err)
+	}
+	if _, err := parseSpawnArgs(t, "my--proj", "--cc=1"); err == nil ||
+		err.Error() != `project name "my--proj" contains '--' which is reserved as the session-label separator` {
+		t.Fatalf("a session with -- = %v", err)
+	}
+	if _, err := parseSpawnArgs(t, "proj", "--label=-bad", "--cc=1"); err == nil ||
+		err.Error() != "invalid label: label must start with alphanumeric and contain only alphanumeric, dash, underscore" {
+		t.Fatalf("a bad label = %v", err)
 	}
 }
 
