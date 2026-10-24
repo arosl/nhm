@@ -37,6 +37,7 @@ func TestSSHRunsTheWholeCallOnTheHost(t *testing.T) {
 		{[]string{"status", "--ssh=user@h", "--", "--ssh", "x"}, "nhm 'status' '--' '--ssh' 'x'"},
 		{[]string{"--ssh", "user@h", "--robot-status"}, "nhm '--robot-status'"},
 		{[]string{"--robot-status", "--ssh=user@h"}, "nhm '--robot-status'"},
+		{[]string{"--ssh", "user@h", "--json", "--robot-status"}, "nhm '--json' '--robot-status'"},
 		{[]string{"--ssh", "user@h", "send", "s", "it's here"}, `nhm 'send' 's' 'it'\''s here'`},
 		{[]string{"version", "-s", "--ssh", "user@h"}, "nhm 'version' '-s'"},
 	} {

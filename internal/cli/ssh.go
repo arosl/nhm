@@ -39,14 +39,18 @@ func runOverSSH(host string, rest []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// remoteRobotCall hands a robot call (its first word, --ssh aside, is a
-// --robot-* flag) to the --ssh host before the robot grammar parses it.
-// ok is false for any other call, and when the call names no host or an
-// empty one, as ntm takes it. Every other call goes through the root,
-// which hands it over after parsing (rootOptions.apply).
+// remoteRobotCall hands a robot call (its first word, --ssh and the other
+// root flags aside, is a --robot-* flag: robotCall) to the --ssh host
+// before the robot grammar parses it. ok is false for any other call, and
+// when the call names no host or an empty one, as ntm takes it. Every
+// other call goes through the root, which hands it over after parsing
+// (rootOptions.apply).
 func remoteRobotCall(args []string, stdout, stderr io.Writer) (code int, ok bool) {
 	host, rest, found, err := takeSSH(args)
-	if err != nil || !found || host == "" || len(rest) == 0 || !strings.HasPrefix(rest[0], "--robot-") {
+	if err != nil || !found || host == "" {
+		return 0, false
+	}
+	if _, _, robot := robotCall(rest); !robot {
 		return 0, false
 	}
 	return runOverSSH(host, rest, stdout, stderr), true

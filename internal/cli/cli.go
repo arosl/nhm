@@ -2,10 +2,7 @@
 // no behaviour of its own; later verbs call internal/core.
 package cli
 
-import (
-	"io"
-	"strings"
-)
+import "io"
 
 // Build facts, set at link time by the release build (scripts/package.sh):
 //
@@ -158,14 +155,15 @@ next releases.
 `
 
 // Run executes nhm with args (without the program name) and returns the
-// exit code. The robot flags have their own grammar (runRobot); every
-// other call goes through ntm's root (root.go).
+// exit code. The robot flags have their own grammar (runRobot), after
+// the root flags in front of them (runRobotCall); every other call goes
+// through ntm's root (root.go).
 func Run(args []string, stdout, stderr io.Writer) int {
 	if code, ok := remoteRobotCall(args, stdout, stderr); ok {
 		return code
 	}
-	if len(args) > 0 && strings.HasPrefix(args[0], "--robot-") {
-		return runRobot(args, stdout, stderr)
+	if lead, rest, ok := robotCall(args); ok {
+		return runRobotCall(lead, rest, stdout, stderr)
 	}
 	return newRoot(stdout, stderr).execute(args, stdout, stderr)
 }
