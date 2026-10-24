@@ -489,8 +489,10 @@ func TestRobotFormat(t *testing.T) {
 	if code != 1 || env.ErrorCode != "INVALID_FLAG" {
 		t.Fatalf("toon = %d %+v", code, env)
 	}
+	// The hint is the inventory row's disposition: --robot-route's names
+	// its bead (nhm-syq).
 	env, code = robotRun(t, "--robot-route=swarm")
-	if code != 2 || env.ErrorCode != "NOT_IMPLEMENTED" || !strings.Contains(env.Hint, "--robot-capabilities") {
+	if code != 2 || env.ErrorCode != "NOT_IMPLEMENTED" || !strings.HasPrefix(env.Hint, "deferred: nhm-") {
 		t.Fatalf("route = %d %+v", code, env)
 	}
 	env, code = robotRun(t, "--robot-status", "--robot-snapshot")
