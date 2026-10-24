@@ -7,7 +7,9 @@
 // way gopsutil reads them: the command line's fields joined by spaces, the
 // cwd link, the start time from stat's field 22 and the boot time, the
 // state in gopsutil's words, the fds' targets; the scan takes its /proc
-// root and clock, so tests give their own.
+// root and clock, so tests give their own. A "blocked" (D-state) process
+// is uninterruptible_io, which ntm never finds (the operator's ruling,
+// 2026-10-24).
 package contention
 
 import (
@@ -45,7 +47,7 @@ type Process struct {
 }
 
 // stateWord is gopsutil's word for a Linux state letter, which ntm's
-// contention reads: D is "blocked", not "d".
+// contention reads: D is "blocked".
 func stateWord(letter string) string {
 	switch letter {
 	case "R":
@@ -189,8 +191,10 @@ func (s Scanner) Holders(ctx context.Context, swarmCWD string) ([]Holder, error)
 
 // Classify names the resources a process holds: the beads database (an
 // open beads.db file, or a br or bd command), cargo's registry, rsync,
-// and an uninterruptible wait (a status of "d"). A scan gives gopsutil's
-// words, as ntm's does, so it never finds the last one: nhm does as ntm.
+// and an uninterruptible wait (a status of "d", or gopsutil's "blocked").
+// ntm compares the status with "d" only, and its scan gives gopsutil's
+// words, so ntm never finds a D-state process; nhm does (the operator's
+// ruling, 2026-10-24).
 func Classify(p Process) []string {
 	command := strings.ToLower(p.Command)
 	resources := make([]string, 0, 3)
@@ -212,7 +216,7 @@ func Classify(p Process) []string {
 	if strings.Contains(command, "rsync") {
 		resources = append(resources, "rsync")
 	}
-	if strings.EqualFold(strings.TrimSpace(p.Status), "d") {
+	if status := strings.TrimSpace(p.Status); strings.EqualFold(status, "d") || strings.EqualFold(status, "blocked") {
 		resources = append(resources, "uninterruptible_io")
 	}
 	return resources

@@ -3,7 +3,8 @@
 // TestClassifyContentionProcess, TestSameOrChildPath,
 // TestCommandHasExecutable and TestTerminateContentionHolderGuards; see
 // LICENSE in this directory and PROVENANCE.md. Local changes: nhm's names;
-// a br case; a real SIGTERM, an ended holder, and a scan of a fake /proc.
+// a br case, a blocked and a sleeping case; a real SIGTERM, an ended
+// holder, and a scan of a fake /proc.
 package contention
 
 import (
@@ -33,6 +34,13 @@ func TestClassify(t *testing.T) {
 	}
 	if got := Classify(Process{Command: "/usr/local/bin/br ready --json"}); len(got) != 1 || got[0] != "beads_db" {
 		t.Fatalf("br process classified as %v", got)
+	}
+	// A scan's word for state D (the operator's ruling: ntm never finds it).
+	if got := Classify(Process{Command: "dd if=/dev/sda", Status: "blocked"}); len(got) != 1 || got[0] != "uninterruptible_io" {
+		t.Fatalf("blocked process classified as %v", got)
+	}
+	if got := Classify(Process{Command: "sleep 9", Status: "sleep"}); len(got) != 0 {
+		t.Fatalf("sleeping process classified as %v", got)
 	}
 }
 
@@ -138,9 +146,9 @@ func TestHoldersFromProc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 300 is in state D, but ntm's scan reads it as "blocked" and finds no
-	// uninterruptible_io: nhm does the same.
-	if len(holders) != 2 {
+	// 300 is in state D: the scan reads it as "blocked", and nhm reports
+	// it as uninterruptible_io, where ntm finds nothing.
+	if len(holders) != 3 {
 		t.Fatalf("holders = %+v", holders)
 	}
 	if h := holders[0]; h.PID != 100 || h.Resource != "beads_db" || !h.InSwarm || h.CWD != "/work/p/sub" || h.Command != "/usr/bin/sqlite3 x" || h.Age != "1m30s" {
@@ -148,6 +156,9 @@ func TestHoldersFromProc(t *testing.T) {
 	}
 	if h := holders[1]; h.PID != 300 || h.Resource != "cargo_registry" || h.InSwarm || h.Age != "50s" || h.Command != "cargo build" {
 		t.Fatalf("holder 300 = %+v", h)
+	}
+	if h := holders[2]; h.PID != 300 || h.Resource != "uninterruptible_io" || h.InSwarm {
+		t.Fatalf("holder 300 io = %+v", h)
 	}
 	procs, err := s.Processes(context.Background())
 	if err != nil || len(procs) != 2 || procs[0].PID != 100 || procs[0].Status != "sleep" || procs[1].Status != "blocked" {
