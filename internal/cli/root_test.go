@@ -146,7 +146,6 @@ func TestRootFlagNotBuiltIsRefused(t *testing.T) {
 	}{
 		{[]string{"--redact", "off"}, "redact", "nhm-2p6.20"},
 		{[]string{"--allow-secret"}, "allow-secret", "nhm-2p6.20"},
-		{[]string{"--profile-startup"}, "profile-startup", "nhm-2p6.1.7"},
 	} {
 		want := "Error: --" + c.name + " is not in this nhm yet (deferred: " + c.bead + ")\n"
 		for _, args := range [][]string{
@@ -270,6 +269,32 @@ func TestConfigFlagSetsNHMConfig(t *testing.T) {
 				t.Errorf("%s %v: NHM_CONFIG outlived the run: %q", name, c.args, v)
 			}
 		}
+	}
+}
+
+// --profile-startup prints ntm's profile on stderr after a command that
+// succeeded: the cli_init span and the verb's; with --json, nothing (ntm's
+// PersistentPostRun skips a machine call).
+func TestProfileStartupPrintsTheProfile(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		verb string
+	}{
+		{[]string{"--profile-startup", "version", "-s"}, "version"},
+		{[]string{"compatibility", "status", "--profile-startup"}, "compatibility"},
+	} {
+		code, out, errOut := run(c.args...)
+		if code != 0 || out == "" || !strings.HasPrefix(errOut, "=== NHM Performance Profile ===\n") ||
+			!strings.Contains(errOut, "cli_init [startup]") || !strings.Contains(errOut, c.verb+" [command]") {
+			t.Errorf("%v: exit %d, stdout %.60q, stderr %q", c.args, code, out, errOut)
+		}
+	}
+	if code, out, errOut := run("--profile-startup", "--json", "version"); code != 0 || errOut != "" || !strings.HasPrefix(out, "{") {
+		t.Errorf("--json: exit %d, stdout %.60q, stderr %q", code, out, errOut)
+	}
+	// No profile after a failed command.
+	if code, _, errOut := run("--profile-startup", "version", "--yaml"); code != 1 || strings.Contains(errOut, "Performance Profile") {
+		t.Errorf("failed: exit %d, stderr %q", code, errOut)
 	}
 }
 

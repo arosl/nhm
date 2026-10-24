@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/arosl/nhm/internal/profiler"
 	"github.com/arosl/nhm/internal/robot"
 )
 
@@ -52,6 +53,11 @@ type rootOptions struct {
 	// the host as it was given, less --ssh.
 	args           []string
 	stdout, stderr io.Writer
+
+	// prof times the call for --profile-startup, and verb is the span of
+	// the verb.
+	prof *profiler.Profiler
+	verb *profiler.Span
 }
 
 // rootFlag is one of ntm's root persistent flags; value is false for a
@@ -75,7 +81,7 @@ var rootFlags = []rootFlag{
 	{name: "no-color"},
 	{name: "redact", value: true, notBuilt: "nhm-2p6.20"},
 	{name: "allow-secret", notBuilt: "nhm-2p6.20"},
-	{name: "profile-startup", notBuilt: "nhm-2p6.1.7"},
+	{name: "profile-startup"},
 }
 
 // notBuiltError refuses a root flag that nhm parses but cannot apply yet.
@@ -105,8 +111,13 @@ func addRootFlags(fs *pflag.FlagSet, o *rootOptions) {
 //
 // --ssh H hands the whole call to H once it is parsed (the operator's
 // ruling, 2026-10-24), less the --ssh words that pflag took: cmd's flags
-// say which words are other flags' values. A legacy verb (cmd nil) parses
-// its own flags, so only the root's value flags are known there.
+// say which words are other flags' values. A legacy verb (its command
+// does no flag parsing) parses its own flags, so only the root's value
+// flags are known there.
+//
+// --profile-startup starts ntm's profiler: a cli_init span, as ntm's
+// EnableProfilingIfRequested records it, and a span of the verb that the
+// root's PersistentPostRun ends and prints (profileReport).
 func (o *rootOptions) apply(cmd *cobra.Command) error {
 	for _, f := range rootFlags {
 		if f.notBuilt != "" && o.set[f.name] {
@@ -115,10 +126,16 @@ func (o *rootOptions) apply(cmd *cobra.Command) error {
 	}
 	if o.ssh != "" {
 		v := rootValues
-		if cmd != nil {
+		if !cmd.DisableFlagParsing {
 			v = pflagValues(cmd.Flags())
 		}
 		return verbExit{runOverSSH(o.ssh, stripSSH(o.args, v), o.stdout, o.stderr)}
+	}
+	if o.profileStartup && o.prof == nil {
+		o.prof = profiler.New()
+		o.prof.Enable()
+		o.prof.StartWithPhase("cli_init", "startup").End()
+		o.verb = o.prof.StartWithPhase(cmd.Name(), "command")
 	}
 	if o.noColor {
 		o.setenv("NTM_NO_COLOR", "1")
@@ -131,6 +148,19 @@ func (o *rootOptions) apply(cmd *cobra.Command) error {
 		o.setenv("NHM_CONFIG", path)
 	}
 	return nil
+}
+
+// profileReport ends the verb's span and writes ntm's text profile on
+// stderr, when --profile-startup started one and the call is not JSON.
+func (o *rootOptions) profileReport() {
+	if o.prof == nil {
+		return
+	}
+	o.verb.End()
+	if o.json || jsonInArgs(o.args) {
+		return
+	}
+	_ = o.prof.WriteText(o.stderr)
 }
 
 func (o *rootOptions) setenv(key, value string) {
@@ -320,7 +350,7 @@ func (v legacyVerb) command(o *rootOptions, stdout, stderr io.Writer) *cobra.Com
 				fmt.Fprint(stdout, u)
 				return nil
 			}
-			if err := o.apply(nil); err != nil {
+			if err := o.apply(cmd); err != nil {
 				return err
 			}
 			if code := v.run(args, stdout, stderr); code != exitOK {
@@ -362,6 +392,11 @@ func newRoot(stdout, stderr io.Writer) *root {
 				return nil // a pass-through verb applies them itself
 			}
 			return o.apply(cmd)
+		},
+		// ntm prints the profile after a command that succeeded, and not
+		// for a machine call (its PersistentPostRun).
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			o.profileReport()
 		},
 		// Bare nhm prints the usage and exits 0, as bare ntm prints its
 		// help.
