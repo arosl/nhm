@@ -64,7 +64,9 @@ session <session>--L, as ntm's goal label; a session name may not hold
 binding, agent.start, the labels. As in ntm, an agent of spawn gets its
 kind's [prompts] default (cc_default, cod_default, agy_default,
 omp_default, or the *_default_file), then --prompt; add sends --prompt
-only. An agent with neither gets no prompt. When an agent gets one, the
+only. An agent with neither gets no prompt. The prompt goes alone: the
+agent's Agent Mail name is in Agent Mail's identity file for its pane
+(nhm resolve --current shows it). When an agent gets one, the
 spawn waits for the agents to be ready and sends the prompts, paced by
 --stagger-mode; when none does, it does not wait, except with --assign
 or --trust-folder.
@@ -75,11 +77,11 @@ verified before anything starts, in a dry run too. --strategy is ntm's:
 balanced (the default), speed, quality, dependency or round-robin; any
 other word takes ntm's load-balanced default. --limit caps the beads
 assigned; --assign-agent (or an --assign-*-only flag) assigns to one type
-of agent only; --role reviewer agents get no bead. Each agent gets one bead: a bead the strategy plans for an
-agent that already has one fails, as in ntm. An agent with a bead gets its
-identity line, the kickoff, --init-prompt and the bead's work prompt in one
-delivery, since a working agent takes no second prompt; every other agent
-gets its identity line, the kickoff and --init-prompt after the
+of agent only; --role reviewer agents get no bead. Each agent gets one
+bead: a bead the strategy plans for an agent that already has one fails,
+as in ntm. An agent with a bead gets the kickoff, --init-prompt and the
+bead's work prompt in one delivery, since a working agent takes no second
+prompt; every other agent gets the kickoff and --init-prompt after the
 assignment. If an agent does not start, the others get the kickoff alone
 and nothing is assigned. A planned bead that is not claimed and sent makes
 the exit 1; a delivery whose outcome is unknown is never sent again. A
@@ -863,16 +865,13 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		return fail(err)
 	}
 	// Every agent is up: ntm's selection picks the beads, and each agent
-	// that gets one gets its identity, the kickoff, --init-prompt and its
-	// bead in one delivery; every other agent then gets the kickoff and
-	// --init-prompt. As in ntm, a planned bead that is not claimed and sent
-	// fails the command; an agent that got none is no failure.
+	// that gets one gets the kickoff, --init-prompt and its bead in one
+	// delivery; every other agent then gets the kickoff and --init-prompt.
+	// As in ntm, a planned bead that is not claimed and sent fails the
+	// command; an agent that got none is no failure.
 	prefix := assign.prefix(kickoff)
 	var sel spawnassign.HumanSelection
 	hooks := assignHooks{selectWork: assign.selectWork(ctx, ie, res.Session, scope.ProjectRoot, &sel)}
-	if prefix != "" {
-		hooks.preamble = identityPreamble(ctx, ie)
-	}
 	out := spawn.SpawnOutput(res, nil, "json", time.Now())
 	assignPhase(ctx, ie, res, scope, plan, prefix, hooks, &out)
 	outcome := newHumanOutcome(&out, sel)

@@ -508,8 +508,8 @@ func readyOne(ctx context.Context, env Env, req Request, t *Target, begin time.T
 	return true
 }
 
-// Kickoff sends a ready target of a finished spawn its kickoff, the
-// identity preamble then task, and records it in the operation's receipt.
+// Kickoff sends a ready target of a finished spawn its kickoff, task
+// alone, and records it in the operation's receipt.
 // spawn --assign calls it after the assignment for an agent that got no
 // bead (nhm-cvw). A failure is a warning in res.
 func Kickoff(ctx context.Context, env Env, req Request, res *Result, t *Target, task string) {
@@ -526,24 +526,20 @@ func KickoffGated(ctx context.Context, env Env, req Request, res *Result, t *Tar
 	_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
 }
 
-// sendKickoff sends t its kickoff through send: the identity preamble,
-// then task. With expect nil the send takes the agent in any state;
-// otherwise the gate applies, and expect freezes the binding.
+// sendKickoff sends t its kickoff through send: task alone, as ntm sends
+// a spawn's prompt; the agent's Agent Mail name is in its identity file
+// only (the operator, 2026-10-24). With expect nil the send takes the
+// agent in any state; otherwise the gate applies, and expect freezes the
+// binding.
 func sendKickoff(ctx context.Context, env Env, req Request, res *Result, t *Target, task string, expect map[string]int64) {
 	if env.Send == nil {
 		return
 	}
-	text := IdentityPreamble(t.MailName, req.ProjectRoot, t.HerdrName, res.WorkspaceID) + "\n\n" + task
-	// CM and CASS are asked about the task, not the identity preamble:
-	// with the preamble's start as the query, cm drops every rule as
-	// irrelevant (acfs-9hkh.87).
-	enr := req.Enrich
-	if enr.Query == "" {
-		enr.Query = task
-	}
+	// CM and CASS are asked about the task, as for any send: the message
+	// is the task alone.
 	sr, err := env.Send(ctx, send.Request{Session: req.Session, WorkspaceID: res.WorkspaceID, ProjectRoot: req.ProjectRoot,
-		Selector: send.Selector{Names: []string{t.MailName}}, Message: text, WhenAny: expect == nil, Expect: expect,
-		Source: history.SourceCLI, Scope: req.Scope, Enrich: enr})
+		Selector: send.Selector{Names: []string{t.MailName}}, Message: task, WhenAny: expect == nil, Expect: expect,
+		Source: history.SourceCLI, Scope: req.Scope, Enrich: req.Enrich})
 	switch {
 	case err != nil:
 		res.Warnings = append(res.Warnings, fmt.Sprintf("%s: kickoff not sent: %v", t.MailName, err))
@@ -667,8 +663,9 @@ func leftDialog(ctx context.Context, env Env, pane string, blocked herdr.AgentIn
 	return false, nil
 }
 
-// IdentityPreamble opens the kickoff that spawn and recycle send: the
-// agent's Agent Mail identity, which nhm registered, and its herdr name.
+// IdentityPreamble opens the kickoff that recycle sends: the agent's
+// Agent Mail identity, which nhm registered, and its herdr name. Spawn's
+// kickoff has none, as ntm's has none (nhm-2p6.4.6).
 // The prompt that follows may be ACFS's palette text, which says only
 // "register": the agent registers again with exactly this name and key,
 // as Agent Mail picks a new name when none is given, and a second key

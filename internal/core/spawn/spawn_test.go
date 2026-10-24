@@ -439,15 +439,10 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 	if tok, err := store.ReadSecret(w.inst.Dir, b.ID); err != nil || tok != "tok-IcyKnoll" {
 		t.Fatalf("token = %q %v", tok, err)
 	}
-	// The kickoff: the identity preamble, then the kind's [prompts] default.
-	if len(w.sent) != 2 || !strings.HasPrefix(w.sent[0].Message, "Your Agent Mail identity is already registered: name IcyKnoll, project key /p") ||
-		!strings.HasSuffix(w.sent[0].Message, "Read AGENTS.md.") || w.sent[0].Selector.Names[0] != "IcyKnoll" {
+	// The kickoff: the kind's [prompts] default alone, as ntm's; the name
+	// is in the identity file only (nhm-2p6.4.6).
+	if len(w.sent) != 2 || w.sent[0].Message != "Read AGENTS.md." || w.sent[0].Selector.Names[0] != "IcyKnoll" {
 		t.Fatalf("kickoffs = %+v", w.sent)
-	}
-	// Its memory query is the task, not the identity preamble
-	// (acfs-9hkh.87).
-	if q := w.sent[0].Enrich.Query; strings.Contains(q, "Agent Mail identity") || !strings.HasSuffix(q, "Read AGENTS.md.") {
-		t.Fatalf("kickoff memory query = %q", q)
 	}
 	if strings.Join(w.idFiles, ",") != "w1:p1=IcyKnoll,w1:p2=BlueLake" {
 		t.Fatalf("identity files = %v", w.idFiles)
@@ -848,7 +843,7 @@ func TestAliasSuffixAndOwnPrompt(t *testing.T) {
 	if _, err := Spawn(context.Background(), w.env, r); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(w.sent[0].Message, "\n\nCheck {{this}} literally.") {
+	if w.sent[0].Message != "Check {{this}} literally." {
 		t.Fatalf("own prompt = %q", w.sent[0].Message)
 	}
 }

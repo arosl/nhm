@@ -196,10 +196,11 @@ func TestSpawnVerb(t *testing.T) {
 	if pane == nil || pane["type"] != "claude" || pane["pane_target"] != "2.1" || pane["window_index"] != 2.0 || pane["index"] != 1.0 {
 		t.Fatalf("the agent's pane = %v in %v", pane, resp["panes"])
 	}
-	if got := h.sent(); len(got) != 1 || !strings.Contains(got[0], "name GreenPike, project key "+project) || !strings.HasSuffix(got[0], "Read AGENTS.md.") {
+	// The kickoff is the prompt alone; Agent Mail's pane identity file
+	// names the agent (nhm-2p6.4.6).
+	if got := h.sent(); len(got) != 1 || got[0] != agent["pane_id"].(string)+"=Read AGENTS.md." {
 		t.Fatalf("kickoff = %q", got)
 	}
-	// Agent Mail's pane identity file names the agent.
 	rec, found, err := agentmail.ReadIdentity("", project, agent["pane_id"].(string))
 	if err != nil || !found || rec.Name != "GreenPike" {
 		t.Fatalf("identity file = %+v %v %v", rec, found, err)

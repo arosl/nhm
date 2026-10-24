@@ -2,37 +2,30 @@ package spawn
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
-// The kickoff's preamble tells the agent to register, when the prompt
-// says so, with exactly the name and project key nhm gave it: for a
-// [prompts] default (ACFS's palette text says only "register") and for a
-// prompt of the caller's (nhm-lm4).
-func TestKickoffSaysToRegisterWithThisNameAndKey(t *testing.T) {
-	const rule = "When the prompt below says to register, register with exactly this name and project key."
+// The kickoff is the prompt alone, as ntm's: no identity preamble, for a
+// [prompts] default and for a prompt of the caller's. The agent's name is
+// in its identity file only (the operator, 2026-10-24; nhm-2p6.4.6).
+func TestKickoffIsThePromptAlone(t *testing.T) {
 	for _, prompt := range []string{"", "Fix the login bug."} {
 		w := newWorld(t)
 		r := req(Want{Kind: "claude", Count: 1})
 		r.Prompt = prompt
+		want := prompt
 		if prompt == "" {
-			r.DefaultPrompts = map[string]string{"claude": "Register with Agent Mail, then read AGENTS.md."}
+			want = "Register with Agent Mail, then read AGENTS.md."
+			r.DefaultPrompts = map[string]string{"claude": want}
 		}
 		if _, err := Spawn(context.Background(), w.env, r); err != nil {
 			t.Fatal(err)
 		}
-		if len(w.sent) != 1 {
-			t.Fatalf("prompt %q: %d kickoffs", prompt, len(w.sent))
+		if len(w.sent) != 1 || w.sent[0].Message != want {
+			t.Fatalf("prompt %q: kickoffs = %+v", prompt, w.sent)
 		}
-		msg := w.sent[0].Message
-		head, task, _ := strings.Cut(msg, "\n\n")
-		if !strings.HasPrefix(head, "Your Agent Mail identity is already registered: name IcyKnoll, project key /p") ||
-			!strings.Contains(head, rule) || strings.Contains(task, rule) {
-			t.Errorf("prompt %q: kickoff = %q", prompt, msg)
-		}
-		if prompt != "" && task != prompt {
-			t.Errorf("prompt %q: the task is %q", prompt, task)
+		if len(w.idFiles) != 1 || w.idFiles[0] != "w1:p1=IcyKnoll" {
+			t.Fatalf("prompt %q: identity files = %v", prompt, w.idFiles)
 		}
 	}
 }

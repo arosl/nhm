@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/assignment"
-	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/spawnassign"
 	"github.com/arosl/nhm/internal/integrations/bv"
@@ -151,32 +150,6 @@ func TestKickoffSkips(t *testing.T) {
 	}
 }
 
-// The human form's preamble is the kickoff's identity preamble, from the
-// occupant's binding: its Mail name and project key, and its herdr name
-// (a suffixed one too) and workspace. A binding that cannot be read gets
-// none.
-func TestIdentityPreambleFromTheBinding(t *testing.T) {
-	_, inst := cliInstance(t)
-	db, err := store.Open(inst.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	b, err := bindings.NewStore(db).Create(context.Background(), bindings.New{MailName: "IcyKnoll", MailProjectKey: "/p",
-		ProjectID: "proj", Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1",
-			PaneID: "w1:p1", HerdrAlias: "icyknoll-2", Kind: "claude"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pre := identityPreamble(context.Background(), &instanceEnv{inst: inst, db: db})
-	if got, want := pre(spawnassign.Occupant{BindingID: b.ID}), spawn.IdentityPreamble("IcyKnoll", "/p", "icyknoll-2", "w1"); got != want {
-		t.Fatalf("preamble = %q, want %q", got, want)
-	}
-	if got := pre(spawnassign.Occupant{BindingID: "bnd-unknown"}); got != "" {
-		t.Fatalf("unknown binding = %q", got)
-	}
-}
-
 // assignTools installs a fake bv and br for one ready bead, nhm-1, in a
 // new project, and leaves PATH with them alone. br's claim marks the bead
 // in progress for the actor.
@@ -253,7 +226,8 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 		!strings.Contains(out, "  Waiting for agents to become ready... [FAIL]\n") {
 		t.Fatalf("partial spawn = %d\n%s\n%s", code, out, errOut)
 	}
-	if sent := h.sent(); len(sent) != 1 || !strings.HasSuffix(sent[0], "Read AGENTS.md.") || !strings.Contains(sent[0], "GreenPike") {
+	// The prompt goes alone, with no identity preamble (nhm-2p6.4.6).
+	if sent := h.sent(); len(sent) != 1 || sent[0] != "w1:p11=Read AGENTS.md." {
 		t.Fatalf("partial spawn prompts = %q", sent)
 	}
 
@@ -277,12 +251,11 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 	work := "Read AGENTS.md.\n\nThen check your mail.\n\nWork on bead nhm-1: Fix the thing. Check dependencies first with `br dep tree nhm-1`."
 	var worked, kicked int
 	for _, p := range sent {
-		switch {
-		case !strings.Contains(p, "project key "+project):
-			t.Fatalf("a prompt without the identity: %q", p)
-		case strings.Contains(p, work):
+		_, msg, _ := strings.Cut(p, "=")
+		switch msg {
+		case work:
 			worked++
-		case strings.HasSuffix(p, "Read AGENTS.md.\n\nThen check your mail.") && !strings.Contains(p, "nhm-1"):
+		case "Read AGENTS.md.\n\nThen check your mail.":
 			kicked++
 		default:
 			t.Fatalf("prompt = %q", p)

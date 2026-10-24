@@ -220,10 +220,9 @@ func assignPhase(ctx context.Context, ie *instanceEnv, res spawn.Result, scope c
 // --assign for the user (its flags, phase order, text, and bead-to-agent
 // choices, spawnassign.SelectHuman), on the robot form's preflight, claim,
 // ledger and send core. The spawn sends no kickoff then: each agent that
-// gets a bead gets its identity, the kickoff and --init-prompt ahead of
-// its work prompt, in one delivery, since a working agent takes no second
-// prompt; every other agent gets them after the assignment, as its
-// kickoff.
+// gets a bead gets the kickoff and --init-prompt ahead of its work
+// prompt, in one delivery, since a working agent takes no second prompt;
+// every other agent gets them after the assignment, as its kickoff.
 type humanAssign struct {
 	strategy   string
 	limit      int
@@ -623,26 +622,6 @@ func replayUntouched(ctx context.Context, ie *instanceEnv, res *spawn.Result) ([
 		}
 	}
 	return untouched, nil
-}
-
-// identityPreamble is the human form's Preamble: each agent's work
-// prompt starts as its kickoff would, with nhm's identity preamble
-// (spawn.IdentityPreamble, nhm-lm4), so the kickoff's "register with
-// Agent Mail" uses the identity spawn made. A binding that cannot be
-// read gets none.
-func identityPreamble(ctx context.Context, ie *instanceEnv) func(spawnassign.Occupant) string {
-	store := bindings.NewStore(ie.db)
-	return func(o spawnassign.Occupant) string {
-		b, err := store.Get(ctx, o.BindingID)
-		if err != nil {
-			return ""
-		}
-		alias := b.HerdrAlias
-		if alias == "" {
-			alias = strings.ToLower(b.MailName)
-		}
-		return spawn.IdentityPreamble(b.MailName, b.MailProjectKey, alias, b.WorkspaceID)
-	}
 }
 
 // robotAssignRefusal writes a preflight refusal as a --robot-spawn answer.

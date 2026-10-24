@@ -132,10 +132,10 @@ func TestSpawnPromptsDefault(t *testing.T) {
 	if err != nil || len(w.sent) != 2 {
 		t.Fatalf("spawn = %v, %d kickoffs", err, len(w.sent))
 	}
-	if _, task, _ := strings.Cut(w.sent[0].Message, "\n\n"); task != "Read AGENTS.md.\n\nFix the login bug." {
+	if w.sent[0].Message != "Read AGENTS.md.\n\nFix the login bug." {
 		t.Fatalf("claude's kickoff = %q", w.sent[0].Message)
 	}
-	if _, task, _ := strings.Cut(w.sent[1].Message, "\n\n"); task != "Fix the login bug." {
+	if w.sent[1].Message != "Fix the login bug." {
 		t.Fatalf("codex's kickoff = %q", w.sent[1].Message)
 	}
 	// Without the prompt, codex has nothing: it gets no kickoff, and the
@@ -156,7 +156,7 @@ func TestSpawnPromptsDefault(t *testing.T) {
 	w = newWorld(t)
 	r.KickoffTemplate = "default_new_agent"
 	if res, err = Spawn(context.Background(), w.env, r); err != nil || len(w.sent) != 2 || res.KickoffTemplate != "default_new_agent" ||
-		!strings.HasSuffix(w.sent[1].Message, "\n\nRead AGENTS.md.") {
+		w.sent[1].Message != "Read AGENTS.md." {
 		t.Fatalf("palette = %v, %+v", err, w.sent)
 	}
 }
