@@ -72,8 +72,8 @@ Usage:
                          send each agent its kind's interrupt key
   nhm send <session> [prompt] [selector] [-t KEY] [--op-id ID] [--wait] [--dry-run] [--json]
                          send one prompt, once, with a receipt per agent
-  nhm memory <query> [--project DIR] [--json]
-                         show the CM and CASS block a send would carry
+  nhm memory serve [--port N] | context <task> | outcome <status> [--rules IDS] | privacy …
+                         ntm's memory verbs over CM: run its daemon, ask it, record
   nhm feedback list|mark|outcomes [--json]
                          the rules each session got; tell CM how they did
   nhm modes list|explain <mode> [--json]
@@ -88,10 +88,10 @@ Usage:
                          nudge agents with new Agent Mail, once per message
   nhm maintain [--once | --loop [--interval D]] [--json]
                          the maintenance pass: due wakes, inboxes, names
-  nhm mail inbox [--agent NAME] [--keep-unread] [--json]
-                         list the agent's unread mail by thread; mark it read
-  nhm mail inbox <session> [--agent NAME] [--urgent] [--session-agents] [--json]
+  nhm mail inbox [session] [--agent NAME] [--urgent] [--session-agents] [--json]
                          the project's inbox, read-only, as ntm's mail inbox
+  nhm mail inbox (--mark-read | --keep-unread) [--agent NAME] [--json]
+                         one agent's unread mail by thread; --mark-read marks it read
   nhm doctor [--json]    check what nhm needs
   nhm deps [-v] [--json] (also check)
                          the tools and agent CLIs installed, as ntm's deps

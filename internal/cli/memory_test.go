@@ -73,37 +73,6 @@ func (f *fakeTools) count(prefix string) int {
 	return n
 }
 
-func TestMemoryShowsTheBlock(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	(&fakeTools{}).use(t)
-	code, out, errOut := run("memory", "fix", "the", "login", "--project", t.TempDir())
-	if code != 0 || !strings.Contains(out, "[nhm context:") || !strings.Contains(out, "[b-login] (testing) Run the login tests") ||
-		!strings.Contains(out, "included cass /h/.claude/projects/-p/old.jsonl:4") {
-		t.Fatalf("memory = %d %s %s", code, out, errOut)
-	}
-	code, out, _ = run("memory", "q", "--cm", "required", "--cass", "off", "--json")
-	res := decodeEnvelope(t, out)["result"].(map[string]any)
-	if code != 0 || res["cass"].(map[string]any)["enabled"] != false {
-		t.Fatalf("json = %d %s", code, out)
-	}
-	if code, _, _ = run("memory"); code != exitRefused {
-		t.Fatalf("no query = %d", code)
-	}
-	if code, _, _ = run("memory", "q", "--cm", "always"); code != exitRefused {
-		t.Fatalf("bad mode = %d", code)
-	}
-}
-
-func TestMemoryRequiredWithoutCMFails(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	code, _, errOut := run("memory", "q", "--cm", "required", "--cass", "off")
-	if code != exitError || !strings.Contains(errOut, "cm is not installed") {
-		t.Fatalf("required = %d %s", code, errOut)
-	}
-}
-
 func TestSendWithMemoryAndFeedback(t *testing.T) {
 	s, inst, h := newSendInstance(t)
 	ownNhm(t, inst)

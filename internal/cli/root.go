@@ -266,7 +266,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "wait", run: runWait},
 		{name: "interrupt", run: runInterrupt},
 		{name: "send", run: runSend},
-		{name: "memory", run: runMemory},
 		{name: "feedback", run: runFeedback},
 		{name: "modes", run: runModes},
 		{name: "ensemble", run: runEnsemble},
@@ -358,13 +357,15 @@ func newRoot(stdout, stderr io.Writer) *root {
 			fmt.Fprint(c.OutOrStdout(), adminUsage(nil))
 			return
 		}
-		if u, ok := verbUsage[c.Name()]; ok {
+		// Only a verb's own name: a sub-verb that shares a verb's name
+		// (memory privacy status) gets cobra's help, not that verb's.
+		if u, ok := verbUsage[c.Name()]; ok && c.Parent() == c.Root() {
 			fmt.Fprint(c.OutOrStdout(), u)
 			return
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}
