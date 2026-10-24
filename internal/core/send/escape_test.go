@@ -11,6 +11,7 @@ import (
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/cm"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
 )
 
@@ -42,7 +43,8 @@ func r(c rune) string { return string(c) }
 // Claude Code, Codex and pi run a prompt that starts with "!" as a shell
 // command, with no approval and no hook (the sandbox, nhm-ubi): send
 // refuses it before its claim, a dry run too, and names the agent, its
-// kind and why. A kind whose escape nobody checked gets it.
+// kind and why. A kind that the sandbox has not proved has "!" by default
+// (nhm-gb0), and the refusal says so.
 func TestSendRefusesAShellEscapeForEachKind(t *testing.T) {
 	for _, kind := range []string{"claude", "codex", "pi"} {
 		t.Run(kind, func(t *testing.T) {
@@ -51,16 +53,45 @@ func TestSendRefusesAShellEscapeForEachKind(t *testing.T) {
 			w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", kind, herdr.StatusIdle)
 			_, err := Send(ctx, w.env, base(Request{Message: "!touch /tmp/x && git reset --hard", OperationID: "op-" + kind}))
 			refusedBeforeClaim(t, w, err, "op-"+kind, `the prompt for IcyKnoll (`+kind+`) starts with "!"`,
-				"each agent's kind runs a prompt that starts with", "no hook that can stop it")
+				`"!" is a shell escape of each agent's kind`, "no guard such as dcg screens it")
 			_, err = Send(ctx, w.env, base(Request{Message: "!ls", DryRun: true}))
 			refusedBeforeClaim(t, w, err, "")
 		})
 	}
+	// gemini: a kind herdr starts that nhm has no adapter for.
 	w := newWorld(t)
+	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "gemini", herdr.StatusIdle)
+	_, err := Send(context.Background(), w.env, base(Request{Message: "!ls", OperationID: "op-gemini"}))
+	refusedBeforeClaim(t, w, err, "op-gemini", `the prompt for IcyKnoll (gemini) starts with "!"`,
+		"the shell escape of every kind that the sandbox has not proved to have none")
+	// omp runs a "$" line as Python too.
+	w = newWorld(t)
 	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "omp", herdr.StatusIdle)
-	res, err := Send(context.Background(), w.env, base(Request{Message: "!ls"}))
-	if err != nil || res.Targets[0].Status != StatusSubmitted || w.fake.prompts[0].text != "!ls" {
-		t.Fatalf("omp = %+v %v", res, err)
+	_, err = Send(context.Background(), w.env, base(Request{Message: "$ open('x', 'w')"}))
+	refusedBeforeClaim(t, w, err, "", `the prompt for IcyKnoll (omp) starts with "$"`)
+}
+
+// grok runs no prompt as a shell command (the sandbox, nhm-gb0): it takes
+// a "!" first and a control character, as typed. The check goes by the
+// binding's kind, so a grok binding whose pane now holds a Claude agent is
+// the delivery gate's to refuse (unsafe), and gets no prompt.
+func TestSendToAKindWithoutAnEscape(t *testing.T) {
+	w := newWorld(t)
+	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "grok", herdr.StatusIdle)
+	for i, msg := range []string{"!ls", "a log\x1b[31m red\x1b[0m"} {
+		res, err := Send(context.Background(), w.env, base(Request{Message: msg, WhenAny: true}))
+		if err != nil || res.Targets[0].Status != StatusSubmitted || w.fake.prompts[i].text != msg {
+			t.Fatalf("%q = %+v %v", msg, res, err)
+		}
+	}
+	w = newWorld(t)
+	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "grok", herdr.StatusIdle)
+	a := w.fake.agents["w1:p1"]
+	a.Agent = "claude"
+	w.fake.agents["w1:p1"] = a
+	res, err := Send(context.Background(), w.env, base(Request{Message: "!ls", WhenAny: true}))
+	if err != nil || res.Targets[0].Status != StatusRefused || res.Targets[0].ErrorCode != "gate_unsafe" || w.fake.promptCount() != 0 {
+		t.Fatalf("a grok binding holding claude = %+v %v", res, err)
 	}
 }
 
@@ -90,8 +121,8 @@ func TestSendShellEscapeForms(t *testing.T) {
 
 // A control character (the end of a bracketed paste, any ESC sequence)
 // can let the text after it reach the agent as typed keys (nhm-ubi):
-// refused for any kind, also one with no shell escape. Tab, newline and
-// carriage return go out as typed.
+// refused for a kind with a shell escape (omp's "!" here; nhm-gb0). Tab,
+// newline and carriage return go out as typed.
 func TestSendRefusesThePasteEnd(t *testing.T) {
 	w := newWorld(t)
 	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "omp", herdr.StatusIdle)
@@ -105,17 +136,19 @@ func TestSendRefusesThePasteEnd(t *testing.T) {
 	}
 }
 
-// One target that would run the prompt refuses the whole send: nothing
-// goes to the others either. The error names each such target, one
-// sentence per reason.
+// A target that would run the prompt refuses the whole send: nothing goes
+// to the others either. The error names each such target, one sentence
+// per reason: a proved escape, and the default one.
 func TestSendShellEscapeRefusesTheWholeSend(t *testing.T) {
 	w := newWorld(t)
 	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "claude", herdr.StatusIdle)
-	w.bind(t, "BlueLake", "w1:t2", "w1:p2", "omp", herdr.StatusIdle)
+	w.bind(t, "BlueLake", "w1:t2", "w1:p2", "gemini", herdr.StatusIdle)
 	w.bind(t, "RedStone", "w1:t3", "w1:p3", "pi", herdr.StatusIdle)
+	w.bind(t, "GreenPike", "w1:t4", "w1:p4", "grok", herdr.StatusIdle)
 	_, err := Send(context.Background(), w.env, base(Request{Message: "!ls", OperationID: "op-mixed"}))
-	refusedBeforeClaim(t, w, err, "op-mixed", `the prompt for IcyKnoll (claude), RedStone (pi) starts with "!"`)
-	if strings.Contains(err.Error(), "BlueLake") || strings.Count(err.Error(), "the prompt for") != 1 {
+	refusedBeforeClaim(t, w, err, "op-mixed", `the prompt for IcyKnoll (claude), RedStone (pi) starts with "!"`,
+		`the prompt for BlueLake (gemini) starts with "!"`)
+	if strings.Count(err.Error(), "the prompt for") != 2 || strings.Contains(err.Error(), "GreenPike") {
 		t.Fatalf("the refusal = %v", err)
 	}
 }
@@ -154,17 +187,19 @@ func TestSendShellEscapeReadsTheRenderedPrompt(t *testing.T) {
 	}
 }
 
-// The check goes by the binding's kind: a pane whose agent is now of
-// another kind is the delivery gate's (unsafe), and gets no prompt.
-func TestShellEscapeAndAChangedKind(t *testing.T) {
-	w := newWorld(t)
-	w.bind(t, "IcyKnoll", "w1:t1", "w1:p1", "omp", herdr.StatusIdle)
-	a := w.fake.agents["w1:p1"]
-	a.Agent = "pi"
-	w.fake.agents["w1:p1"] = a
-	res, err := Send(context.Background(), w.env, base(Request{Message: "!ls"}))
-	if err != nil || res.Targets[0].Status != StatusRefused || res.Targets[0].ErrorCode != "gate_unsafe" || w.fake.promptCount() != 0 {
-		t.Fatalf("changed kind = %+v %v", res, err)
+// A kind that the sandbox proved has no shell escape takes any prompt:
+// one that starts with "!", and one with a control character (the
+// operator's ruling, 2026-10-24; nhm-gb0). A kind with one is refused
+// both.
+func TestShellReasonOfAKindWithoutAnEscape(t *testing.T) {
+	none := kinds.Adapter{Name: "proved", NoShellEscape: true}
+	for _, msg := range []string{"!ls", "  !ls", "a\x1b[201~\r!ls", "\x1b[31mred\x1b[0m"} {
+		if why := shellReason(msg, none); why != "" {
+			t.Errorf("%q to a kind without an escape: %s", msg, why)
+		}
+		if why := shellReason(msg, kinds.Adapter{Name: "default"}); why == "" {
+			t.Errorf("%q to a kind with the default escape: no refusal", msg)
+		}
 	}
 }
 

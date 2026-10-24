@@ -34,25 +34,36 @@ func (e *ShellEscapeError) Unwrap() error { return ErrShellEscape }
 // bracketed paste and passes control characters through; an ESC [201~
 // ends the paste, so the text after it reaches the agent as typed keys,
 // and Codex 0.164.0 and pi 0.8.0 ran a "!" after it or after other
-// control characters (the sandbox, nhm-ubi). Every kind's prompts are
-// refused with one: keys could do anything that keys do.
+// control characters (the sandbox, nhm-ubi). A prompt to a kind with a
+// shell escape is refused with one; a kind proved to have none takes it
+// (the operator's ruling, 2026-10-24; nhm-gb0).
 func controlChar(r rune) bool { return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r' }
 
-// shellReason says why an agent of kind would run payload as a shell
+// shellReason says why an agent of kind a would run payload as a shell
 // command that no guard screens, or "" when it would not: what follows
 // "the prompt for <agent> (<kind>)".
-func shellReason(payload, kind string) string {
+func shellReason(payload string, a kinds.Adapter) string {
+	esc := a.Escape()
+	if esc == "" {
+		return ""
+	}
 	if i := strings.IndexFunc(payload, controlChar); i >= 0 {
 		return fmt.Sprintf("holds the control character %U: herdr types the prompt as one paste and passes it through, "+
 			"so the text after it can reach the agent as typed keys, which can submit a shell command that no guard screens; "+
 			"remove control characters (ESC, ANSI colours) but tab, newline and carriage return", []rune(payload[i:])[0])
 	}
-	if a := kinds.Lookup(kind); a.RunsAsShell(payload) {
-		return fmt.Sprintf("starts with %q (nhm skips white space before it, as pi and Codex do): each agent's kind runs "+
-			"a prompt that starts with %q as a shell command at once, with no approval question and no hook that can stop it, "+
-			"so no guard such as dcg screens it; start the prompt with other text", a.ShellEscape, a.ShellEscape)
+	p := a.ShellPrefix(payload)
+	switch {
+	case p == "":
+		return ""
+	case p == kinds.DefaultShellEscape && a.EscapeIsDefault():
+		return fmt.Sprintf("starts with %q (nhm skips white space before it): nhm takes %q as the shell escape of every kind "+
+			"that the sandbox has not proved to have none, because such a prompt may run as a shell command that no guard "+
+			"such as dcg screens; start the prompt with other text", p, p)
 	}
-	return ""
+	return fmt.Sprintf("starts with %q (nhm skips white space before it): %q is a shell escape of each agent's kind, "+
+		"which can run such text as a command at once, with no approval question, so no guard such as dcg screens it; "+
+		"start the prompt with other text", p, p)
 }
 
 // refuseShell refuses the send when any target's prompt would run as a
@@ -63,7 +74,7 @@ func refuseShell(targets []Target, payloads []string) error {
 	keys := make([]string, 0, len(targets))
 	for i, t := range targets {
 		keys = append(keys, t.Key)
-		why := shellReason(payloads[i], t.Binding.Kind)
+		why := shellReason(payloads[i], kinds.Lookup(t.Binding.Kind))
 		if why == "" {
 			continue
 		}

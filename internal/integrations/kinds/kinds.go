@@ -114,10 +114,18 @@ type Adapter struct {
 	ExitCommand string `json:"exit_command,omitempty"`
 	// ShellEscape is the prefix that makes the kind run a prompt as a
 	// shell command: at once, with no approval question, and no hook sees
-	// the command, so no guard (dcg) screens it. "" when the kind has none
-	// or none is proved. Core send refuses a prompt that RunsAsShell
-	// (nhm-ubi).
+	// the command, so no guard (dcg) screens it (nhm-ubi). "" is
+	// DefaultShellEscape: every kind has one until the sandbox proves that
+	// it runs no such prompt, and NoShellEscape records that proof (the
+	// operator's ruling, 2026-10-24; nhm-gb0). Escape gives the one in
+	// force; core send refuses a prompt that RunsAsShell.
 	ShellEscape string `json:"shell_escape,omitempty"`
+	// NoShellEscape: the sandbox proved that the kind runs no prompt as a
+	// shell command. Only a built-in kind sets it, in this file.
+	NoShellEscape bool `json:"no_shell_escape,omitempty"`
+	// ExtraEscapes are other prefixes that make the kind run a prompt as
+	// code at once (omp's "$" runs Python; nhm-gb0).
+	ExtraEscapes []string `json:"extra_escapes,omitempty"`
 	// InterruptKeys stop a turn and keep the session; nil: not checked.
 	// Key names are herdr's: "esc" is canonical (herdr agent send-keys
 	// --help), "enter", "down".
@@ -413,17 +421,53 @@ func (a Adapter) HasFlag(f string) bool {
 }
 
 // RunsAsShell reports whether the kind would run text typed at its prompt
-// as a shell command: the text starts with the kind's shell escape, white
-// space and control or format characters before it aside. pi 0.8.0 and
+// as a shell command: the text starts with the kind's escape in force
+// (Escape: "!" by default) or one of its ExtraEscapes, white space and
+// control or format characters before it aside. pi 0.8.0 and
 // Codex 0.164.0 skip leading white space (a space, a tab, a newline, a
 // no-break space) before they read the escape, and some kinds drop
 // leading control characters; one rule for every kind holds if a later
 // version does more. An escape on a later line runs nothing (proved in
 // the sandbox, nhm-ubi).
-func (a Adapter) RunsAsShell(text string) bool {
+func (a Adapter) RunsAsShell(text string) bool { return a.ShellPrefix(text) != "" }
+
+// ShellPrefix is the escape that text starts with, by RunsAsShell's rule:
+// the kind's escape in force or one of its ExtraEscapes; "" for none, and
+// always for a kind proved to have none.
+func (a Adapter) ShellPrefix(text string) string {
+	esc := a.Escape()
+	if esc == "" {
+		return ""
+	}
 	skip := func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
-	return a.ShellEscape != "" && strings.HasPrefix(strings.TrimLeftFunc(text, skip), a.ShellEscape)
+	text = strings.TrimLeftFunc(text, skip)
+	for _, e := range append([]string{esc}, a.ExtraEscapes...) {
+		if e != "" && strings.HasPrefix(text, e) {
+			return e
+		}
+	}
+	return ""
 }
+
+// DefaultShellEscape is the shell escape of a kind that names none and is
+// not proved to have none (the operator's ruling, 2026-10-24; nhm-gb0).
+const DefaultShellEscape = "!"
+
+// Escape is the kind's shell escape in force: its own, DefaultShellEscape
+// when it names none, or "" when the sandbox proved it has none.
+func (a Adapter) Escape() string {
+	switch {
+	case a.NoShellEscape:
+		return ""
+	case a.ShellEscape != "":
+		return a.ShellEscape
+	}
+	return DefaultShellEscape
+}
+
+// EscapeIsDefault reports whether the escape in force is the default, not
+// one that the kind names.
+func (a Adapter) EscapeIsDefault() bool { return !a.NoShellEscape && a.ShellEscape == "" }
 
 func fromClaude(e Event, bound string, launch bool) Decision {
 	d := claude.Classify(claude.Event{HookEvent: e.HookEvent, Source: e.Source, SessionID: e.SessionID, Entrypoint: e.Entrypoint}, bound, launch)
@@ -576,11 +620,17 @@ func builtins() []Adapter {
 				`a "!" shell command that a person types at its prompt: Codex runs it at once, and no hook sees it, so dcg does not screen it (nhm send refuses one, nhm-ubi)`},
 		},
 		{
+			// agy-real 1.4.6 (nhm-gb0): a pasted "!" goes to the model, but
+			// a "!" typed as a key at an empty prompt (after a paste end)
+			// runs in its bash mode, and no PreToolUse or PostToolUse hook
+			// fired; so it keeps "!", and the control-character refusal.
 			Name: "agy", NTMType: "antigravity", Program: "antigravity", QuotaPool: "agy", PinnedModel: "Gemini 3.8 Flash (High)",
-			Limit:      regexp.MustCompile(`(?i)resource_exhausted|quota (exceeded|exhausted)|(reached|exhausted) (your|the) [a-z0-9. -]{0,30}quota|usage limit reached|429 too many requests`),
-			CodeReview: true, GuardSettings: ".gemini/config/hooks.json", GuardSupported: true,
+			ShellEscape: "!",
+			Limit:       regexp.MustCompile(`(?i)resource_exhausted|quota (exceeded|exhausted)|(reached|exhausted) (your|the) [a-z0-9. -]{0,30}quota|usage limit reached|429 too many requests`),
+			CodeReview:  true, GuardSettings: ".gemini/config/hooks.json", GuardSupported: true,
 			Cannot: []string{"its usage (no quota source)", "its interrupt key", "a SessionStart hook, so a name is not restored after a compaction",
-				"its model: agy-locked pins it", "its session resume", notCheckedEscape},
+				"its model: agy-locked pins it", "its session resume",
+				`a "!" shell command that a person types at its prompt: agy runs it in its bash mode, and no hook was seen to fire, so dcg may not screen it (nhm send refuses a prompt that starts with "!" or holds a control character, nhm-gb0)`},
 		},
 		{
 			// pi 0.7.1 (pi_agent_rust): --model, --thinking, /exit and /new
@@ -619,32 +669,39 @@ func builtins() []Adapter {
 		},
 		{
 			// ntm's launch (DefaultOmpCommand): --model, and the effort as
-			// --thinking.
+			// --thinking. omp 18.12.6 (nhm-gb0): "!" runs a shell command at
+			// once, also after leading white space, and "$" runs Python; an
+			// extension's input and user_bash events see the command.
 			Name: "omp", NTMType: "omp", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
+			ShellEscape: "!", ExtraEscapes: []string{"$"},
 			InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its session resume", notCheckedEscape},
+			Cannot: []string{"its guard settings file", "its usage", "its session resume",
+				`a "!" shell command or a "$" Python line that a person types at its prompt: omp runs it at once, and nhm installs no omp guard (nhm send refuses a prompt that starts with either, or holds a control character, nhm-gb0)`},
 		},
 		{
 			// ntm's robot outputs type opencode as oc (nhm-i3k). ntm's
 			// launch (DefaultOpencodeCommand) passes --model, and no effort:
-			// the TUI has no effort flag.
-			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, ModelFlag: "--model",
+			// the TUI has no effort flag. opencode 1.19.4 (nhm-gb0): a pasted
+			// "!" goes to the model, but a "!" typed as a key at an empty
+			// prompt (after a paste end) runs in its shell mode, and no
+			// plugin hook sees the command text; so it keeps "!", and the
+			// control-character refusal.
+			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, ModelFlag: "--model", ShellEscape: "!",
 			QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume", notCheckedEscape},
+			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume",
+				`a "!" shell command that a person types at its prompt: opencode runs it in its shell mode, and no plugin hook sees the command (nhm send refuses a prompt that starts with "!" or holds a control character, nhm-gb0)`},
 		},
 		{
 			// ntm's launch (DefaultAgentTemplates' Grok): --model and
-			// --effort.
-			Name: "grok", NTMType: "grok", ModelFlag: "--model", EffortArgs: []string{"--effort", "{effort}"},
+			// --effort. grok 1.0.67 ran none of nhm-gb0's forms ("!" first,
+			// after white space, after a paste end): each went to the model
+			// and its UserPromptSubmit hook, so it has no shell escape.
+			Name: "grok", NTMType: "grok", ModelFlag: "--model", EffortArgs: []string{"--effort", "{effort}"}, NoShellEscape: true,
 			QuotaPool: "grok", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume", notCheckedEscape},
+			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume"},
 		},
 	}
 }
-
-// notCheckedEscape is the Cannot entry of a kind whose shell escape no
-// sandbox run checked (nhm-ubi checked Claude Code, Codex and pi).
-const notCheckedEscape = `its shell escape: not checked, so nhm send refuses no prompt that starts with "!"`
 
 // Registry holds the adapters by name, in registration order.
 type Registry struct {
