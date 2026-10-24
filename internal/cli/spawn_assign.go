@@ -435,10 +435,16 @@ func (o humanOutcome) err() error {
 // without --assign-verbose, as ntm's text mode is verbose by default. The
 // strategy line prints only when no bead failed, as ntm returns before it.
 func (a *humanAssign) print(w, errw io.Writer, ready, inited int, o humanOutcome, sel spawnassign.HumanSelection) {
+	// ntm's phase steps (runSpawnAssignmentTextContext, spawn.go
+	// 4033-4085), around its info lines and the assignment's text.
+	st := newSteps(w)
+	st.start("Waiting for agents to become ready").done()
 	fmt.Fprintf(w, "ℹ %d agents ready\n", ready)
 	if strings.TrimSpace(a.initPrompt) != "" {
+		st.start("Sending init prompt to ready agents").done()
 		fmt.Fprintf(w, "ℹ Init prompt sent to %d agents\n", inited)
 	}
+	st.start("Assigning work to agents")
 	if a.verbose || !a.quiet {
 		filtered := 0
 		for _, k := range sel.Skipped {
@@ -482,9 +488,12 @@ func (a *humanAssign) print(w, errw io.Writer, ready, inited int, o humanOutcome
 			fmt.Fprintf(w, "Assigned %d beads (%d failed)\n", o.assigned, o.failed)
 		}
 	}
-	if o.err() == nil {
-		fmt.Fprintf(w, "ℹ Assigned %d tasks (strategy: %s)\n", len(sel.Planned), a.strategy)
+	if o.err() != nil {
+		st.fail()
+		return
 	}
+	st.done()
+	fmt.Fprintf(w, "ℹ Assigned %d tasks (strategy: %s)\n", len(sel.Planned), a.strategy)
 }
 
 // kickoffSkips are the slots whose agent gets no kickoff: its work prompt

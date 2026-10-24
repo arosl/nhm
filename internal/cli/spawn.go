@@ -757,7 +757,17 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	res, code, err := spawnUnderOwner(ctx, ie, &req, project)
 	env.Scope, env.OperationID, env.Result = req.Scope, res.OperationID, res
 	env.Warnings = append(res.Admission.Warnings, res.Warnings...)
-	show := func(w io.Writer) { printSpawn(w, res) }
+	// ntm's step lines; nhm's agent lines go to stderr, as plain spawn's
+	// (writeSpawnNTM). A replay prints nhm's text.
+	steps := func(w io.Writer) {
+		if res.Replayed {
+			printSpawn(w, res)
+			return
+		}
+		printSpawnSteps(w, res)
+		printSpawn(stderr, res)
+	}
+	show := steps
 	if err != nil {
 		if assign != nil && !req.DryRun {
 			// The spawn sent no kickoff for --assign: an agent that started
@@ -842,7 +852,10 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		_, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, nil)
 		env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: []robot.SpawnAssignment{},
 			Skipped: []spawnassign.HumanSkip{}}
-		show = func(w io.Writer) { printSpawn(w, res) }
+		show = func(w io.Writer) {
+			steps(w)
+			newSteps(w).start("Waiting for agents to become ready").fail()
+		}
 		err := fmt.Errorf("assignment failed: ready wait failed: %d of %d agents ready", ready, len(res.Targets))
 		if kerr != nil {
 			err = fmt.Errorf("%w; kickoff: %v", err, kerr)
@@ -876,7 +889,7 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: planned,
 		Skipped: append([]spawnassign.HumanSkip{}, sel.Skipped...)}
 	show = func(w io.Writer) {
-		printSpawn(w, res)
+		steps(w)
 		if res.Replayed {
 			fmt.Fprintln(w, "assignment: the operation ran before, but none of its agents had a prompt; assigning now")
 		}
@@ -884,6 +897,16 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	}
 	if err := outcome.err(); err != nil {
 		return fail(err)
+	}
+	// ntm prints "What's next?" once the assignment succeeded.
+	printed := show
+	show = func(w io.Writer) {
+		printed(w)
+		if env.Command == "add" {
+			printSuccessFooter(w, addSuggestions(res.Session)...)
+		} else {
+			printSuccessFooter(w, spawnSuggestions(res.Session)...)
+		}
 	}
 	return output(stdout, stderr, asJSON, env, nil, spawnExit(res), show)
 }

@@ -246,8 +246,11 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 	// The stub cannot split a pane: the second agent of a shared tab fails.
 	code, out, errOut := run("spawn", "swarm", "--cc=2", "--project", project, "--allow-unguarded", "--assign", "--yes",
 		"--prompt", "Read AGENTS.md.", "--init-prompt", "Then check your mail.", "--socket", s.SocketPath)
+	// ntm's step lines on stdout, nhm's agent lines on stderr
+	// (nhm-2p6.4.11).
 	if code != exitError || !strings.Contains(errOut, "assignment failed: ready wait failed: 1 of 2 agents ready") ||
-		!strings.Contains(out, "GreenPike (claude, default model) slot 2.1 pane w1:p11 kickoff submitted") {
+		!strings.Contains(errOut, "GreenPike (claude, default model) slot 2.1 pane w1:p11 kickoff submitted") ||
+		!strings.Contains(out, "  Waiting for agents to become ready... [FAIL]\n") {
 		t.Fatalf("partial spawn = %d\n%s\n%s", code, out, errOut)
 	}
 	if sent := h.sent(); len(sent) != 1 || !strings.HasSuffix(sent[0], "Read AGENTS.md.") || !strings.Contains(sent[0], "GreenPike") {
@@ -260,8 +263,9 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("spawn --assign = %d\n%s\n%s", code, out, errOut)
 	}
-	for _, want := range []string{"ℹ 2 agents ready\n", "ℹ Init prompt sent to 2 agents\n", "Executing assignments...\n",
-		"  Assigned nhm-1 to pane ", "✓ Successfully assigned 1 beads\n", "ℹ Assigned 1 tasks (strategy: balanced)\n"} {
+	for _, want := range []string{"  Launching 2 agent(s)... [OK]\n", "  Waiting for agents to become ready... [OK]\nℹ 2 agents ready\n",
+		"  Sending init prompt to ready agents... [OK]\nℹ Init prompt sent to 2 agents\n", "  Assigning work to agents... \nExecuting assignments...\n",
+		"  Assigned nhm-1 to pane ", "✓ Successfully assigned 1 beads\n[OK]\nℹ Assigned 1 tasks (strategy: balanced)\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
@@ -358,9 +362,12 @@ func TestHumanPrint(t *testing.T) {
 	}}
 	var b, e bytes.Buffer
 	(&humanAssign{strategy: "balanced", initPrompt: "Then check mail."}).print(&b, &e, 2, 2, o, sel)
-	if got, want := b.String(), "ℹ 2 agents ready\nℹ Init prompt sent to 2 agents\n\nExecuting assignments...\n"+
+	// ntm's phase steps around its info lines (nhm-2p6.4.11): a planned
+	// bead that failed fails the assignment step.
+	if got, want := b.String(), "  Waiting for agents to become ready... [OK]\nℹ 2 agents ready\n"+
+		"  Sending init prompt to ready agents... [OK]\nℹ Init prompt sent to 2 agents\n  Assigning work to agents... \nExecuting assignments...\n"+
 		"  CM rules injected for nhm-1: ~40 tokens\n  Assigned nhm-1 to pane 0.1 (claude)\n  Failed to assign nhm-3 to pane 0.1: assignment target already has active work\n"+
-		"\nAssigned 1 beads (1 failed)\n"; got != want {
+		"\nAssigned 1 beads (1 failed)\n[FAIL]\n"; got != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", got, want)
 	}
 	if got, want := e.String(), "[DEP] Skipping nhm-7 - blocked_by_dependency: [nhm-6]\n[DEP] Skipping nhm-8 - already_in_progress\n"+
@@ -372,7 +379,8 @@ func TestHumanPrint(t *testing.T) {
 	e.Reset()
 	done := humanOutcome{assigned: 1, results: o.results[:1]}
 	(&humanAssign{strategy: "speed", quiet: true}).print(&b, &e, 2, 0, done, sel)
-	if got, want := b.String(), "ℹ 2 agents ready\nℹ Assigned 2 tasks (strategy: speed)\n"; got != want || e.Len() != 0 {
+	if got, want := b.String(), "  Waiting for agents to become ready... [OK]\nℹ 2 agents ready\n  Assigning work to agents... [OK]\n"+
+		"ℹ Assigned 2 tasks (strategy: speed)\n"; got != want || e.Len() != 0 {
 		t.Fatalf("quiet: stdout %q stderr %q", got, e.String())
 	}
 	b.Reset()
