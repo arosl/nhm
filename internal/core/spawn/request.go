@@ -105,9 +105,13 @@ type Request struct {
 	PaneEnv map[string]string
 	// VerifyBoot is ntm's spawn --verify-boot: the spawn waits for every
 	// agent to be ready, and one that is not fails it.
-	VerifyBoot  bool
-	TrustFolder bool
-	Force       bool
+	VerifyBoot bool
+	// Privacy and AllowPersist are ntm's spawn --privacy and
+	// --allow-persist: recorded for the session before any agent starts,
+	// for every nhm process that would persist its data (core/privacy).
+	Privacy, AllowPersist bool
+	TrustFolder           bool
+	Force                 bool
 	// AllowUnguarded records an exception for a missing guard, for this
 	// launch only.
 	AllowUnguarded bool

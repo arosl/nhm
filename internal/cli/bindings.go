@@ -13,6 +13,8 @@ import (
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/enrich"
+	"github.com/arosl/nhm/internal/core/privacy"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -66,7 +68,28 @@ func openInstance(socket string) (*instanceEnv, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := installPrivacy(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &instanceEnv{inst: inst, db: db, herdr: herdr.New(socket)}, nil
+}
+
+// installPrivacy makes this process's privacy manager, as ntm's root does
+// (core/privacy): nhm's [privacy] config, and the settings that spawn
+// --privacy recorded in the instance's store. A [privacy] section that
+// does not load refuses the command: it may hold a privacy promise.
+func installPrivacy(db *store.DB) error {
+	path, err := enrich.ConfigPath()
+	if err != nil {
+		return err
+	}
+	cfg, err := privacy.LoadConfig(path)
+	if err != nil {
+		return fmt.Errorf("[privacy]: %w", err)
+	}
+	privacy.SetDefaultManager(privacy.New(cfg).WithSessionLookup(privacy.StoreLookup(db)))
+	return nil
 }
 
 func (e *instanceEnv) env() bindings.Env {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/enrich"
+	"github.com/arosl/nhm/internal/core/privacy"
 	"github.com/arosl/nhm/internal/core/templates"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
@@ -482,7 +483,7 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 	if err := env.DB.SetOperationStatus(ctx, res.OperationID, OpCompleted, true, env.now()); err != nil {
 		return res, err
 	}
-	if env.History != nil {
+	if env.History != nil && historyAllowed(targets) {
 		appendHistory(env, req, res.OperationID, shared, receipts)
 	}
 	out, err := Stored(ctx, env.DB, res.OperationID)
@@ -668,6 +669,21 @@ func render(tmpl *templates.Template, req Request, bead *Bead, targets []Target)
 func allEqual(list []string) bool {
 	for _, s := range list[1:] {
 		if s != list[0] {
+			return false
+		}
+	}
+	return true
+}
+
+// historyAllowed reports whether the send's prompt may go to the prompt
+// history: ntm skips the entry, silently, when privacy mode blocks it for
+// the session (internal/history/storage.go, Append). A send of nhm may
+// reach agents of several sessions, so one in a private session is
+// enough (core/privacy, keyed by workspace id).
+func historyAllowed(targets []Target) bool {
+	m := privacy.GetDefaultManager()
+	for _, t := range targets {
+		if err := m.CanPersist(t.Binding.WorkspaceID, privacy.OpPromptHistory); err != nil {
 			return false
 		}
 	}

@@ -56,6 +56,32 @@ func TestSpawnVerifyBoot(t *testing.T) {
 	}
 }
 
+// ntm's spawn-only --privacy and --allow-persist reach the request; add
+// has neither; a [privacy] section that does not load refuses the
+// command, as it may hold a privacy promise (nhm-2p6.4.16).
+func TestSpawnPrivacyFlags(t *testing.T) {
+	t.Setenv("NHM_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
+	_, req, err := parseVerbArgs(t, false, "--cc=1", "--privacy", "--allow-persist")
+	if err != nil || !req.Privacy || !req.AllowPersist {
+		t.Fatalf("flags = %v %v %v", req.Privacy, req.AllowPersist, err)
+	}
+	for _, flag := range []string{"--privacy", "--allow-persist"} {
+		if _, _, err := parseVerbArgs(t, true, "--cc=1", flag); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+			t.Errorf("add %s = %v", flag, err)
+		}
+	}
+	s, _, h := newSendInstance(t)
+	spawnHerdr(t, s, h)
+	t.Setenv("HOME", t.TempDir())
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	writeAll(t, cfg, "[privacy]\nenabled = \"yes\"\n")
+	t.Setenv("NHM_CONFIG", cfg)
+	code, _, errOut := run("spawn", "swarm", "--cc=1", "--project", t.TempDir(), "--allow-unguarded", "--dry-run", "--socket", s.SocketPath)
+	if code != exitError || !strings.Contains(errOut, "[privacy]: "+cfg) {
+		t.Fatalf("a bad [privacy] = %d %q", code, errOut)
+	}
+}
+
 // ntm's --create-dir, on --project's folder: --create-dir or --json makes
 // a missing folder; without a terminal the spawn refuses in ntm's words; a
 // dry run makes nothing; add has no --create-dir (nhm-2p6.4.5).

@@ -48,7 +48,8 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc|--cod|--grok|--omp|--pi=N[:
                   [--assign-verbose|--assign-quiet] [--assign-timeout D] [--yes]]
                  [--stagger[=D]] [--stagger-mode none|fixed|smart] [--stagger-delay D] [--ready-timeout D]
                  [--trust-folder] [--force] [--ignore-capacity] [--allow-unguarded]
-                 [--require-observations] [--project DIR [--create-dir]] [--op-id ID] [--dry-run]
+                 [--require-observations] [--project DIR [--create-dir]] [--privacy [--allow-persist]]
+                 [--op-id ID] [--dry-run]
                  [--socket PATH] [--json]
        nhm add <session> …    the same, into an existing workspace, in its
                               agents' project unless --project names one
@@ -206,6 +207,7 @@ type spawnFlags struct {
 	role                    string
 	dryRun, asJSON          bool
 	safety, createDir       bool
+	privacy, allowPersist   bool
 	// staggerLegacy is spawn's --stagger[=D]; staggerOn says it was given.
 	staggerLegacy time.Duration
 	staggerOn     bool
@@ -373,6 +375,7 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 	req.NoWait = !f.assign && !f.trustFolder && !f.verifyBoot && (f.noKickoff || (req.Prompt == "" && len(req.DefaultPrompts) == 0))
 	// ntm's --pane-env and --verify-boot (30s, unless --ready-timeout).
 	req.PaneEnv, req.VerifyBoot = f.paneEnv, f.verifyBoot
+	req.Privacy, req.AllowPersist = f.privacy, f.allowPersist
 	if f.verifyBoot && !f.changed("ready-timeout") {
 		req.ReadyTimeout = verifyBootTimeout
 	}
@@ -463,10 +466,12 @@ func newSpawnVerbCmd(verb, short string) *cobra.Command {
 }
 
 // addSpawnOnlyFlags adds the flags of ntm's spawn that its add does not
-// have: --safety, --create-dir, --stagger, --pane-env, --verify-boot and
-// --no-hooks.
+// have: --safety, --create-dir, --stagger, --pane-env, --verify-boot,
+// --no-hooks, --privacy and --allow-persist.
 func addSpawnOnlyFlags(fs *pflag.FlagSet, f *spawnFlags) {
 	fs.BoolVar(&f.safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
+	fs.BoolVar(&f.privacy, "privacy", false, "Enable privacy mode (disables persistence of session data)")
+	fs.BoolVar(&f.allowPersist, "allow-persist", false, "Allow persistence operations even in privacy mode")
 	fs.BoolVar(&f.createDir, "create-dir", false, "Create the project directory if it does not exist (non-TTY spawns error instead of prompting)")
 	fs.StringToStringVar(&f.paneEnv, "pane-env", nil, "nhm-owned pane environment (KEY=TEMPLATE; templates: {project}, {pane}, {role})")
 	fs.BoolVar(&f.verifyBoot, "verify-boot", false,

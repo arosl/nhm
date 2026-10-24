@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/privacy"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/templates"
 	"github.com/arosl/nhm/internal/core/wake"
@@ -298,6 +299,16 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		}
 	}
 
+	// ntm's --privacy and --allow-persist bind every process that persists
+	// the session's data, so they are recorded before any agent starts; a
+	// promise that cannot be recorded aborts the spawn. A new workspace
+	// records them once it is made (createPane).
+	if res.WorkspaceID != "" {
+		if err := recordPrivacy(ctx, env, req, res.WorkspaceID, false); err != nil {
+			return res, err
+		}
+	}
+
 	// As ntm does: every agent starts first, then the spawn waits for them
 	// to be ready, then the kickoffs go out on the stagger schedule. The
 	// stagger paces the prompts, not the starts.
@@ -580,6 +591,11 @@ func createPane(ctx context.Context, env Env, req Request, res *Result, t *Targe
 			res.WorkspaceID = c.Tab.WorkspaceID
 		}
 		t.TabID, t.PaneID = c.Tab.TabID, c.RootPane.PaneID
+		// Before any agent starts, as ntm records --privacy on the new
+		// session; a new workspace never keeps an old record of its id.
+		if err := recordPrivacy(ctx, env, req, res.WorkspaceID, true); err != nil {
+			return err
+		}
 	case t.newTab:
 		c, err := env.Herdr.TabCreate(ctx, herdr.TabCreateParams{WorkspaceID: res.WorkspaceID, Cwd: req.ProjectRoot,
 			Label: tabLabel(req, t), Env: paneEnv, Focus: ptr(false)})
@@ -1033,7 +1049,32 @@ func fingerprint(req Request) map[string]any {
 	if req.VerifyBoot {
 		fp["verify_boot"] = true
 	}
+	if req.Privacy {
+		fp["privacy"] = true
+	}
+	if req.AllowPersist {
+		fp["allow_persist"] = true
+	}
 	return fp
+}
+
+// recordPrivacy records the session's --privacy and --allow-persist for
+// workspace ws (core/privacy) and registers them in this process. An
+// existing workspace takes them only when one is set, as ntm sets the
+// session option only then; a fresh one always, which clears an old
+// record of its id.
+func recordPrivacy(ctx context.Context, env Env, req Request, ws string, fresh bool) error {
+	if !fresh && !req.Privacy && !req.AllowPersist {
+		return nil
+	}
+	if err := privacy.Record(ctx, env.DB, ws, req.Privacy, req.AllowPersist); err != nil {
+		// ntm's words (internal/cli/spawn.go, spawnSessionLogic).
+		return fmt.Errorf("recording privacy settings for session %s: %w", req.Session, err)
+	}
+	if req.Privacy || req.AllowPersist {
+		privacy.GetDefaultManager().RegisterSession(ws, req.Privacy, req.AllowPersist)
+	}
+	return nil
 }
 
 // writeTarget stores a target's progress as the operation's receipt row.

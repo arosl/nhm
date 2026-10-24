@@ -743,7 +743,7 @@ func init() {
 		strategy assign-strategy require-reservation reservation-paths names tab-label stagger
 		pane-env verify-boot no-hooks cass-context cass-context-limit cass-context-days
 		init-prompt assign-agent assign-verbose assign-quiet assign-timeout with-agent-name create-dir
-		assign-cc-only assign-cod-only assign-gmi-only assign-agy-only`) {
+		privacy allow-persist assign-cc-only assign-cod-only assign-gmi-only assign-agy-only`) {
 		reserved[f] = true
 	}
 }
