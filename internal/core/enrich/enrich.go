@@ -126,6 +126,13 @@ type Request struct {
 	Workspace string
 	CM        Mode
 	CASS      Mode
+	// CASSQuery, when set, is CASS's query as typed, in place of the
+	// keywords of Query: ntm's spawn --cass-context Q.
+	CASSQuery string
+	// CASSDays limits CASS's hits to the last N days, and CASSLimit sets
+	// their number; 0 is the default (no day limit; Budgets.CASSLimit).
+	CASSDays  int
+	CASSLimit int
 }
 
 // Retrieval is a request's answer.
@@ -201,6 +208,9 @@ func (r *Retriever) Retrieve(ctx context.Context, req Request) Retrieval {
 		defer wg.Done()
 		creq := req
 		creq.Query = cass.KeywordQuery(req.Query)
+		if req.CASSQuery != "" {
+			creq.Query = req.CASSQuery
+		}
 		if creq.Query == "" && req.CASS != "" && req.CASS != Off {
 			out.CASS = Report{Enabled: true, Mode: req.CASS, SkippedReason: "no keywords in the query"}
 			return
@@ -216,7 +226,8 @@ func (r *Retriever) once(ctx context.Context, source string, mode Mode, req Requ
 	if mode == "" || mode == Off {
 		return Report{Enabled: false, Mode: Off, SkippedReason: "off"}
 	}
-	key := strings.Join([]string{source, req.Workspace, req.Query, fmt.Sprint(r.Budgets.ItemBytes, r.Budgets.CASSLimit)}, "\x00")
+	key := strings.Join([]string{source, req.Workspace, req.Query, fmt.Sprint(r.Budgets.ItemBytes, r.Budgets.CASSLimit),
+		fmt.Sprint(req.CASSDays, req.CASSLimit)}, "\x00")
 	r.mu.Lock()
 	e, ok := r.memo[key]
 	if !ok {
@@ -264,7 +275,11 @@ func (r *Retriever) cass(ctx context.Context, req Request) ([]Item, error) {
 	if r.CASS == nil {
 		return nil, cass.ErrNotInstalled
 	}
-	hits, err := r.CASS.Search(ctx, cass.Search{Query: req.Query, Workspace: req.Workspace, Limit: r.Budgets.CASSLimit,
+	limit := r.Budgets.CASSLimit
+	if req.CASSLimit > 0 {
+		limit = req.CASSLimit
+	}
+	hits, err := r.CASS.Search(ctx, cass.Search{Query: req.Query, Workspace: req.Workspace, Limit: limit, Days: req.CASSDays,
 		MaxContent: r.Budgets.ItemBytes})
 	if err != nil {
 		return nil, err

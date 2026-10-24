@@ -193,6 +193,8 @@ type spawnFlags struct {
 	ignoreCapacity          bool
 	withMemory, withCASS    bool
 	noCASSContext           bool
+	cassQuery               string
+	cassDays, cassLimit     int
 	project, opID, socket   string
 	effort                  string
 	role                    string
@@ -257,6 +259,9 @@ func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
 	fs.BoolVar(&f.withMemory, "with-memory", true, "CM rules in the kickoff (best-effort; the default)")
 	fs.BoolVar(&f.withCASS, "with-cass", false, "CASS context in the kickoff (best-effort)")
 	fs.BoolVar(&f.noCASSContext, "no-cass-context", false, "no CASS context in the kickoff")
+	fs.StringVar(&f.cassQuery, "cass-context", "", "Explicit context query for CASS")
+	fs.IntVar(&f.cassLimit, "cass-context-limit", 0, "Max past sessions to include")
+	fs.IntVar(&f.cassDays, "cass-context-days", 0, "Look back N days")
 	fs.StringVar(&f.project, "project", "", "the project (default: the git work tree of the cwd)")
 	fs.StringVar(&f.opID, "op-id", "", "operation id, for an idempotent retry")
 	fs.StringVar(&f.socket, "socket", "", "herdr API socket")
@@ -385,11 +390,16 @@ func spawnEnrichment(f *spawnFlags) (send.Enrichment, error) {
 	switch {
 	case f.withCASS && f.noCASSContext:
 		return e, errors.New("--with-cass and --no-cass-context contradict")
-	case f.withCASS:
-		e.CASS = enrich.BestEffort
 	case f.noCASSContext:
+		// As ntm's: --no-cass-context wins over --cass-context.
 		e.CASS = enrich.Off
+	case f.withCASS || f.cassQuery != "":
+		e.CASS = enrich.BestEffort
 	}
+	// ntm's --cass-context Q (the query as typed), --cass-context-days
+	// and --cass-context-limit (each when above 0).
+	e.CASSQuery = f.cassQuery
+	e.CASSDays, e.CASSLimit = max(f.cassDays, 0), max(f.cassLimit, 0)
 	return e, nil
 }
 

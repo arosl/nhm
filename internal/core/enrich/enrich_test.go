@@ -73,18 +73,40 @@ func (f *fakeCM) OutcomeApply(_ context.Context, session string) error {
 }
 
 type fakeCASS struct {
-	hits    []cass.Hit
-	err     error
-	state   string
-	mu      sync.Mutex
-	queries []string
+	hits     []cass.Hit
+	err      error
+	state    string
+	mu       sync.Mutex
+	queries  []string
+	searches []cass.Search
 }
 
 func (f *fakeCASS) Search(_ context.Context, s cass.Search) ([]cass.Hit, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queries = append(f.queries, s.Query)
+	f.searches = append(f.searches, s)
 	return f.hits, f.err
+}
+
+// ntm's spawn --cass-context Q goes to CASS as typed, in place of the
+// task's keywords, with --cass-context-days and --cass-context-limit
+// (nhm-2p6.4.6).
+func TestCASSQueryDaysAndLimit(t *testing.T) {
+	c := &fakeCASS{}
+	r := NewRetriever(&fakeCM{}, c, Budgets{CASSLimit: 5}, time.Now())
+	r.Retrieve(context.Background(), Request{Query: "Fix the login bug in auth.go", Workspace: "/p", CASS: BestEffort,
+		CASSQuery: "login timeout", CASSDays: 7, CASSLimit: 2})
+	r.Retrieve(context.Background(), Request{Query: "Fix the login bug in auth.go", Workspace: "/p", CASS: BestEffort})
+	if len(c.searches) != 2 {
+		t.Fatalf("searches = %+v", c.searches)
+	}
+	if s := c.searches[0]; s.Query != "login timeout" || s.Days != 7 || s.Limit != 2 {
+		t.Fatalf("with the flags = %+v", s)
+	}
+	if s := c.searches[1]; s.Query == "login timeout" || s.Days != 0 || s.Limit != 5 {
+		t.Fatalf("without = %+v", s)
+	}
 }
 func (f *fakeCASS) IndexSession(context.Context, string, string, string) (string, error) {
 	return f.state, f.err

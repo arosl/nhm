@@ -50,7 +50,8 @@ func enrichTargets(ctx context.Context, env Env, req Request, tmpl *templates.Te
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			retr = r.Retrieve(ctx, enrich.Request{Query: query, Workspace: req.ProjectRoot, CM: cmMode, CASS: cassMode})
+			retr = r.Retrieve(ctx, enrich.Request{Query: query, Workspace: req.ProjectRoot, CM: cmMode, CASS: cassMode,
+				CASSQuery: req.Enrich.CASSQuery, CASSDays: req.Enrich.CASSDays, CASSLimit: req.Enrich.CASSLimit})
 		}()
 	}
 	if check {

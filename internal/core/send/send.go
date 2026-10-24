@@ -147,6 +147,10 @@ type Enrichment struct {
 	DefaultCM, DefaultCASS enrich.Mode
 	// Query is the query for both sources; empty: the prompt's start.
 	Query string
+	// CASSQuery, CASSDays and CASSLimit are ntm's spawn --cass-context Q,
+	// --cass-context-days and --cass-context-limit (enrich.Request).
+	CASSQuery           string
+	CASSDays, CASSLimit int
 	// Check runs the CASS duplicate check over the last CheckDays; it
 	// only warns. --force skips it.
 	Check     bool
