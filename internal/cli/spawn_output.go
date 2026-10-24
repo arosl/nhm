@@ -52,6 +52,10 @@ func runSpawnNTM(ctx context.Context, verb string, req spawn.Request, project, s
 	}
 	if err == nil {
 		err = spawnOutcomeError(res)
+		var outcome *spawnOutcome
+		if req.VerifyBoot && errors.As(err, &outcome) {
+			err = verifyBootError{outcome: outcome, within: req.ReadyTimeout}
+		}
 	}
 	// spawn lists the panes under --json; add counts them in its text too.
 	if (asJSON || verb == "add") && err == nil && !res.DryRun {
@@ -108,6 +112,25 @@ func (e *spawnOutcome) Error() string {
 	}
 	return fmt.Sprintf("%d/%d agent(s) ready: %s", up, len(e.res.Targets), e.msg)
 }
+
+// verifyBootError is ntm's --verify-boot failure (spawn.go 3768-3772).
+type verifyBootError struct {
+	outcome *spawnOutcome
+	within  time.Duration
+}
+
+func (e verifyBootError) Error() string {
+	up := 0
+	for _, t := range e.outcome.res.Targets {
+		if targetUp(e.outcome.res, t) {
+			up++
+		}
+	}
+	return fmt.Sprintf("spawn --verify-boot: %d/%d agent(s) ready within %s: %s; the session and panes still exist — inspect with --robot-tail",
+		up, len(e.outcome.res.Targets), e.within, e.outcome.msg)
+}
+
+func (e verifyBootError) Unwrap() error { return e.outcome }
 
 // timedOut reports whether the agents that are down ran out of time
 // waiting to be ready.

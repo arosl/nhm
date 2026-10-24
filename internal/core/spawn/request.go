@@ -100,8 +100,14 @@ type Request struct {
 	// KickoffAllReady sends the kickoffs only when every agent is ready,
 	// as ntm's robot spawn sends no prompt after a failed ready wait.
 	KickoffAllReady bool
-	TrustFolder     bool
-	Force           bool
+	// PaneEnv is ntm's spawn --pane-env: variables for each agent's pane,
+	// with the templates {project}, {pane} and {role} (ExpandPaneEnv).
+	PaneEnv map[string]string
+	// VerifyBoot is ntm's spawn --verify-boot: the spawn waits for every
+	// agent to be ready, and one that is not fails it.
+	VerifyBoot  bool
+	TrustFolder bool
+	Force       bool
 	// AllowUnguarded records an exception for a missing guard, for this
 	// launch only.
 	AllowUnguarded bool
@@ -177,6 +183,12 @@ func (r *Request) Validate() error {
 	}
 	if r.NoWait && !r.NoKickoff && (r.Prompt != "" || len(r.DefaultPrompts) > 0 || r.KickoffTemplate != "") {
 		return fmt.Errorf("a kickoff needs the agents ready: a spawn that does not wait sends none")
+	}
+	if r.NoWait && r.VerifyBoot {
+		return fmt.Errorf("--verify-boot waits for the agents: a spawn that does not wait cannot verify them")
+	}
+	if err := ValidatePaneEnv(r.PaneEnv); err != nil {
+		return err
 	}
 	if r.ReadyTimeout <= 0 {
 		r.ReadyTimeout = 60 * time.Second

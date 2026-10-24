@@ -383,6 +383,27 @@ func kickoffs(ctx context.Context, env Env, req Request, res *Result, kick kicko
 // startOne runs one target through identity, pane, binding, agent.start
 // and labels; the agent is then started, not yet ready. It returns false
 // when the spawn must stop.
+// typeNumber is the target's number among the spawn's agents of its kind,
+// from 1, as ntm numbers an agent of a type (cc_1, cc_2).
+func typeNumber(res *Result, t *Target) int {
+	n := 1
+	for _, o := range res.Targets {
+		if o.Index < t.Index && o.Kind == t.Kind {
+			n++
+		}
+	}
+	return n
+}
+
+// shortType is a kind's ntm short type: its first selector flag (cc,
+// cod), else its name (agy, omp).
+func shortType(a kinds.Adapter) string {
+	if len(a.Flags) > 0 {
+		return a.Flags[0]
+	}
+	return a.Name
+}
+
 func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target) bool {
 	a := kinds.Lookup(t.Kind)
 	fail := func(status string, err error) bool {
@@ -403,10 +424,16 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target)
 	// first: in a tab several agents share, the tab label is not the
 	// agent's name (nhm-4c4). The kind's guard env goes there too, as
 	// herdr's agent.start takes no env.
-	paneEnv := map[string]string{"NHM_LAUNCH_ID": t.LaunchID, "NHM_AGENT": name, "AGENT_MAIL_AGENT": name}
+	// --pane-env first (ntm's), then the guard env and nhm's names, which
+	// nhm's binding and the guards rely on.
+	paneEnv := map[string]string{}
+	for k, v := range ExpandPaneEnv(req.PaneEnv, req.ProjectRoot, typeNumber(res, t), shortType(a)) {
+		paneEnv[k] = v
+	}
 	for k, v := range a.GuardEnv {
 		paneEnv[k] = v
 	}
+	paneEnv["NHM_LAUNCH_ID"], paneEnv["NHM_AGENT"], paneEnv["AGENT_MAIL_AGENT"] = t.LaunchID, name, name
 	if err := createPane(ctx, env, req, res, t, paneEnv); err != nil {
 		t.Cleanup = retireIdentity(ctx, env, req.ProjectRoot, t)
 		return fail(StatusFailed, fmt.Errorf("pane: %w", err))
@@ -1002,6 +1029,12 @@ func fingerprint(req Request) map[string]any {
 	}
 	if req.StaggerLegacy > 0 {
 		fp["stagger_legacy_ms"] = req.StaggerLegacy.Milliseconds()
+	}
+	if len(req.PaneEnv) > 0 {
+		fp["pane_env"] = req.PaneEnv
+	}
+	if req.VerifyBoot {
+		fp["verify_boot"] = true
 	}
 	return fp
 }

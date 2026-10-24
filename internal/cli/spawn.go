@@ -201,6 +201,8 @@ type spawnFlags struct {
 	// staggerLegacy is spawn's --stagger[=D]; staggerOn says it was given.
 	staggerLegacy time.Duration
 	staggerOn     bool
+	paneEnv       map[string]string
+	verifyBoot    bool
 	// defaultsNote is ntm's "Using default configuration: …" when the
 	// project's [defaults] gave the agents.
 	defaultsNote string
@@ -356,9 +358,17 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 	// agents and do not wait for them. --assign waits (its work goes to
 	// ready agents), and so does nhm's --trust-folder, which answers the
 	// folder-trust dialog during the wait.
-	req.NoWait = !f.assign && !f.trustFolder && (f.noKickoff || (req.Prompt == "" && len(req.DefaultPrompts) == 0))
+	req.NoWait = !f.assign && !f.trustFolder && !f.verifyBoot && (f.noKickoff || (req.Prompt == "" && len(req.DefaultPrompts) == 0))
+	// ntm's --pane-env and --verify-boot (30s, unless --ready-timeout).
+	req.PaneEnv, req.VerifyBoot = f.paneEnv, f.verifyBoot
+	if f.verifyBoot && !f.changed("ready-timeout") {
+		req.ReadyTimeout = verifyBootTimeout
+	}
 	return req, nil
 }
+
+// verifyBootTimeout is ntm's spawnVerifyBootTimeout.
+const verifyBootTimeout = 30 * time.Second
 
 // spawnEnrichment is the kickoff's enrichment (plan-v8 2.13): CM
 // best-effort by default for a kickoff (--with-memory=false turns it off),
@@ -436,9 +446,15 @@ func newSpawnVerbCmd(verb, short string) *cobra.Command {
 }
 
 // addSpawnOnlyFlags adds the flags of ntm's spawn that its add does not
-// have: --safety and --stagger.
+// have: --safety, --stagger, --pane-env, --verify-boot and --no-hooks.
 func addSpawnOnlyFlags(fs *pflag.FlagSet, f *spawnFlags) {
 	fs.BoolVar(&f.safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
+	fs.StringToStringVar(&f.paneEnv, "pane-env", nil, "NTM-owned pane environment (KEY=TEMPLATE; templates: {project}, {pane}, {role})")
+	fs.BoolVar(&f.verifyBoot, "verify-boot", false,
+		"After launching, wait up to 30s for every agent to reach a working prompt; exit non-zero naming what failed to boot")
+	// ntm's command hooks ([hooks] pre-spawn, post-spawn): nhm runs none,
+	// so the flag changes nothing.
+	fs.Bool("no-hooks", false, "Disable command hooks")
 	// --stagger enables ntm's documented 90s; --stagger=2m a duration.
 	staggerValue := newOptionalDurationValue(90*time.Second, &f.staggerLegacy, &f.staggerOn)
 	fs.Var(staggerValue, "stagger", "Stagger prompt delivery between agents (default 90s when enabled)")
