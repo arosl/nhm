@@ -11,7 +11,7 @@ note x diagnostics, v version
 key x
 expect 3 › diagnostics
 key v
-expect 8 herdr protocol 22
+expect 8 nhm version
 note esc back, d doctor
 key esc
 key d
