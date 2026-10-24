@@ -698,6 +698,9 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "list sessions: nhm --robot-status", *format, robotError, now)
 	}
 	res, _, err := runSendCore(ctx, ie, req)
+	if errors.Is(err, send.ErrShellEscape) {
+		return robotWrite(stdout, send.GuardOutput(res, err, *dryRun, *format, now), robotError)
+	}
 	if err != nil {
 		code := robot.ErrCodeInvalidFlag
 		switch {

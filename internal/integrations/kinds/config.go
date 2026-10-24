@@ -23,6 +23,7 @@ import (
 //	model_flag = "--model"
 //	new_session = "/new"
 //	exit_command = "/quit"
+//	shell_escape = "!"
 //	interrupt_keys = ["esc"]
 //	quota_pool = "mycli"
 //	limit = "usage limit reached"
@@ -56,6 +57,7 @@ type kindConfig struct {
 	ResumeFlags    []string   `toml:"resume_flags"`
 	NewSession     string     `toml:"new_session"`
 	ExitCommand    string     `toml:"exit_command"`
+	ShellEscape    string     `toml:"shell_escape"`
 	InterruptKeys  []string   `toml:"interrupt_keys"`
 	QuotaPool      string     `toml:"quota_pool"`
 	QuotaSource    string     `toml:"quota_source"`
@@ -118,7 +120,7 @@ func (r *Registry) LoadConfig(path string) error {
 func (c kindConfig) adapter(name string) (Adapter, error) {
 	a := Adapter{Name: name, NTMType: c.NTMType, Flags: c.Flags, LaunchArgs: c.LaunchArgs, ModelFlag: c.ModelFlag,
 		ResumeArgv: c.ResumeArgv, ResumeFlags: c.ResumeFlags, NewSession: c.NewSession, ExitCommand: c.ExitCommand, InterruptKeys: c.InterruptKeys,
-		QuotaPool: c.QuotaPool, QuotaSource: c.QuotaSource, Hooks: c.Hooks, Transcript: c.Transcript,
+		QuotaPool: c.QuotaPool, QuotaSource: c.QuotaSource, Hooks: c.Hooks, Transcript: c.Transcript, ShellEscape: c.ShellEscape,
 		GuardSettings: c.GuardSettings, CodeReview: true, GuardSupported: true, Cannot: c.Cannot,
 		EffortArgs: c.EffortArgs, DefaultEffort: c.DefaultEffort}
 	if c.CodeReview != nil {
@@ -162,6 +164,12 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 	}
 	if a.ModelFlag != "" && !strings.HasPrefix(a.ModelFlag, "-") {
 		return Adapter{}, fmt.Errorf("kinds.%s.model_flag: %q is not a flag", name, a.ModelFlag)
+	}
+	// RunsAsShell skips white space before the escape: an escape that
+	// starts with white space never matches, and one that holds it or a
+	// control character is a typo.
+	if strings.IndexFunc(a.ShellEscape, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return Adapter{}, fmt.Errorf("kinds.%s.shell_escape: %q holds white space or a control character", name, a.ShellEscape)
 	}
 	a.InterruptKeys = slices.Clone(a.InterruptKeys)
 	for i, k := range a.InterruptKeys {

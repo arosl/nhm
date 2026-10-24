@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/arosl/nhm/internal/integrations/cass"
@@ -333,8 +334,11 @@ func truncate(s string, n int) string {
 	return s[:cut] + ell
 }
 
+// oneLine puts s on one line: each run of white space and control
+// characters becomes one space. CASS text can hold terminal text, and an
+// ESC [201~ in the prompt would end herdr's paste (nhm-ubi).
 func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	return strings.Join(strings.FieldsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
 }
 
 // QueryOf is the query for a prompt: its first 500 bytes, on one line.

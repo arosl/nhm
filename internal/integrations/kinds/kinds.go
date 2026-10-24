@@ -112,6 +112,12 @@ type Adapter struct {
 	NewSession string `json:"new_session,omitempty"`
 	// ExitCommand is the prompt that ends the agent.
 	ExitCommand string `json:"exit_command,omitempty"`
+	// ShellEscape is the prefix that makes the kind run a prompt as a
+	// shell command: at once, with no approval question, and no hook sees
+	// the command, so no guard (dcg) screens it. "" when the kind has none
+	// or none is proved. Core send refuses a prompt that RunsAsShell
+	// (nhm-ubi).
+	ShellEscape string `json:"shell_escape,omitempty"`
 	// InterruptKeys stop a turn and keep the session; nil: not checked.
 	// Key names are herdr's: "esc" is canonical (herdr agent send-keys
 	// --help), "enter", "down".
@@ -406,6 +412,19 @@ func (a Adapter) HasFlag(f string) bool {
 	return f == a.Name || slices.Contains(a.Flags, f)
 }
 
+// RunsAsShell reports whether the kind would run text typed at its prompt
+// as a shell command: the text starts with the kind's shell escape, white
+// space and control or format characters before it aside. pi 0.8.0 and
+// Codex 0.164.0 skip leading white space (a space, a tab, a newline, a
+// no-break space) before they read the escape, and some kinds drop
+// leading control characters; one rule for every kind holds if a later
+// version does more. An escape on a later line runs nothing (proved in
+// the sandbox, nhm-ubi).
+func (a Adapter) RunsAsShell(text string) bool {
+	skip := func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
+	return a.ShellEscape != "" && strings.HasPrefix(strings.TrimLeftFunc(text, skip), a.ShellEscape)
+}
+
 func fromClaude(e Event, bound string, launch bool) Decision {
 	d := claude.Classify(claude.Event{HookEvent: e.HookEvent, Source: e.Source, SessionID: e.SessionID, Entrypoint: e.Entrypoint}, bound, launch)
 	return Decision{Verdict: d.Verdict, Reason: d.Reason, Compacted: d.Compacted, Resumed: d.Resumed, TakeSession: d.TakeSession}
@@ -522,6 +541,9 @@ func builtins() []Adapter {
 			EffortArgs: []string{"--effort", "{effort}"}, DefaultEffort: "xhigh", SettingsFlag: "--settings",
 			ResumeArgv: []string{"claude", "--dangerously-skip-permissions", "--resume", "{session}"}, ResumeFlags: []string{"--resume", "-r"},
 			NewSession: "/clear", ExitCommand: "/exit",
+			// "!" first is its bash mode: no PreToolUse or UserPromptSubmit
+			// hook sees the command (Claude Code 2.1.310, nhm-ubi).
+			ShellEscape:   "!",
 			InterruptKeys: []string{"esc"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true},
 			Limit:      regexp.MustCompile(`(?i)usage limit reached|you('|’)ve (hit|reached) your ([a-z0-9-]+ )?limit|(5-hour|session|weekly|opus|sonnet) limit reached|rate_limit_error|api error: 429`),
@@ -529,6 +551,7 @@ func builtins() []Adapter {
 			GuardSettings: ".claude/settings.json", GuardSupported: true, Continue: fromClaude,
 			Nested:              func(e Event) bool { return claude.Nested(claude.Event{Entrypoint: e.Entrypoint}) },
 			SessionStartContext: true,
+			Cannot:              []string{`a "!" shell command that a person types at its prompt: Claude Code runs it in its bash mode, and no hook sees it, so dcg does not screen it (nhm send refuses one, nhm-ubi)`},
 		},
 		{
 			// --no-daemon runs Codex's hooks in its own pane (F.22, exp.3).
@@ -540,19 +563,24 @@ func builtins() []Adapter {
 			ResumeArgv:  []string{"codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "{session}"},
 			ResumeFlags: []string{"resume"},
 			NewSession:  "/new", ExitCommand: "/quit",
+			// "!" runs a local shell command: no PreToolUse (dcg's Bash
+			// matcher) or UserPromptSubmit hook sees it (Codex 0.164.0,
+			// nhm-ubi).
+			ShellEscape:   "!",
 			InterruptKeys: []string{"esc"}, QuotaPool: "codex", QuotaSource: "codex session logs",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true, Trust: true},
 			Limit:      regexp.MustCompile(`(?i)you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit reached|429 too many requests`),
 			Transcript: Transcript{Dir: ".codex/sessions", Format: "codex-jsonl"}, CodeReview: false,
 			GuardSettings: ".codex/hooks.json", GuardSupported: true, Continue: fromCodex,
-			Cannot: []string{"what Codex does with a SessionStart hook's output"},
+			Cannot: []string{"what Codex does with a SessionStart hook's output",
+				`a "!" shell command that a person types at its prompt: Codex runs it at once, and no hook sees it, so dcg does not screen it (nhm send refuses one, nhm-ubi)`},
 		},
 		{
 			Name: "agy", NTMType: "antigravity", Program: "antigravity", QuotaPool: "agy", PinnedModel: "Gemini 3.8 Flash (High)",
 			Limit:      regexp.MustCompile(`(?i)resource_exhausted|quota (exceeded|exhausted)|(reached|exhausted) (your|the) [a-z0-9. -]{0,30}quota|usage limit reached|429 too many requests`),
 			CodeReview: true, GuardSettings: ".gemini/config/hooks.json", GuardSupported: true,
 			Cannot: []string{"its usage (no quota source)", "its interrupt key", "a SessionStart hook, so a name is not restored after a compaction",
-				"its model: agy-locked pins it", "its session resume"},
+				"its model: agy-locked pins it", "its session resume", notCheckedEscape},
 		},
 		{
 			// pi 0.7.1 (pi_agent_rust): --model, --thinking, /exit and /new
@@ -563,17 +591,18 @@ func builtins() []Adapter {
 			// and a hook that fails or hangs blocks the call only with
 			// PI_EXTENSION_HOOKS_FAIL_CLOSED. No --yolo: pi asks before each
 			// tool call, and the operator decides whether a guarded pi
-			// gets it.
+			// gets it. "!" (and "!!") runs a shell command at once, and no
+			// answer of its user_bash hook stops it (nhm-ubi).
 			Name: "pi", NTMType: "pi", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
 			SettingsFlag: "-e", SettingsArgs: []string{"--extension-policy", "permissive"},
 			GuardEnv:   map[string]string{"PI_EXTENSION_HOOKS_FAIL_CLOSED": "1"},
-			NewSession: "/new", ExitCommand: "/exit", InterruptKeys: []string{"esc"},
+			NewSession: "/new", ExitCommand: "/exit", InterruptKeys: []string{"esc"}, ShellEscape: "!",
 			QuotaPool: "pi", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"rch: pi's tool_call hook cannot change a command, so nhm's pi guard does not offload builds (rch's cargo shim can)",
 				"the Agent Mail stop hook: Agent Mail installs none for pi",
 				"pi's hub, debug and subagent tools, and a tool that xdev runs (but bash and pi's tools that start no program): they may start programs that dcg cannot screen, so nhm's pi guard blocks them",
 				"a tool from an MCP server or another extension: nhm's pi guard screens bash only, as Claude's guard screens Bash",
-				"a \"!\" shell command at pi's prompt, also one that nhm send types: pi runs it with no approval question and no hook that can stop it (nhm-ubi)",
+				"a \"!\" shell command that a person types at pi's prompt: pi runs it with no approval question and no hook that can stop it (nhm send refuses one, nhm-ubi)",
 				"the commands of pi's language servers (its lsp tool's code actions): dcg does not screen them",
 				"other extensions: --extension-policy permissive, pi 0.8.0's default, lets every extension that pi loads run commands, and it overrides a stricter policy in pi's settings (only pi's settings file can grant exec to one extension, and nhm does not write it)",
 				"a pi in a pane that nhm did not create (adopted, or spawned before nhm-dyr): the pane lacks PI_EXTENSION_HOOKS_FAIL_CLOSED, so nhm's pi guard does not load and pi does not start (its recycle stops at the start)",
@@ -593,7 +622,7 @@ func builtins() []Adapter {
 			// --thinking.
 			Name: "omp", NTMType: "omp", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
 			InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its session resume"},
+			Cannot: []string{"its guard settings file", "its usage", "its session resume", notCheckedEscape},
 		},
 		{
 			// ntm's robot outputs type opencode as oc (nhm-i3k). ntm's
@@ -601,17 +630,21 @@ func builtins() []Adapter {
 			// the TUI has no effort flag.
 			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, ModelFlag: "--model",
 			QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume"},
+			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume", notCheckedEscape},
 		},
 		{
 			// ntm's launch (DefaultAgentTemplates' Grok): --model and
 			// --effort.
 			Name: "grok", NTMType: "grok", ModelFlag: "--model", EffortArgs: []string{"--effort", "{effort}"},
 			QuotaPool: "grok", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume"},
+			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume", notCheckedEscape},
 		},
 	}
 }
+
+// notCheckedEscape is the Cannot entry of a kind whose shell escape no
+// sandbox run checked (nhm-ubi checked Claude Code, Codex and pi).
+const notCheckedEscape = `its shell escape: not checked, so nhm send refuses no prompt that starts with "!"`
 
 // Registry holds the adapters by name, in registration order.
 type Registry struct {

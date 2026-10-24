@@ -105,6 +105,17 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 		return robotFail(stdout, code, "no panes matched the interrupt request: "+err.Error(),
 			"Drop --panes to target all agent panes; nhm --robot-activity=SESSION lists them", *format, robotError, now)
 	}
+	// A message that an agent would run as a shell command is refused
+	// before any agent is interrupted, as a send refuses it before its
+	// claim (nhm-ubi), in the shape of ntm's guard refusal of a follow-up.
+	if err := send.CheckShell(msg, list); err != nil {
+		out := robot.InterruptOutput{RobotResponse: robot.NewResponse(false, *format, now), Session: *session, InterruptedAt: now.UTC(),
+			Interrupted: []string{}, PreviousStates: map[string]robot.PaneState{}, Method: robot.InterruptMethodCtrlCThenSend,
+			Message: msg, ReadyForInput: []string{}, Failed: []robot.InterruptError{{Pane: "guard", Reason: err.Error()}},
+			TimeoutMs: int(timeout.Milliseconds()), DryRun: *dryRun, CompletedAt: time.Now().UTC()}
+		out.Error, out.ErrorCode, out.Hint = err.Error(), robot.ErrCodeDestructiveCommandBlocked, send.GuardHint
+		return robotInterruptWrite(stdout, out)
+	}
 
 	req := wait.InterruptRequest{OperationID: *opID, Scope: map[string]string{"instance_id": ie.inst.ID, "workspace_id": ws},
 		Targets: list, SkipResting: !force, DryRun: *dryRun}

@@ -371,6 +371,11 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 		res.PayloadSHA256, res.PayloadBytes = Digest(payloads[0])
 	}
 	res.Preview = Preview(shared)
+	// The exact prompts, enrichment and all: one that its agent would run
+	// as a shell command refuses the whole send, a dry run too (nhm-ubi).
+	if err := refuseShell(targets, payloads); err != nil {
+		return res, err
+	}
 
 	if req.DryRun {
 		res.DryRun = true

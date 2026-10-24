@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/arosl/nhm/internal/core/bindings"
@@ -19,6 +20,19 @@ import (
 
 // handoffBudget bounds each handoff source.
 const handoffBudget = 5 * time.Second
+
+// typeable drops the control characters of s but tab and newline. A
+// transcript or a pack can hold terminal text, and the handoff is typed
+// as one paste: an ESC [201~ in it would end the paste, and core send
+// refuses such a kickoff (nhm-ubi).
+func typeable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // excerptBytes is the size of a direct transcript excerpt.
 const excerptBytes = 4000
@@ -86,7 +100,7 @@ func DefaultHandoff(cassBin, cmBin string) HandoffFunc {
 			}
 		}
 		if len(parts) > 0 {
-			h.Text = "# Handoff from your predecessor in this pane\n\n" + strings.Join(parts, "\n\n")
+			h.Text = typeable("# Handoff from your predecessor in this pane\n\n" + strings.Join(parts, "\n\n"))
 		}
 		if h.Sources == nil {
 			h.Sources = []string{}
