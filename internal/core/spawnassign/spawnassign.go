@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/integrations/bv"
 	"github.com/arosl/nhm/internal/integrations/worksource"
 	"github.com/arosl/nhm/internal/robot"
@@ -48,6 +49,9 @@ type Plan struct {
 	// Context is --with-cass and --with-memory: the context of each fresh
 	// work prompt, prepared before its intent is recorded.
 	Context PromptContextOptions
+	// Pacer paces the work prompts on the spawn's stagger schedule, as
+	// ntm's robot spawn does; nil delivers them at once.
+	Pacer *spawn.Pacer
 }
 
 // Preflight is ntm GetSpawn's assignment preflight, run before any
@@ -133,10 +137,14 @@ func Assign(ctx context.Context, out *SpawnOutput, plan Plan, instanceID, prompt
 		return
 	}
 	policy := plan.Policy
+	var pacer *spawnStaggerPacer
+	if plan.Pacer != nil {
+		pacer = &spawnStaggerPacer{p: plan.Pacer}
+	}
 	assignments, assignmentErr := assignWorkToAgentsWithError(
 		ctx, out, plan.ProjectDir, instanceID, out.AssignStrategy, &policy,
 		false, nil, deps, plan.Triage,
-		prompt, plan.Context, nil,
+		prompt, plan.Context, pacer,
 	)
 	out.Assignments = assignments
 	ensureSpawnAssignmentCoverage(out)

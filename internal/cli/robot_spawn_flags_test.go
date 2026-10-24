@@ -163,3 +163,70 @@ func TestRobotSpawnNames(t *testing.T) {
 		t.Errorf("titles = %q, want %q", titles, want)
 	}
 }
+
+// As ntm's robot spawn: it waits for the agents to be ready only with
+// --spawn-wait or a prompt, and after a failed wait it sends no prompt
+// (nhm-2p6.4.10).
+func TestRobotSpawnNoWaitWithoutSpawnWait(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, tt := range []struct {
+		args   []string
+		noWait bool
+	}{
+		{nil, true},
+		{[]string{"--spawn-wait"}, false},
+		{[]string{"--spawn-prompt=Read AGENTS.md."}, false},
+		{[]string{"--spawn-assign-work"}, true},
+		{[]string{"--spawn-assign-work", "--spawn-prompt=Read AGENTS.md."}, false},
+	} {
+		req, refusal := parseRobotSpawn(t, append([]string{"--spawn-cc=1"}, tt.args...)...)
+		if refusal != nil || req.NoWait != tt.noWait || !req.KickoffAllReady {
+			t.Errorf("%v: NoWait %v (want %v), KickoffAllReady %v, %v", tt.args, req.NoWait, tt.noWait, req.KickoffAllReady, refusal)
+		}
+	}
+}
+
+// --spawn-stagger-mode and --spawn-stagger-delay pace the prompts, with
+// ntm's defaults (none, 30s) under the [spawn] table of nhm's config, and
+// ntm's refusals.
+func TestRobotSpawnStagger(t *testing.T) {
+	const promptHint = "Use one of --spawn-prompt/--spawn-prompt-file, --spawn-stagger-mode=none|fixed|smart, and a " +
+		"--spawn-stagger-delay such as 20s (0-5m); fix any invalid [spawn] config value"
+	const staggerHint = "Use --spawn-stagger-mode=none|fixed|smart and a --spawn-stagger-delay between 0 and 5m (e.g. 20s)"
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	for _, tt := range []struct {
+		config string
+		args   []string
+		mode   string
+		delay  time.Duration
+	}{
+		{"", nil, "none", 30 * time.Second},
+		{"", []string{"--spawn-stagger-mode=fixed", "--spawn-stagger-delay=20s"}, "fixed", 20 * time.Second},
+		{"[spawn]\nstagger_mode = \"smart\"\nstagger_delay = \"12s\"\n", nil, "smart", 12 * time.Second},
+		{"[spawn]\nstagger_mode = \"smart\"\nstagger_delay = \"12s\"\n", []string{"--spawn-stagger-mode=none"}, "none", 12 * time.Second},
+	} {
+		writeAll(t, filepath.Join(dir, "nhm", "config.toml"), tt.config)
+		req, refusal := parseRobotSpawn(t, append([]string{"--spawn-cc=1"}, tt.args...)...)
+		if refusal != nil || req.StaggerMode != tt.mode || req.StaggerDelay != tt.delay {
+			t.Errorf("%q %v: %s %v %v", tt.config, tt.args, req.StaggerMode, req.StaggerDelay, refusal)
+		}
+	}
+	for _, tt := range []struct {
+		config      string
+		args        []string
+		error, hint string
+	}{
+		{"", []string{"--spawn-stagger-mode=slow"}, `--spawn-stagger-mode must be one of none, fixed, or smart; got "slow"`, staggerHint},
+		{"", []string{"--spawn-stagger-delay=6m"}, "--spawn-stagger-delay must be between 0 and 5m0s", staggerHint},
+		{"", []string{"--spawn-stagger-delay=soon"}, `invalid --spawn-stagger-delay "soon": time: invalid duration "soon"`, promptHint},
+		{"[spawn]\nstagger_mode = \"slow\"\n", nil, `[spawn] stagger_mode must be one of none, fixed, or smart; got "slow"`, promptHint},
+		{"[spawn]\nstagger_delay = \"9m\"\n", nil, "[spawn] stagger_delay must be between 0 and 5m0s", promptHint},
+	} {
+		writeAll(t, filepath.Join(dir, "nhm", "config.toml"), tt.config)
+		_, got := parseRobotSpawn(t, append([]string{"--spawn-cc=1"}, tt.args...)...)
+		if got["error_code"] != "INVALID_FLAG" || got["error"] != tt.error || got["hint"] != tt.hint {
+			t.Errorf("%q %v = %v", tt.config, tt.args, got)
+		}
+	}
+}

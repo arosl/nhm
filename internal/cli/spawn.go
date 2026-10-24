@@ -451,6 +451,9 @@ func herdrWorkspace(label, cwd string, focus *bool) herdr.WorkspaceCreateParams 
 //	capacity = ["acfs", "capacity", "--guard", "--json"]   # default: none
 //	[quota]
 //	admit_unknown = ["agy", "pi"]   # pools a robot spawn admits without an observation
+//	[spawn]                         # ntm's [spawn] table
+//	stagger_mode = "none"           # none (the default), fixed or smart
+//	stagger_delay = "30s"           # 0 to 5m; 30s by default
 //
 // Other keys belong to other parts of nhm.
 type spawnConfig struct {
@@ -460,6 +463,36 @@ type spawnConfig struct {
 	Quota struct {
 		AdmitUnknown []string `toml:"admit_unknown"`
 	} `toml:"quota"`
+	Spawn struct {
+		StaggerMode string `toml:"stagger_mode"`
+		// StaggerDelay is nil when the key is not set (ntm's default 30s).
+		StaggerDelay *time.Duration `toml:"stagger_delay"`
+	} `toml:"spawn"`
+}
+
+// resolveSpawnStaggerDefaults is ntm's: a stagger setting the caller did
+// not set explicitly comes from the [spawn] table, else its built-in
+// default (none, 30s). A config value is checked here, so its error names
+// the config key, not a flag.
+func resolveSpawnStaggerDefaults(cfg spawnConfig, mode string, modeSet bool, delay time.Duration, delaySet bool) (string, time.Duration, error) {
+	if !modeSet {
+		if err := spawn.ValidateStaggerMode(cfg.Spawn.StaggerMode); err != nil {
+			return "", 0, fmt.Errorf("[spawn] stagger_mode %w", err)
+		}
+		if cfg.Spawn.StaggerMode != "" {
+			mode = cfg.Spawn.StaggerMode
+		}
+	}
+	if !delaySet {
+		delay = spawn.DefaultStaggerDelay
+		if cfg.Spawn.StaggerDelay != nil {
+			delay = *cfg.Spawn.StaggerDelay
+		}
+		if err := spawn.ValidateStaggerDelay(delay); err != nil {
+			return "", 0, fmt.Errorf("[spawn] stagger_delay %w", err)
+		}
+	}
+	return mode, delay, nil
 }
 
 func loadSpawnConfig() (spawnConfig, error) {
@@ -787,12 +820,13 @@ func printSpawn(w io.Writer, res spawn.Result) {
 type robotSpawnFlags struct {
 	session, dir, format, prompt, opID, socket *string
 	promptFile, names, label                   *string
+	staggerMode, staggerDelay                  *string
 	// counts are the --spawn-<kind> specs by flag (without "spawn-"),
 	// in ntm's launch order.
 	counts                              []robotCount
 	spawnTimeout, timeout               *string
 	dryRun, assign, safety, trustFolder *bool
-	ignoreCapacity                      *bool
+	wait, ignoreCapacity                *bool
 	assignFlags                         robotAssignFlags
 }
 
@@ -818,23 +852,24 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	f.format = fs.String("robot-format", "auto", "")
 	fs.Bool("spawn-no-user", false, "")
 	f.safety = fs.Bool("spawn-safety", false, "")
-	// nhm always waits for the agents to be ready, as ntm does with
-	// --spawn-wait.
-	fs.Bool("spawn-wait", false, "")
+	// As ntm's: the spawn waits for the agents to be ready only with
+	// --spawn-wait or a prompt; otherwise it answers once they started.
+	f.wait = fs.Bool("spawn-wait", false, "")
 	// ntm's ready wait: --spawn-timeout, with --ready-timeout as its
-	// deprecated alias (one value), else --timeout when given. A bare
+	// deprecated alias (one value), else --timeout when given; 30s. A bare
 	// number is seconds (resolveRobotSpawnTimeout).
 	f.spawnTimeout = new(string)
-	fs.StringVar(f.spawnTimeout, "spawn-timeout", "60s", "")
-	fs.StringVar(f.spawnTimeout, "ready-timeout", "60s", "")
+	fs.StringVar(f.spawnTimeout, "spawn-timeout", "30s", "")
+	fs.StringVar(f.spawnTimeout, "ready-timeout", "30s", "")
 	f.timeout = fs.String("timeout", "5m", "")
 	f.names = fs.String("spawn-names", "", "")
 	f.label = fs.String("spawn-label", "", "")
 	f.promptFile = fs.String("spawn-prompt-file", "", "")
+	f.staggerMode = fs.String("spawn-stagger-mode", "", "")
+	f.staggerDelay = fs.String("spawn-stagger-delay", "", "")
 	// nhm's own, as spawn's --trust-folder: ntm 9d5ed977 has no such
-	// flag. Its robot spawn without --spawn-wait returns at once and
-	// leaves an agent at the folder-trust dialog; nhm's always waits for
-	// ready, so without the flag that agent ends unresolved (nhm-cvg).
+	// flag. It answers the kind's folder-trust dialog during the ready
+	// wait; without it an agent at the dialog ends unresolved (nhm-cvg).
 	f.trustFolder = fs.Bool("trust-folder", false, "")
 	// nhm's own, as spawn's --ignore-capacity: ntm 9d5ed977 overrides no
 	// spawn admission. ACFS newproj passes it on a host whose capacity
@@ -911,10 +946,30 @@ func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) (spawn.Request, str
 		}
 		wants = append(wants, w)
 	}
+	// ntm's applyRobotSpawnPromptFlags: the prompt, then the stagger over
+	// the [spawn] config's defaults, flags winning.
+	const promptHint = "Use one of --spawn-prompt/--spawn-prompt-file, --spawn-stagger-mode=none|fixed|smart, and a " +
+		"--spawn-stagger-delay such as 20s (0-5m); fix any invalid [spawn] config value"
 	prompt, err := loadRobotMessageInput(*rf.prompt, *rf.promptFile, "--spawn-prompt", "--spawn-prompt-file")
 	if err != nil {
-		return refuse(err, "Use one of --spawn-prompt/--spawn-prompt-file, --spawn-stagger-mode=none|fixed|smart, and a "+
-			"--spawn-stagger-delay such as 20s (0-5m); fix any invalid [spawn] config value")
+		return refuse(err, promptHint)
+	}
+	given := map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { given[fl.Name] = true })
+	delay := spawn.DefaultStaggerDelay
+	if given["spawn-stagger-delay"] {
+		if delay, err = time.ParseDuration(strings.TrimSpace(*rf.staggerDelay)); err != nil {
+			return refuse(fmt.Errorf("invalid --spawn-stagger-delay %q: %w", *rf.staggerDelay, err), promptHint)
+		}
+	}
+	cfg, err := loadSpawnConfig()
+	if err != nil {
+		return refuse(err, promptHint)
+	}
+	mode, delay, err := resolveSpawnStaggerDefaults(cfg, strings.TrimSpace(*rf.staggerMode), given["spawn-stagger-mode"], delay,
+		given["spawn-stagger-delay"])
+	if err != nil {
+		return refuse(err, promptHint)
 	}
 	session := *rf.session
 	if err := sessionlabel.ValidateProjectName(session); err != nil {
@@ -925,6 +980,17 @@ func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) (spawn.Request, str
 			return refuse(fmt.Errorf("invalid label: %w", err), "Use a valid label (alphanumeric, dash, underscore)")
 		}
 		session = sessionlabel.FormatSessionName(session, *rf.label)
+	}
+	// ntm's validateSpawnStagger.
+	const staggerHint = "Use --spawn-stagger-mode=none|fixed|smart and a --spawn-stagger-delay between 0 and 5m (e.g. 20s)"
+	if err := spawn.ValidateStaggerMode(mode); err != nil {
+		return refuse(fmt.Errorf("--spawn-stagger-mode %w", err), staggerHint)
+	}
+	if err := spawn.ValidateStaggerDelay(delay); err != nil {
+		return refuse(fmt.Errorf("--spawn-stagger-delay %w", err), staggerHint)
+	}
+	if mode == "" {
+		mode = spawn.StaggerNone
 	}
 	// ntm's validateSpawnRequest: each count is zero or more, and one is
 	// more.
@@ -940,8 +1006,11 @@ func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) (spawn.Request, str
 		return refuse(errors.New("no agents specified (use cc, cod, gmi, agy, grok, omp, or oc counts)"),
 			"Use non-negative agent counts and a supported assignment strategy")
 	}
+	// ntm waits for ready only with --spawn-wait or a prompt, and sends
+	// no prompt after a failed wait.
 	req := spawn.Request{Session: session, Prompt: prompt, NoKickoff: prompt == "",
-		ReadyTimeout: wait, TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
+		ReadyTimeout: wait, NoWait: !*rf.wait && prompt == "", KickoffAllReady: true, StaggerMode: mode, StaggerDelay: delay,
+		TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
 		OperationID: *rf.opID, Safety: *rf.safety, IgnoreCapacity: *rf.ignoreCapacity}
 	if *rf.assign {
 		req.Prompt, req.NoKickoff, req.AssignOptions = "", true, rf.assignFlags.options(prompt)
@@ -1047,6 +1116,15 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		// its sentence without nhm's sentinel, and its hint.
 		out.ErrorCode, out.Hint = robot.ErrCodeInvalidFlag, "Choose a new session name or disable --spawn-safety"
 		out.Error = strings.TrimPrefix(err.Error(), spawn.ErrSessionExists.Error()+": ")
+	}
+	// --spawn-assign-work's work prompts go out on ntm's stagger schedule,
+	// in launch order; a dry run reports the plan.
+	if *assign && (*dryRun || out.Success) {
+		stagger, splan := spawn.PlanStagger(req.StaggerMode, req.StaggerDelay, res.ProjectRoot, res.Targets)
+		out.Stagger = splan
+		if !*dryRun {
+			plan.Pacer = spawn.NewPacer(stagger, splan, nil, nil)
+		}
 	}
 	if *assign && !*dryRun && out.Success {
 		assignPhase(ctx, ie, res, scope, plan, prompt, assignHooks{}, &out)

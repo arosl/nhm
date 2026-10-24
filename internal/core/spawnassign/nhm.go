@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/assignment"
+	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/integrations/bv"
 	"github.com/arosl/nhm/internal/integrations/worksource"
 	"github.com/arosl/nhm/internal/robot"
@@ -233,14 +234,24 @@ func workPromptFor(item workItem) string {
 	return generateWorkPrompt(item)
 }
 
-// spawnStaggerPacer is ntm's delivery pacer (spawn_pacing.go). nhm paces
-// the agents' starts in internal/core/spawn and gives the assignment loop no
-// delivery pacer; like ntm's nil pacer, it never waits.
-type spawnStaggerPacer struct{}
+// spawnStaggerPacer is ntm's delivery pacer (spawn_pacing.go): the work
+// prompts go out on the spawn's stagger schedule, internal/core/spawn's
+// Pacer (nhm-2p6.4.10). A nil pacer never waits, as ntm's.
+type spawnStaggerPacer struct{ p *spawn.Pacer }
 
-func (p *spawnStaggerPacer) await(ctx context.Context, _ int) error { return ctx.Err() }
+func (p *spawnStaggerPacer) await(ctx context.Context, order int) error {
+	if p == nil {
+		return ctx.Err()
+	}
+	return p.p.Await(ctx, order)
+}
 
-func (p *spawnStaggerPacer) stamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+func (p *spawnStaggerPacer) stamp() string {
+	if p == nil {
+		return time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	return p.p.Stamp()
+}
 
 // normalizeAgentType is ntm's alias normalization of agent types.
 func normalizeAgentType(t string) string {

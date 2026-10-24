@@ -43,16 +43,20 @@ type SpawnedAgent struct {
 
 // SpawnStaggerSlot is one agent's place in the start schedule.
 type SpawnStaggerSlot struct {
-	Pane      string `json:"pane"`
-	AgentType string `json:"agent_type"`
-	Order     int    `json:"order"`
-	DelayMs   int64  `json:"delay_ms"`
+	Pane        string `json:"pane"`
+	AgentType   string `json:"agent_type"`
+	Order       int    `json:"order"`                  // 1-based delivery position
+	DelayMs     int64  `json:"delay_ms"`               // offset from the first delivery
+	ScheduledAt string `json:"scheduled_at,omitempty"` // planned delivery time (RFC3339Nano); absent until delivery starts
 }
 
-// SpawnStaggerPlan is the start pacing.
+// SpawnStaggerPlan reports how --robot-spawn paces prompt delivery
+// (--spawn-prompt and --spawn-assign-work prompts) between agents, ntm's.
 type SpawnStaggerPlan struct {
-	Mode       string             `json:"mode"`
-	IntervalMs int64              `json:"interval_ms"`
+	Mode       string             `json:"mode"`               // none, fixed, or smart
+	IntervalMs int64              `json:"interval_ms"`        // gap between consecutive agents' deliveries
+	Provider   string             `json:"provider,omitempty"` // smart: rate-limit bucket the interval was learned from
+	Warning    string             `json:"warning,omitempty"`  // smart: learned history unreadable, built-in delay used
 	Schedule   []SpawnStaggerSlot `json:"schedule"`
 }
 

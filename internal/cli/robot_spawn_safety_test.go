@@ -34,14 +34,14 @@ func TestRobotSpawnSafety(t *testing.T) {
 
 // The ready wait is --spawn-timeout (or its deprecated alias
 // --ready-timeout) when given, else --timeout when given, as ntm takes it
-// (resolveRobotSpawnTimeout), else 60 s (nhm-lrx). A bare number is
+// (resolveRobotSpawnTimeout), else ntm's 30 s (nhm-2p6.4.10). A bare number is
 // seconds, and a bad duration is ntm's refusal (nhm-2p6.4.2).
 func TestRobotReadyWait(t *testing.T) {
 	for _, c := range []struct {
 		args []string
 		want time.Duration
 	}{
-		{nil, 60 * time.Second},
+		{nil, 30 * time.Second},
 		{[]string{"--timeout=90s"}, 90 * time.Second},
 		{[]string{"--ready-timeout=20s"}, 20 * time.Second},
 		{[]string{"--ready-timeout=20s", "--timeout=90s"}, 20 * time.Second},

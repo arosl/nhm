@@ -36,9 +36,6 @@ const (
 	StaggerSmart = "smart"
 )
 
-// smartCap bounds a smart stagger's wait.
-const smartCap = 120 * time.Second
-
 // Request is one spawn, add or new.
 type Request struct {
 	// Session is the workspace label; WorkspaceID is set when it exists.
@@ -81,8 +78,15 @@ type Request struct {
 	StaggerMode   string
 	StaggerDelay  time.Duration
 	ReadyTimeout  time.Duration
-	TrustFolder   bool
-	Force         bool
+	// NoWait starts the agents and does not wait for them to be ready:
+	// --robot-spawn without --spawn-wait or a prompt, as ntm's. It takes
+	// no kickoff, since a kickoff needs a ready agent.
+	NoWait bool
+	// KickoffAllReady sends the kickoffs only when every agent is ready,
+	// as ntm's robot spawn sends no prompt after a failed ready wait.
+	KickoffAllReady bool
+	TrustFolder     bool
+	Force           bool
 	// AllowUnguarded records an exception for a missing guard, for this
 	// launch only.
 	AllowUnguarded bool
@@ -148,7 +152,13 @@ func (r *Request) Validate() error {
 		}
 	case StaggerNone, StaggerFixed, StaggerSmart:
 	default:
-		return fmt.Errorf("--stagger-mode is fixed or smart, not %q", r.StaggerMode)
+		return fmt.Errorf("--stagger-mode %w", ValidateStaggerMode(r.StaggerMode))
+	}
+	if err := ValidateStaggerDelay(r.StaggerDelay); err != nil {
+		return fmt.Errorf("--stagger-delay %w", err)
+	}
+	if r.NoWait && !r.NoKickoff {
+		return fmt.Errorf("a kickoff needs the agents ready: a spawn that does not wait sends none")
 	}
 	if r.ReadyTimeout <= 0 {
 		r.ReadyTimeout = 60 * time.Second

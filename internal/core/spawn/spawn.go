@@ -15,6 +15,7 @@ import (
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
+	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/store/history"
 )
@@ -27,6 +28,7 @@ const (
 	StatusPlanned          = "planned"
 	StatusIdentityCreated  = "identity_created"
 	StatusPaneCreated      = "pane_created"
+	StatusStarted          = "started" // herdr started it; not yet ready, or the spawn does not wait (NoWait)
 	StatusReady            = "ready"
 	StatusKickoffSubmitted = "kickoff_submitted"
 	StatusUnresolved       = "unresolved"
@@ -133,7 +135,8 @@ type Target struct {
 	// Kickoff is the kickoff send's operation and its submission.
 	KickoffOp     string `json:"kickoff_operation,omitempty"`
 	KickoffStatus string `json:"kickoff_submission,omitempty"`
-	// DelayMS is the stagger offset from the first start.
+	// DelayMS is the kickoff's stagger offset from the first kickoff
+	// (ntm's schedule: the prompts are paced, not the starts).
 	DelayMS int64 `json:"delay_ms"`
 	// newTab: the target opens a tab. Otherwise its pane is split from
 	// a pane of its tab, at the tab's next grid cell (splitTarget): a tab
@@ -162,6 +165,12 @@ type Result struct {
 	CreatedAt       time.Time `json:"created_at"`
 	TotalStartupMS  int64     `json:"total_startup_ms"`
 	KickoffTemplate string    `json:"kickoff_template,omitempty"`
+	// NoWait: the spawn started the agents and did not wait for them to
+	// be ready (Request.NoWait).
+	NoWait bool `json:"no_wait,omitempty"`
+	// Stagger is the kickoffs' delivery schedule (ntm's stagger plan); nil
+	// when the spawn delivers none.
+	Stagger *robot.SpawnStaggerPlan `json:"stagger,omitempty"`
 }
 
 // Errors.
@@ -177,6 +186,17 @@ var (
 func (r Result) Ready() bool {
 	for _, t := range r.Targets {
 		if !t.Ready {
+			return false
+		}
+	}
+	return true
+}
+
+// Started reports whether herdr started every agent: ready, or started
+// without the wait.
+func (r Result) Started() bool {
+	for _, t := range r.Targets {
+		if !t.Ready && t.Status != StatusStarted {
 			return false
 		}
 	}
@@ -231,11 +251,19 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	res.Targets, res.DryRun = targets, req.DryRun
+	res.Targets, res.DryRun, res.NoWait = targets, req.DryRun, req.NoWait
 	if res.Admission.Decision != Admit {
 		return res, fmt.Errorf("%w: %s", ErrRefused, res.Admission.Reason)
 	}
 	if req.DryRun {
+		// The kickoffs' schedule, as ntm plans it in a dry run.
+		if !kickoff.empty() {
+			stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.ProjectRoot, res.Targets)
+			for i := range res.Targets {
+				res.Targets[i].DelayMS = stagger.Delay(i).Milliseconds()
+			}
+			res.Stagger = plan
+		}
 		return res, nil
 	}
 
@@ -257,8 +285,11 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		}
 	}
 
+	// As ntm does: every agent starts first, then the spawn waits for them
+	// to be ready, then the kickoffs go out on the stagger schedule. The
+	// stagger paces the prompts, not the starts.
 	start := env.now()
-	var prevStart time.Time
+	begins := make([]time.Time, len(res.Targets))
 	stopped := false
 	for i := range res.Targets {
 		t := &res.Targets[i]
@@ -267,18 +298,29 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 			_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
 			continue
 		}
-		if i > 0 {
-			stagger(ctx, env, req, prevStart)
-		}
-		prevStart = env.now()
-		t.DelayMS = prevStart.Sub(start).Milliseconds()
-		ok := startOne(ctx, env, req, &res, t, kickoff)
+		begins[i] = env.now()
+		ok := startOne(ctx, env, req, &res, t)
 		_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
 		if !ok {
 			stopped = true
 		}
 	}
+	if !req.NoWait {
+		for i := range res.Targets {
+			t := &res.Targets[i]
+			if t.Status != StatusStarted {
+				continue
+			}
+			if !readyOne(ctx, env, req, t, begins[i]) {
+				stopped = true
+			}
+			_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
+		}
+	}
 	res.TotalStartupMS = env.now().Sub(start).Milliseconds()
+	if !kickoff.empty() && (!req.KickoffAllReady || res.Ready()) {
+		kickoffs(ctx, env, req, &res, kickoff)
+	}
 	status := "completed"
 	if stopped {
 		status = "partial"
@@ -289,23 +331,46 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 	return res, nil
 }
 
-// stagger waits before the next start: fixed sleeps D; smart waits for
-// at least D since the previous start (that agent is already ready, since
-// startOne waits for it), never for its kickoff turn, capped at 120 s.
-func stagger(ctx context.Context, env Env, req Request, prevStart time.Time) {
-	switch req.StaggerMode {
-	case StaggerFixed:
-		env.sleep(ctx, req.StaggerDelay)
-	case StaggerSmart:
-		d := min(req.StaggerDelay-env.now().Sub(prevStart), smartCap)
+// kickoffs sends each ready target its kickoff through send, paced by
+// ntm's stagger schedule: the agent at delivery order i gets it
+// i*interval after the first (SpawnStagger), and res.Stagger reports the
+// plan.
+func kickoffs(ctx context.Context, env Env, req Request, res *Result, kick kickoff) {
+	var ready []int
+	for i, t := range res.Targets {
+		if t.Ready {
+			ready = append(ready, i)
+		}
+	}
+	if len(ready) == 0 {
+		return
+	}
+	targets := make([]Target, len(ready))
+	for order, i := range ready {
+		targets[order] = res.Targets[i]
+	}
+	stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.ProjectRoot, targets)
+	res.Stagger = plan
+	pacer := NewPacer(stagger, plan, env.now, func(ctx context.Context, d time.Duration) error {
 		env.sleep(ctx, d)
+		return ctx.Err()
+	})
+	for order, i := range ready {
+		t := &res.Targets[i]
+		if err := pacer.Await(ctx, order); err != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("%s: no kickoff: %v", t.MailName, err))
+			continue
+		}
+		t.DelayMS = stagger.Delay(order).Milliseconds()
+		sendKickoff(ctx, env, req, res, t, kick.text(req, t), nil)
+		_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
 	}
 }
 
-// startOne runs one target through identity, pane, binding, start,
-// labels and kickoff. It returns false when the spawn must stop.
-func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target, kick kickoff) bool {
-	begin := env.now()
+// startOne runs one target through identity, pane, binding, agent.start
+// and labels; the agent is then started, not yet ready. It returns false
+// when the spawn must stop.
+func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target) bool {
 	a := kinds.Lookup(t.Kind)
 	fail := func(status string, err error) bool {
 		t.Status, t.Error = status, err.Error()
@@ -362,7 +427,7 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 		}
 	}
 
-	// 4. Start the agent and wait until it is ready for input.
+	// 4. Start the agent.
 	if err := startAgent(ctx, env, req, t, a); err != nil {
 		switch herdr.ErrorCode(err) {
 		case codeAgentPaneBusy, herdr.CodeInvalidAgentName, herdr.CodeAgentNameTaken:
@@ -375,18 +440,31 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 		t.Cleanup = "left in place: the agent may have started; run nhm admin recover inspect"
 		return fail(StatusUnresolved, err)
 	}
-	t.Ready, t.Status = true, StatusReady
-	t.StartupMS = env.now().Sub(begin).Milliseconds()
-	record(ctx, env, t, b)
+	t.Status = StatusStarted
+	if req.NoWait {
+		record(ctx, env, t, b)
+	}
 
 	// 5. Labels: the pane, the tab, the sidebar tokens, Agent Mail's
 	// pane identity file.
 	label(ctx, env, req, res, t)
+	return true
+}
 
-	// 6. The kickoff, through send.
-	if !kick.empty() {
-		sendKickoff(ctx, env, req, res, t, kick.text(req, t), nil)
+// readyOne waits until a started target is ready for input (answering the
+// folder-trust dialog with TrustFolder). begin is when its start began.
+// It returns false when the agent did not get ready: the target is then
+// unresolved and left in place.
+func readyOne(ctx context.Context, env Env, req Request, t *Target, begin time.Time) bool {
+	a := kinds.Lookup(t.Kind)
+	if err := awaitReady(ctx, env, req, t, a); err != nil {
+		t.Status, t.Error = StatusUnresolved, err.Error()
+		t.Cleanup = "left in place: the agent may have started; run nhm admin recover inspect"
+		return false
 	}
+	t.Ready, t.Status = true, StatusReady
+	t.StartupMS = env.now().Sub(begin).Milliseconds()
+	record(ctx, env, t, bindings.Binding{ID: t.BindingID, Generation: FirstGeneration})
 	return true
 }
 
@@ -589,9 +667,14 @@ func startAgent(ctx context.Context, env Env, req Request, t *Target, a kinds.Ad
 	if herdr.ErrorCode(err) == codeAgentPaneBusy && waitShell(ctx, env, t.PaneID) {
 		_, err = env.Herdr.AgentStart(ctx, params)
 	}
-	if err != nil {
-		return err
-	}
+	return err
+}
+
+// awaitReady waits until a started agent is ready for input, within the
+// request's ready timeout. With TrustFolder it answers the kind's
+// folder-trust dialog; any other dialog is an error that names it.
+func awaitReady(ctx context.Context, env Env, req Request, t *Target, a kinds.Adapter) error {
+	ms := req.ReadyTimeout.Milliseconds()
 	ready := func() (herdr.AgentInfo, error) {
 		info, err := env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: t.PaneID,
 			Until: []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusBlocked}, TimeoutMS: &ms})

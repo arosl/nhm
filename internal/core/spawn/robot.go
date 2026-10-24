@@ -8,13 +8,19 @@ import (
 	"github.com/arosl/nhm/internal/robot"
 )
 
+// ntmType is a kind's ntm agent type, as robot output writes it.
+func ntmType(kind string) string { return kinds.Lookup(kind).NTMType }
+
 // SpawnOutput projects a spawn onto ntm's --robot-spawn answer (plan-v8
 // 2.12): agents[] (or would_create[] in a dry run) with the slot N.M as
-// "pane", admission.decision, stagger.schedule[], and assignments empty:
-// --spawn-assign-work's assignment phase (internal/core/spawnassign) fills
-// them after the spawn.
+// "pane", admission.decision, the kickoffs' stagger plan when the spawn
+// delivers prompts (ntm's), and assignments empty: --spawn-assign-work's
+// assignment phase (internal/core/spawnassign) fills them and their
+// stagger plan after the spawn. A spawn that does not wait (NoWait)
+// succeeds once every agent started, as ntm's without --spawn-wait.
 func SpawnOutput(res Result, err error, format string, now time.Time) robot.SpawnOutput {
-	out := robot.SpawnOutput{RobotResponse: robot.NewResponse(err == nil && (res.DryRun || res.Ready()), format, now), Session: res.Session,
+	ok := err == nil && (res.DryRun || res.Ready() || (res.NoWait && res.Started()))
+	out := robot.SpawnOutput{RobotResponse: robot.NewResponse(ok, format, now), Session: res.Session,
 		CreatedAt: now.UTC().Format(time.RFC3339), WorkingDir: res.ProjectRoot, Agents: []robot.SpawnedAgent{},
 		Layout: "tabs", TotalStartupMs: res.TotalStartupMS, DryRun: res.DryRun, Assignments: []robot.SpawnAssignment{},
 		Admission: &robot.SpawnAdmission{Decision: res.Admission.Decision, Reason: res.Admission.Reason,
@@ -35,22 +41,16 @@ func SpawnOutput(res Result, err error, format string, now time.Time) robot.Spaw
 			out.Admission.Hint = "nhm quota, nhm doctor and the capacity provider say why"
 		}
 	}
-	plan := &robot.SpawnStaggerPlan{Mode: res.StaggerMode, IntervalMs: res.StaggerDelayMS, Schedule: []robot.SpawnStaggerSlot{}}
-	for i, t := range res.Targets {
+	for _, t := range res.Targets {
 		a := robot.SpawnedAgent{Pane: t.Slot, PaneID: t.PaneID, AgentMailName: t.MailName, Name: t.HerdrName,
-			Type: kinds.Lookup(t.Kind).NTMType, Variant: t.Model, Title: t.MailName, Ready: t.Ready,
+			Type: ntmType(t.Kind), Variant: t.Model, Title: t.MailName, Ready: t.Ready,
 			StartupMs: t.StartupMS, Error: t.Error}
 		if res.DryRun {
 			out.WouldCreate = append(out.WouldCreate, a)
 		} else {
 			out.Agents = append(out.Agents, a)
 		}
-		delay := t.DelayMS
-		if res.DryRun {
-			delay = int64(i) * res.StaggerDelayMS
-		}
-		plan.Schedule = append(plan.Schedule, robot.SpawnStaggerSlot{Pane: t.Slot, AgentType: a.Type, Order: i + 1, DelayMs: delay})
 	}
-	out.Stagger = plan
+	out.Stagger = res.Stagger
 	return out
 }
