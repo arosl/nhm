@@ -51,7 +51,7 @@ func TestRobotSpawnIgnoreCapacity(t *testing.T) {
 		if err := fs.Parse(args); err != nil {
 			t.Fatal(err)
 		}
-		if req := robotSpawnRequest(fs, rf); req.IgnoreCapacity != c.want || !req.RequireObservations {
+		if req, _, refusal := robotSpawnRequest(fs, rf); refusal != nil || req.IgnoreCapacity != c.want || !req.RequireObservations {
 			t.Errorf("%s: IgnoreCapacity %v, want %v (request %+v)", strings.Join(c.args, " "), req.IgnoreCapacity, c.want, req)
 		}
 	}

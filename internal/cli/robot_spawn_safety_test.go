@@ -32,8 +32,10 @@ func TestRobotSpawnSafety(t *testing.T) {
 	}
 }
 
-// The ready wait is --ready-timeout when given, else --timeout when
-// given, as ntm takes it, else 60 s (nhm-lrx).
+// The ready wait is --spawn-timeout (or its deprecated alias
+// --ready-timeout) when given, else --timeout when given, as ntm takes it
+// (resolveRobotSpawnTimeout), else 60 s (nhm-lrx). A bare number is
+// seconds, and a bad duration is ntm's refusal (nhm-2p6.4.2).
 func TestRobotReadyWait(t *testing.T) {
 	for _, c := range []struct {
 		args []string
@@ -43,6 +45,9 @@ func TestRobotReadyWait(t *testing.T) {
 		{[]string{"--timeout=90s"}, 90 * time.Second},
 		{[]string{"--ready-timeout=20s"}, 20 * time.Second},
 		{[]string{"--ready-timeout=20s", "--timeout=90s"}, 20 * time.Second},
+		{[]string{"--spawn-timeout=15s", "--timeout=90s"}, 15 * time.Second},
+		{[]string{"--timeout=45"}, 45 * time.Second},
+		{[]string{"--timeout=1d"}, 24 * time.Hour},
 	} {
 		fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -50,8 +55,13 @@ func TestRobotReadyWait(t *testing.T) {
 		if err := fs.Parse(c.args); err != nil {
 			t.Fatal(err)
 		}
-		if got := robotReadyWait(fs, rf); got != c.want {
-			t.Errorf("%s: ready wait %s, want %s", strings.Join(c.args, " "), got, c.want)
+		if got, err := robotReadyWait(fs, rf); err != nil || got != c.want {
+			t.Errorf("%s: ready wait %s %v, want %s", strings.Join(c.args, " "), got, err, c.want)
 		}
+	}
+	out, code := robotJSON(t, "--robot-spawn=s", "--spawn-dir=/p", "--spawn-cc=1", "--timeout=soon")
+	if code != robotError || out["error_code"] != "INVALID_FLAG" || out["error"] != "invalid duration: soon (use units like 30s, 5m, 1h)" ||
+		out["hint"] != "Use a duration such as 30s or 500ms" {
+		t.Fatalf("a bad duration = %d %v", code, out)
 	}
 }

@@ -27,7 +27,10 @@ func TestRobotSpawnTrustFolder(t *testing.T) {
 		if err := fs.Parse(args); err != nil {
 			t.Fatal(err)
 		}
-		req := robotSpawnRequest(fs, rf)
+		req, _, refusal := robotSpawnRequest(fs, rf)
+		if refusal != nil {
+			t.Fatalf("%s: %+v", strings.Join(c.args, " "), refusal)
+		}
 		if req.TrustFolder != c.want {
 			t.Errorf("%s: TrustFolder %v, want %v", strings.Join(c.args, " "), req.TrustFolder, c.want)
 		}

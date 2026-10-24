@@ -265,7 +265,10 @@ func newRobotReplayWorld(t *testing.T) *replayWorld {
 	if err := fs.Parse(w.args); err != nil {
 		t.Fatal(err)
 	}
-	req := robotSpawnRequest(fs, rf)
+	req, _, refusal := robotSpawnRequest(fs, rf)
+	if refusal != nil {
+		t.Fatal(refusal.Error)
+	}
 	ie, err := openInstance(s.SocketPath)
 	if err != nil {
 		t.Fatal(err)

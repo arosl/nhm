@@ -1,8 +1,10 @@
 // Taken in part from ntm (github.com/Dicklesworthstone/ntm)
 // internal/cli/agent_spec.go at commit 9d5ed977: modelPattern,
 // agyModelPattern, effortPattern, agentTypeSupportsEffortSuffix,
-// parseAgentSpec, parseTypedAgentSpec and validateAgentModelOverride; see
-// LICENSE in this directory and PROVENANCE.md. Local changes (nhm-2p6.4.1):
+// parseAgentSpec, parseTypedAgentSpec and validateAgentModelOverride; and
+// internal/cli/root.go at the same commit: parseRobotSpawnAgentFlag; see
+// LICENSE in this directory and PROVENANCE.md. Local changes (nhm-2p6.4.1,
+// nhm-2p6.4.2):
 // this header; package and imports; the result is a Want of an nhm kind,
 // in place of ntm's AgentSpec of an AgentType; the kind's adapter says
 // whether it takes the @effort suffix (an effort flag) and whether its
@@ -56,6 +58,25 @@ func ParseCount(kind, value string) (Want, error) {
 			flag = a.Flags[0]
 		}
 		return Want{}, fmt.Errorf("%s model overrides are not supported; model is pinned to %q (use --%s=N)", a.NTMType, a.PinnedModel, flag)
+	}
+	return w, nil
+}
+
+// ParseRobotCount reads one --spawn-<kind> value of --robot-spawn by
+// ParseCount's grammar. An empty value means "flag not set" (count 0).
+// Plain integers keep their historical IntVar semantics: "0" (and negative
+// values, which the request's check refuses) remain bare counts.
+func ParseRobotCount(flagName, kind, raw string) (Want, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return Want{Kind: kind}, nil
+	}
+	if count, err := strconv.Atoi(value); err == nil {
+		return Want{Kind: kind, Count: count}, nil
+	}
+	w, err := ParseCount(kind, value)
+	if err != nil {
+		return Want{}, fmt.Errorf("invalid %s value %q: %w", flagName, raw, err)
 	}
 	return w, nil
 }

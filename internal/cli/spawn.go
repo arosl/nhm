@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
+	"github.com/arosl/nhm/internal/core/sessionlabel"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/spawnassign"
 	"github.com/arosl/nhm/internal/herdr"
@@ -294,21 +296,6 @@ func spawnEnrichment(f *spawnFlags) (send.Enrichment, error) {
 		e.CASS = enrich.Off
 	}
 	return e, nil
-}
-
-// sortWants orders --robot-spawn's agents by the registry's kind order:
-// its counts are one flag per kind, and the plan is the same whatever
-// order the flags came in.
-func sortWants(ws []spawn.Want) {
-	order := map[string]int{}
-	for i, n := range kinds.Names() {
-		order[n] = i
-	}
-	for i := 1; i < len(ws); i++ {
-		for j := i; j > 0 && order[ws[j].Kind] < order[ws[j-1].Kind]; j-- {
-			ws[j], ws[j-1] = ws[j-1], ws[j]
-		}
-	}
 }
 
 func runSpawn(args []string, stdout, stderr io.Writer) int {
@@ -799,18 +786,33 @@ func printSpawn(w io.Writer, res spawn.Result) {
 // robotSpawnFlags are --robot-spawn's flags.
 type robotSpawnFlags struct {
 	session, dir, format, prompt, opID, socket *string
-	counts                                     map[string]*int
-	readyTimeout, timeout                      *time.Duration
-	dryRun, assign, safety, trustFolder        *bool
-	ignoreCapacity                             *bool
-	assignFlags                                robotAssignFlags
+	promptFile, names, label                   *string
+	// counts are the --spawn-<kind> specs by flag (without "spawn-"),
+	// in ntm's launch order.
+	counts                              []robotCount
+	spawnTimeout, timeout               *string
+	dryRun, assign, safety, trustFolder *bool
+	ignoreCapacity                      *bool
+	assignFlags                         robotAssignFlags
 }
 
+// robotCount is one --spawn-<kind> flag: its name and its value.
+type robotCount struct {
+	flag, kind string
+	value      *string
+}
+
+// ntmSpawnOrder is the order of ntm's robot spawn flags, which is its
+// launch order (internal/robot/spawn.go, GetSpawn): the agents of nhm's
+// own kinds (pi, the config's) come after them.
+var ntmSpawnOrder = []string{"cc", "cod", "gmi", "agy", "grok", "omp", "oc"}
+
 // addRobotSpawnFlags registers ntm's robot spawn flags and nhm's
-// --trust-folder, then a --spawn-<kind> count for each kind name and flag
-// that is free.
+// --trust-folder, then a --spawn-<kind> spec for each kind: ntm's short
+// name for a built-in kind (cc, cod, agy, grok, omp, oc, and nhm's pi), the
+// name and the flags of a config kind, when the flag is free.
 func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
-	f := robotSpawnFlags{counts: map[string]*int{}}
+	f := robotSpawnFlags{}
 	f.session = fs.String("robot-spawn", "", "")
 	f.dir = fs.String("spawn-dir", "", "")
 	f.format = fs.String("robot-format", "auto", "")
@@ -819,8 +821,16 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	// nhm always waits for the agents to be ready, as ntm does with
 	// --spawn-wait.
 	fs.Bool("spawn-wait", false, "")
-	f.readyTimeout = fs.Duration("ready-timeout", 60*time.Second, "")
-	f.timeout = fs.Duration("timeout", 60*time.Second, "")
+	// ntm's ready wait: --spawn-timeout, with --ready-timeout as its
+	// deprecated alias (one value), else --timeout when given. A bare
+	// number is seconds (resolveRobotSpawnTimeout).
+	f.spawnTimeout = new(string)
+	fs.StringVar(f.spawnTimeout, "spawn-timeout", "60s", "")
+	fs.StringVar(f.spawnTimeout, "ready-timeout", "60s", "")
+	f.timeout = fs.String("timeout", "5m", "")
+	f.names = fs.String("spawn-names", "", "")
+	f.label = fs.String("spawn-label", "", "")
+	f.promptFile = fs.String("spawn-prompt-file", "", "")
 	// nhm's own, as spawn's --trust-folder: ntm 9d5ed977 has no such
 	// flag. Its robot spawn without --spawn-wait returns at once and
 	// leaves an agent at the folder-trust dialog; nhm's always waits for
@@ -836,26 +846,44 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	f.prompt = fs.String("spawn-prompt", "", "")
 	f.opID = fs.String("op-id", "", "")
 	f.socket = fs.String("socket", "", "")
+	var names []string
 	for _, a := range kinds.All() {
-		for _, name := range append([]string{a.Name}, a.Flags...) {
+		switch {
+		case !a.Builtin:
+			names = append([]string{a.Name}, a.Flags...)
+		case len(a.Flags) > 0:
+			names = a.Flags[:1]
+		default:
+			names = []string{a.Name}
+		}
+		for _, name := range names {
 			if fs.Lookup("spawn-"+name) == nil {
-				f.counts[name] = fs.Int("spawn-"+name, 0, "")
+				f.counts = append(f.counts, robotCount{flag: name, kind: a.Name, value: fs.String("spawn-"+name, "", "")})
 			}
 		}
 	}
+	rank := func(flag string) int {
+		if i := slices.Index(ntmSpawnOrder, flag); i >= 0 {
+			return i
+		}
+		return len(ntmSpawnOrder)
+	}
+	slices.SortStableFunc(f.counts, func(a, b robotCount) int { return rank(a.flag) - rank(b.flag) })
 	return f
 }
 
-// robotReadyWait is a robot spawn's ready wait: --ready-timeout when
-// given, else --timeout when given, as ntm takes it
-// (resolveRobotSpawnTimeout), else --ready-timeout's 60 s. fs is parsed.
-func robotReadyWait(fs *flag.FlagSet, rf robotSpawnFlags) time.Duration {
+// robotReadyWait is a robot spawn's ready wait, as ntm takes it
+// (resolveRobotSpawnTimeout): --spawn-timeout or --ready-timeout when
+// given, else --timeout when given, else --spawn-timeout's default; a
+// bare number is seconds. fs is parsed.
+func robotReadyWait(fs *flag.FlagSet, rf robotSpawnFlags) (time.Duration, error) {
 	given := map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { given[fl.Name] = true })
-	if !given["ready-timeout"] && given["timeout"] {
-		return *rf.timeout
+	value := *rf.spawnTimeout
+	if !given["spawn-timeout"] && !given["ready-timeout"] && given["timeout"] {
+		value = *rf.timeout
 	}
-	return *rf.readyTimeout
+	return parseNTMDurationWithDefault(value, time.Second)
 }
 
 // robotSpawnRequest is the spawn request of a parsed robot spawn. It
@@ -863,23 +891,67 @@ func robotReadyWait(fs *flag.FlagSet, rf robotSpawnFlags) time.Duration {
 // caller's consent) the assignment phase sends each agent its work, with
 // --spawn-prompt ahead of it, so the spawn itself sends nothing. Only
 // --trust-folder answers a folder-trust dialog, and only
-// --ignore-capacity admits a red or unknown capacity.
-func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) spawn.Request {
-	req := spawn.Request{Session: *rf.session, Prompt: *rf.prompt, NoKickoff: *rf.prompt == "",
-		ReadyTimeout: robotReadyWait(fs, rf), TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
+// --ignore-capacity admits a red or unknown capacity. The agents are in
+// ntm's launch order. It also returns the prompt (--spawn-prompt, or the
+// text of --spawn-prompt-file), which the assignment phase puts ahead of
+// each work prompt. A refusal is ntm's: its code, text and hint.
+func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) (spawn.Request, string, *robot.RobotResponse) {
+	refuse := func(err error, hint string) (spawn.Request, string, *robot.RobotResponse) {
+		return spawn.Request{}, "", &robot.RobotResponse{Success: false, ErrorCode: robot.ErrCodeInvalidFlag, Error: err.Error(), Hint: hint}
+	}
+	wait, err := robotReadyWait(fs, rf)
+	if err != nil {
+		return refuse(err, "Use a duration such as 30s or 500ms")
+	}
+	var wants []spawn.Want
+	for _, c := range rf.counts {
+		w, err := spawn.ParseRobotCount("--spawn-"+c.flag, c.kind, *c.value)
+		if err != nil {
+			return refuse(err, "Use count[:model[:effort]] (effort also as model@effort), e.g. --spawn-cod=2 or --spawn-cod=8:gpt-5.3-codex:high")
+		}
+		wants = append(wants, w)
+	}
+	prompt, err := loadRobotMessageInput(*rf.prompt, *rf.promptFile, "--spawn-prompt", "--spawn-prompt-file")
+	if err != nil {
+		return refuse(err, "Use one of --spawn-prompt/--spawn-prompt-file, --spawn-stagger-mode=none|fixed|smart, and a "+
+			"--spawn-stagger-delay such as 20s (0-5m); fix any invalid [spawn] config value")
+	}
+	session := *rf.session
+	if err := sessionlabel.ValidateProjectName(session); err != nil {
+		return refuse(err, "Project names cannot contain '--' (reserved as label separator)")
+	}
+	if *rf.label != "" {
+		if err := sessionlabel.ValidateLabel(*rf.label); err != nil {
+			return refuse(fmt.Errorf("invalid label: %w", err), "Use a valid label (alphanumeric, dash, underscore)")
+		}
+		session = sessionlabel.FormatSessionName(session, *rf.label)
+	}
+	// ntm's validateSpawnRequest: each count is zero or more, and one is
+	// more.
+	total := 0
+	for i, w := range wants {
+		if w.Count < 0 {
+			return refuse(fmt.Errorf("--spawn-%s must be zero or greater, got %d", rf.counts[i].flag, w.Count),
+				"Use non-negative agent counts and a supported assignment strategy")
+		}
+		total += w.Count
+	}
+	if total == 0 {
+		return refuse(errors.New("no agents specified (use cc, cod, gmi, agy, grok, omp, or oc counts)"),
+			"Use non-negative agent counts and a supported assignment strategy")
+	}
+	req := spawn.Request{Session: session, Prompt: prompt, NoKickoff: prompt == "",
+		ReadyTimeout: wait, TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
 		OperationID: *rf.opID, Safety: *rf.safety, IgnoreCapacity: *rf.ignoreCapacity}
 	if *rf.assign {
-		req.Prompt, req.NoKickoff, req.AssignOptions = "", true, rf.assignFlags.options(*rf.prompt)
+		req.Prompt, req.NoKickoff, req.AssignOptions = "", true, rf.assignFlags.options(prompt)
 	}
-	for flagName, n := range rf.counts {
-		if *n == 0 {
-			continue
+	for _, w := range wants {
+		if w.Count > 0 {
+			req.Agents = append(req.Agents, w)
 		}
-		a, _ := kinds.Default().ByFlag(flagName)
-		req.Agents = append(req.Agents, spawn.Want{Kind: a.Name, Count: *n})
 	}
-	sortWants(req.Agents)
-	return req
+	return req, prompt, nil
 }
 
 // hasRobotSpawn reports a --robot-spawn flag in args.
@@ -903,7 +975,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(io.Discard)
 	rf := addRobotSpawnFlags(fs)
 	dir, format := rf.dir, rf.format
-	dryRun, assign, prompt, socket := rf.dryRun, rf.assign, rf.prompt, rf.socket
+	dryRun, assign, socket := rf.dryRun, rf.assign, rf.socket
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		msg := "unexpected arguments"
 		if err != nil {
@@ -918,7 +990,10 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
 			"use --robot-format=json", "json", robotError, now)
 	}
-	req := robotSpawnRequest(fs, rf)
+	req, prompt, refusal := robotSpawnRequest(fs, rf)
+	if refusal != nil {
+		return robotWrite(stdout, robotAssignRefusal(refusal, *rf.session, *dir, *format, now), robotError)
+	}
 	ie, err := openInstance(*socket)
 	if err != nil {
 		return robotFail(stdout, robot.ErrCodeDependencyMissing, err.Error(), "run inside herdr or give --socket", *format, robotError, now)
@@ -959,6 +1034,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		plan, err = robotReplayPlan(ctx, ie, &res, plan)
 	}
 	out := spawn.SpawnOutput(res, err, *format, now)
+	spawn.NameAgents(&out, res, spawn.ParseCustomNames(*rf.names))
 	switch {
 	case errors.Is(err, core.ErrNotOwner):
 		out.ErrorCode = robot.ErrCodeNotOwner
@@ -973,7 +1049,7 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 		out.Error = strings.TrimPrefix(err.Error(), spawn.ErrSessionExists.Error()+": ")
 	}
 	if *assign && !*dryRun && out.Success {
-		assignPhase(ctx, ie, res, scope, plan, *prompt, assignHooks{}, &out)
+		assignPhase(ctx, ie, res, scope, plan, prompt, assignHooks{}, &out)
 	}
 	if !out.Success {
 		return robotWrite(stdout, out, robotError)
