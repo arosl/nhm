@@ -786,8 +786,12 @@ var (
 	defaultErr  error
 )
 
-// ConfigPath is nhm's config file, $XDG_CONFIG_HOME/nhm/config.toml.
+// ConfigPath is nhm's config file: $NHM_CONFIG, which the root's --config
+// sets for the call, else $XDG_CONFIG_HOME/nhm/config.toml.
 func ConfigPath() (string, error) {
+	if p := os.Getenv("NHM_CONFIG"); p != "" {
+		return p, nil
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -143,7 +144,6 @@ func TestRootFlagNotBuiltIsRefused(t *testing.T) {
 		flag       []string
 		name, bead string
 	}{
-		{[]string{"--config", "/x.toml"}, "config", "nhm-2p6.1.7"},
 		{[]string{"--redact", "off"}, "redact", "nhm-2p6.20"},
 		{[]string{"--allow-secret"}, "allow-secret", "nhm-2p6.20"},
 		{[]string{"--profile-startup"}, "profile-startup", "nhm-2p6.1.7"},
@@ -229,6 +229,47 @@ func TestPassThroughVerbArguments(t *testing.T) {
 	}
 	if code, out, errOut := runWith(fail, "probe"); code != 3 || out != "" || errOut != "" {
 		t.Errorf("a legacy code: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+// --config F names nhm's config file for the call, as NHM_CONFIG, made
+// absolute (the operator's ruling, 2026-10-24), on a pass-through verb
+// and on a verb on the shared parser; an empty --config is none.
+func TestConfigFlagSetsNHMConfig(t *testing.T) {
+	t.Setenv("NHM_CONFIG", "")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	var seen string
+	legacy := func(o *rootOptions, stdout, stderr io.Writer) *cobra.Command {
+		return legacyVerb{name: "probe", run: func([]string, io.Writer, io.Writer) int {
+			seen = os.Getenv("NHM_CONFIG")
+			return exitOK
+		}}.command(o, stdout, stderr)
+	}
+	shared := func(*rootOptions, io.Writer, io.Writer) *cobra.Command {
+		return &cobra.Command{Use: "probe", RunE: func(*cobra.Command, []string) error {
+			seen = os.Getenv("NHM_CONFIG")
+			return nil
+		}}
+	}
+	want := filepath.Join(dir, "my.toml")
+	for name, cmd := range map[string]func(*rootOptions, io.Writer, io.Writer) *cobra.Command{"legacy": legacy, "shared": shared} {
+		for _, c := range []struct {
+			args []string
+			want string
+		}{
+			{[]string{"--config", "my.toml", "probe"}, want},
+			{[]string{"probe", "--config=" + want}, want},
+			{[]string{"--config=", "probe"}, ""},
+		} {
+			seen = "unset"
+			if code, _, errOut := runWith(cmd, c.args...); code != 0 || seen != c.want {
+				t.Errorf("%s %v: exit %d, NHM_CONFIG %q, stderr %q", name, c.args, code, seen, errOut)
+			}
+			if v := os.Getenv("NHM_CONFIG"); v != "" {
+				t.Errorf("%s %v: NHM_CONFIG outlived the run: %q", name, c.args, v)
+			}
+		}
 	}
 }
 

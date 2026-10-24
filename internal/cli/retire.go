@@ -19,6 +19,7 @@ import (
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/cass"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 )
 
 // lifecycleLockWait bounds the wait for the owner lock. The lifecycle
@@ -34,8 +35,8 @@ var lifecycleFacts lifecycle.Facts
 // and of NHM_BEAD_DBS (absolute paths, separated by ':').
 func beadDBs() ([]string, error) {
 	var dbs []string
-	if dir, err := os.UserConfigDir(); err == nil {
-		list, err := lifecycle.LoadBeadDBs(dir + "/nhm/config.toml")
+	if path, err := kinds.ConfigPath(); err == nil {
+		list, err := lifecycle.LoadBeadDBs(path)
 		if err != nil {
 			return nil, err
 		}
@@ -425,8 +426,8 @@ func reapSweep(ctx context.Context, ie *instanceEnv, lenv lifecycle.Env, req lif
 // keepPaths are nhm's config and ACFS's agents.toml.
 func keepPaths() []string {
 	var paths []string
-	if dir, err := os.UserConfigDir(); err == nil {
-		paths = append(paths, dir+"/nhm/config.toml")
+	if path, err := kinds.ConfigPath(); err == nil {
+		paths = append(paths, path)
 	}
 	if p := os.Getenv("ACFS_AGENTS_CONFIG"); p != "" {
 		paths = append(paths, p)

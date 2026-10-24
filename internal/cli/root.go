@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -61,7 +62,8 @@ type rootFlag struct {
 
 var rootFlags = []rootFlag{
 	{name: "json"},
-	{name: "config", value: true, notBuilt: "nhm-2p6.1.7"},
+	// --config F names nhm's config file for the call (NHM_CONFIG).
+	{name: "config", value: true},
 	// --ssh H never reaches the root: Run hands the whole call to H
 	// (remoteCall). An empty --ssh is none, as in ntm.
 	{name: "ssh", value: true},
@@ -90,8 +92,11 @@ func addRootFlags(fs *pflag.FlagSet, o *rootOptions) {
 }
 
 // apply refuses a root flag whose effect nhm does not have yet, and sets
-// up the others. --no-color sets NTM_NO_COLOR for this Run, as ntm does;
-// nhm's theme reads it.
+// up the others for this Run. --no-color sets NTM_NO_COLOR, as ntm does;
+// nhm's theme reads it. --config F sets NHM_CONFIG, which nhm's config
+// readers take for their path (the operator's ruling, 2026-10-24: F
+// replaces the path of nhm's config); an empty --config is none, as in
+// ntm.
 func (o *rootOptions) apply() error {
 	for _, f := range rootFlags {
 		if f.notBuilt != "" && o.set[f.name] {
@@ -100,6 +105,13 @@ func (o *rootOptions) apply() error {
 	}
 	if o.noColor {
 		o.setenv("NTM_NO_COLOR", "1")
+	}
+	if o.config != "" {
+		path, err := filepath.Abs(o.config)
+		if err != nil {
+			return fmt.Errorf("--config %s: %w", o.config, err)
+		}
+		o.setenv("NHM_CONFIG", path)
 	}
 	return nil
 }
