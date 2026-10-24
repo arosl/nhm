@@ -264,3 +264,40 @@ func TestOptOut(t *testing.T) {
 		}
 	}
 }
+
+// BlockKeys reads back what Block writes, without a key that has no herdr
+// key; Extras keeps the keys that bind --key and --overlay added; nothing
+// outside nhm's block counts, nor a block inside a multi-line string.
+func TestBlockKeysAndExtras(t *testing.T) {
+	keys := append(slices.Clone(Keys), ExtraKey("F5", false), ExtraKey("F12", true))
+	keys[2].Key = "" // the menu without a key
+	config := "[[keys.command]]\nkey = \"F6\"\ntype = \"plugin_action\"\ncommand = \"nhm.palette\"\n\n" + Block(keys) +
+		"\nx = '''\n# >>> nhm >>>\n# F9: the command palette (nhm bind --key)\n[[keys.command]]\nkey = \"F9\"\n'''\n"
+	var got []string
+	for _, k := range BlockKeys(config) {
+		got = append(got, k.Key+"/"+k.Name+"/"+k.Action+"/"+k.What)
+	}
+	want := []string{"prefix+a/palette/nhm.palette/the command palette", "prefix+d/board/nhm.board/the agent board",
+		"F5/palette/nhm.palette/the command palette (nhm bind --key)", "F12/board/nhm.board/the agent board (nhm bind --overlay)"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("BlockKeys = %q", got)
+	}
+	if ex := Extras(config); len(ex) != 2 || ex[0] != ExtraKey("F5", false) || ex[1] != ExtraKey("F12", true) {
+		t.Fatalf("Extras = %+v", ex)
+	}
+	if len(Extras("")) != 0 || len(BlockKeys(optOutBlock)) != 0 {
+		t.Fatal("keys found where there are none")
+	}
+}
+
+// MergeExtras keeps a key once when a surface already has it for the same
+// action, and refuses a key that another surface has.
+func TestMergeExtras(t *testing.T) {
+	merged, err := MergeExtras(Keys, []Key{ExtraKey("F5", false), ExtraKey("PREFIX+A", false), ExtraKey("F5", false)})
+	if err != nil || len(merged) != 4 || merged[3].Key != "F5" {
+		t.Fatalf("merged = %+v, %v", merged, err)
+	}
+	if _, err := MergeExtras(Keys, []Key{ExtraKey("prefix+d", false)}); err == nil || !strings.Contains(err.Error(), "prefix+d is already the key of the agent board") {
+		t.Fatalf("a board key for the palette: %v", err)
+	}
+}

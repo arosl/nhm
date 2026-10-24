@@ -386,6 +386,109 @@ func sameKey(a, b string) bool {
 	return strings.EqualFold(strings.Join(strings.Fields(a), ""), strings.Join(strings.Fields(b), ""))
 }
 
+// The What of a key that ntm's `bind --key K` or `bind --overlay` added:
+// Block writes it in the key's comment, and Extras finds it there, so a
+// later nhm bind keeps the key.
+const (
+	KeyTag     = " (nhm bind --key)"
+	OverlayTag = " (nhm bind --overlay)"
+)
+
+// ExtraKey is the key ntm's bind adds: K for the palette, or with overlay
+// for the board.
+func ExtraKey(key string, overlay bool) Key {
+	if overlay {
+		return Key{Name: "board", Key: key, Action: "nhm.board", What: "the agent board" + OverlayTag}
+	}
+	return Key{Name: "palette", Key: key, Action: "nhm.palette", What: "the command palette" + KeyTag}
+}
+
+// BlockKeys are the keys that nhm's block in config binds, in order, as
+// Block writes them: each one's comment ("# KEY: What"), then its
+// [[keys.command]] key and command. A marker counts only at the top
+// level, never inside a multi-line string.
+func BlockKeys(config string) []Key {
+	var out []Key
+	open := ""
+	inside := false
+	var cur *Key
+	what := "" // the comment that names the next table
+	for _, line := range strings.Split(config, "\n") {
+		inString := open != ""
+		open = multiline(open, line)
+		t := strings.TrimSpace(line)
+		switch {
+		case inString:
+		case !inside && isMarker(t, BlockBegin):
+			inside = true
+		case inside && t == BlockEnd:
+			inside, cur, what = false, nil, ""
+		case !inside:
+		case t == "[[keys.command]]":
+			out = append(out, Key{What: what})
+			cur, what = &out[len(out)-1], ""
+		case strings.HasPrefix(t, "# ") && strings.Contains(t, ": "):
+			_, what, _ = strings.Cut(strings.TrimPrefix(t, "# "), ": ")
+			cur = nil
+		case cur != nil && (strings.HasPrefix(t, "key = ") || strings.HasPrefix(t, "command = ")):
+			var v struct{ Key, Command string }
+			if _, err := toml.Decode(t, &v); err == nil {
+				if v.Key != "" {
+					cur.Key = v.Key
+				}
+				if v.Command != "" {
+					cur.Action = v.Command
+				}
+			}
+		}
+	}
+	out = slices.DeleteFunc(out, func(k Key) bool { return k.Key == "" })
+	for i := range out {
+		switch out[i].Action {
+		case "nhm.palette":
+			out[i].Name = "palette"
+		case "nhm.board":
+			out[i].Name = "board"
+		case "nhm.menu":
+			out[i].Name = "menu"
+		}
+	}
+	return out
+}
+
+// Extras are the keys of nhm's block in config that ntm's bind --key and
+// --overlay added: their comment carries KeyTag or OverlayTag.
+func Extras(config string) []Key {
+	return slices.DeleteFunc(BlockKeys(config), func(k Key) bool {
+		return !strings.HasSuffix(k.What, KeyTag) && !strings.HasSuffix(k.What, OverlayTag)
+	})
+}
+
+// SameKey is how nhm bind compares two keys: without spaces, ignoring
+// case.
+func SameKey(a, b string) bool { return sameKey(a, b) }
+
+// MergeExtras adds extras after keys. An extra whose key a surface
+// already has for the same action is there once; one that another
+// surface has is refused.
+func MergeExtras(keys, extras []Key) ([]Key, error) {
+	out := slices.Clone(keys)
+next:
+	for _, e := range extras {
+		for _, k := range out {
+			if k.Key == "" || !sameKey(k.Key, e.Key) {
+				continue
+			}
+			if k.Action != e.Action {
+				return nil, fmt.Errorf("ui: %s is already the key of %s", e.Key, k.What)
+			}
+			continue next
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
 // Bind is BindKeys with the default keys, without force. nhm bind uses
 // BindKeys with the keys of nhm's config.
 func Bind(config string) (string, error) {

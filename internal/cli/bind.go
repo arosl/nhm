@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 )
 
 const bindUsage = `Usage: nhm bind [--unbind | --force | --show | --print-client] [--dry-run] [--no-reload] [--config PATH] [--socket PATH]
+       nhm bind (-k|--key KEY | --overlay [-k KEY]) [--unbind | --show | --force] [--dry-run] [--no-reload] [--config PATH] [--socket PATH]
 
 Write nhm's keys into the herdr server's config.toml, between
 "# >>> nhm >>>" and "# <<< nhm <<<", each a plugin_action key. [keys] in
@@ -52,7 +54,19 @@ removes the opt-out. --show prints the state and the keys, and changes
 nothing. --print-client prints the block for the herdr client's own
 config: a remote client (herdr --remote, on a Mac) uses its own keys
 unless it attaches with --remote-keybindings server.
+
+ntm's -k/--key KEY binds KEY to the palette as well, and --overlay binds
+the board (ntm's dashboard overlay) to F12, or to KEY; [keys] stays as it
+is (the operator's ruling, 2026-10-24: nhm's keys are the default). KEY
+is a key herdr reads without its prefix, such as F5 (ntm's characters:
+a-z, 0-9, -, ^). The key stays in nhm's block, so a later nhm bind keeps
+it. With --show, nhm bind says whether KEY is bound; with --unbind, it
+removes KEY alone and records no opt-out.
 `
+
+// validKeyRegex is ntm's check of a key for bind --key: letters,
+// digits, - and ^.
+var validKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9\-\^]+$`)
 
 // exitOptedOut is nhm bind's exit code when herdr's config records an
 // opt-out (nhm bind --unbind, acfs palette unbind): nothing changed, and
@@ -71,6 +85,9 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 	noReload := fs.Bool("no-reload", false, "do not ask herdr to reload its config")
 	config := fs.String("config", "", "herdr's config.toml (default: $HERDR_CONFIG_PATH, $XDG_CONFIG_HOME/herdr/config.toml)")
 	socket := fs.String("socket", "", "the herdr server: nhm must own it, its config is written and it reloads (default HERDR_SOCKET_PATH)")
+	key := fs.String("key", "F6", "ntm's: a key for the palette (with --overlay, for the board)")
+	fs.StringVar(key, "k", "F6", "ntm's: a key for the palette (shorthand)")
+	overlay := fs.Bool("overlay", false, "ntm's: bind the board (default F12, or --key)")
 	pos, err := parseInterleaved(fs, args)
 	modes := 0
 	for _, on := range []bool{*unbind, *force, *show, *printClient} {
@@ -78,14 +95,26 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 			modes++
 		}
 	}
-	if err != nil || len(pos) > 0 || modes > 1 {
+	keySet := false
+	fs.Visit(func(f *flag.Flag) { keySet = keySet || f.Name == "key" || f.Name == "k" })
+	extra := keySet || *overlay
+	if err != nil || len(pos) > 0 || modes > 1 || extra && *printClient {
 		fmt.Fprint(stderr, bindUsage)
 		return exitRefused
 	}
-	// --unbind needs no keys, so a broken [keys] never blocks it.
+	if *overlay && !keySet {
+		// ntm's overlay key; the palette's is F6.
+		*key = "F12"
+	}
+	if extra && !validKeyRegex.MatchString(*key) {
+		fmt.Fprintf(stderr, "nhm bind: invalid key format: %q (allowed: a-z, 0-9, -, ^)\n", *key)
+		return exitRefused
+	}
+	// --unbind needs no keys, so a broken [keys] never blocks it; --unbind
+	// --key rewrites the block, so it does.
 	var keys []ui.Key
 	var keysFrom string
-	if !*unbind {
+	if !*unbind || extra {
 		if keys, keysFrom, err = bindKeys(); err != nil {
 			fmt.Fprintf(stderr, "nhm bind: %v\n", err)
 			return exitRefused
@@ -124,14 +153,44 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		seen = stateOf(path, old)
 	}
-	if *show {
-		return showBind(stdout, stderr, path, string(old), keys, keysFrom)
+	newKey := ui.ExtraKey(*key, *overlay)
+	if *show && extra {
+		return showBoundKey(stdout, string(old), newKey.Key)
 	}
 	var next string
-	if *unbind {
+	switch {
+	case *unbind && extra:
+		// ntm's --unbind --key: that key alone, and no opt-out.
+		for _, k := range keys {
+			if k.Key != "" && ui.SameKey(k.Key, newKey.Key) {
+				fmt.Fprintf(stderr, "nhm bind: %s is the key of %s in [keys] of nhm's config; set [keys] %s = \"\" there, then run nhm bind\n", k.Key, k.What, k.Name)
+				return exitRefused
+			}
+		}
+		extras := ui.Extras(string(old))
+		kept := slices.DeleteFunc(slices.Clone(extras), func(k ui.Key) bool { return ui.SameKey(k.Key, newKey.Key) })
+		if len(kept) == len(extras) {
+			fmt.Fprintf(stdout, "→ No %s binding found in herdr's config\n", newKey.Key)
+			return exitOK
+		}
+		if keys, err = ui.MergeExtras(keys, kept); err == nil {
+			next, err = ui.BindKeys(string(old), keys, false)
+		}
+	case *unbind:
 		next, err = ui.OptOut(string(old))
-	} else {
-		next, err = ui.BindKeys(string(old), keys, *force)
+	default:
+		// The keys that ntm's --key and --overlay added stay; a new one
+		// takes its key's place.
+		extras := ui.Extras(string(old))
+		if extra {
+			extras = append(slices.DeleteFunc(extras, func(k ui.Key) bool { return ui.SameKey(k.Key, newKey.Key) }), newKey)
+		}
+		if keys, err = ui.MergeExtras(keys, extras); err == nil {
+			if *show {
+				return showBind(stdout, stderr, path, string(old), keys, keysFrom)
+			}
+			next, err = ui.BindKeys(string(old), keys, *force)
+		}
 	}
 	if errors.Is(err, ui.ErrOptedOut) {
 		// Before the owner check: the user's own choice is the answer.
@@ -158,6 +217,9 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 	}
 	if next == string(old) {
 		fmt.Fprintf(stderr, "nhm bind: %s is already as it should be\n", path)
+		if extra && !*unbind {
+			printBoundKey(stdout, newKey, path)
+		}
 		return exitOK
 	}
 	mode := os.FileMode(0o644)
@@ -188,8 +250,13 @@ func runBind(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 	verb := "wrote nhm's keys (" + ui.Describe(keys) + ") to"
-	if *unbind {
+	switch {
+	case *unbind && extra:
+		fmt.Fprintf(stdout, "✓ Removed %s binding from %s\n", newKey.Key, path)
+	case *unbind:
 		verb = "removed nhm's keys and recorded the opt-out (nhm bind --force binds them again) in"
+	case extra:
+		printBoundKey(stdout, newKey, path)
 	}
 	fmt.Fprintf(stderr, "nhm bind: %s %s\n", verb, path)
 	if !*noReload {
@@ -209,6 +276,34 @@ func bindKeys() ([]ui.Key, string, error) {
 	}
 	keys, err := ui.LoadKeys(path)
 	return keys, "[keys] in " + path, err
+}
+
+// printBoundKey is ntm's report of a bind --key or --overlay, on herdr.
+func printBoundKey(w io.Writer, k ui.Key, path string) {
+	what := "open the command palette"
+	if k.Action == "nhm.board" {
+		what = "open the agent board"
+	}
+	fmt.Fprintf(w, "✓ Bound %s in herdr's config %s\n\n  Press %s in herdr to %s.\n", k.Key, path, k.Key, what)
+}
+
+// showBoundKey is ntm's bind --show --key: the binding of key in nhm's
+// block, or that there is none.
+func showBoundKey(w io.Writer, config, key string) int {
+	found := false
+	for _, k := range ui.BlockKeys(config) {
+		if ui.SameKey(k.Key, key) {
+			if !found {
+				fmt.Fprintln(w, "✓ Found binding:")
+			}
+			found = true
+			fmt.Fprintf(w, "  key = %q, command = %q (%s)\n", k.Key, k.Action, k.What)
+		}
+	}
+	if !found {
+		fmt.Fprintf(w, "→ No %s binding found in herdr's config\n\n  Run nhm bind --key %s to set it up.\n", key, key)
+	}
+	return exitOK
 }
 
 // showBind prints what herdr's config at path holds of nhm's keys, and
