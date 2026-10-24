@@ -20,6 +20,7 @@ import (
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/enrich"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/spawnassign"
@@ -32,20 +33,33 @@ import (
 
 // robotAssignFlags are ntm's --spawn-assign-work flags of --robot-spawn.
 type robotAssignFlags struct {
-	fs                                         *flag.FlagSet
-	strategy, legacyStrategy, reservationPaths *string
-	requireReservation, withCASS, withMemory   *bool
+	fs                                               *flag.FlagSet
+	strategy, legacyStrategy, reservationPaths       *string
+	requireReservation, withCASS, noCASS, withMemory *bool
 }
 
 func addRobotAssignFlags(fs *flag.FlagSet) robotAssignFlags {
 	return robotAssignFlags{fs: fs,
-		strategy:           fs.String("strategy", "", ""),
-		legacyStrategy:     fs.String("spawn-assign-strategy", "top-n", ""),
-		reservationPaths:   fs.String("spawn-reservation-paths", "", ""),
-		requireReservation: fs.Bool("spawn-require-reservation", false, ""),
+		strategy:       fs.String("strategy", "", ""),
+		legacyStrategy: fs.String("spawn-assign-strategy", "top-n", ""),
+		// ntm's reservation flags (its root flags, nhm-2p6.4.3): nhm
+		// reserves no files for agents, so the preflight refuses them.
+		reservationPaths:   fs.String("reservation-paths", "", ""),
+		requireReservation: fs.Bool("require-reservation", false, ""),
 		withCASS:           fs.Bool("with-cass", false, ""),
+		noCASS:             fs.Bool("no-cass", false, ""),
 		withMemory:         fs.Bool("with-memory", false, ""),
 	}
+}
+
+// promptContext is ntm's resolvePromptContextOptions for the work
+// prompts: CASS unless --no-cass, when --with-cass or the config asks for
+// it; CM when --with-memory or the config asks for it. nhm's [cass]
+// context and [memory] cm stand in for ntm's [cass.context] enabled and
+// [memory] send_injection, as for --robot-send.
+func (f robotAssignFlags) promptContext(cfg enrich.Config) spawnassign.PromptContextOptions {
+	return spawnassign.PromptContextOptions{WithCASS: !*f.noCASS && (*f.withCASS || cfg.CASS.Context != enrich.Off),
+		WithMemory: *f.withMemory || cfg.Memory.CM != enrich.Off}
 }
 
 // strategyValue is ntm's resolveRobotSharedFlag: an explicit
@@ -69,8 +83,13 @@ func (f robotAssignFlags) strategyValue() string {
 // refused, since a replay may assign (nhm-88n). prompt is --spawn-prompt,
 // which goes ahead of every work prompt.
 func (f robotAssignFlags) options(prompt string) string {
-	b, _ := json.Marshal(map[string]any{"strategy": f.strategyValue(), "prompt": prompt, "with_cass": *f.withCASS,
-		"with_memory": *f.withMemory})
+	opts := map[string]any{"strategy": f.strategyValue(), "prompt": prompt, "with_cass": *f.withCASS, "with_memory": *f.withMemory}
+	// Only when set, so an operation recorded before --no-cass keeps its
+	// fingerprint.
+	if *f.noCASS {
+		opts["no_cass"] = true
+	}
+	b, _ := json.Marshal(opts)
 	return string(b)
 }
 
@@ -97,19 +116,25 @@ func robotReplayPlan(ctx context.Context, ie *instanceEnv, res *spawn.Result, pl
 
 // robotAssignPreflight runs ntm's assignment preflight for project before
 // the spawn creates anything: no reservations (nhm does not take ntm's
-// reservation runtime), the strict policy, the verified actionable plan. A
-// refusal is the envelope to write, with ntm's code.
+// reservation runtime), nhm's config for the prompt context, the strict
+// policy, the verified actionable plan. A refusal is the envelope to
+// write, with ntm's code.
 func robotAssignPreflight(ctx context.Context, ie *instanceEnv, f robotAssignFlags, project string) (spawnassign.Plan, core.Scope, *robot.RobotResponse) {
 	if *f.requireReservation || strings.TrimSpace(*f.reservationPaths) != "" {
 		return spawnassign.Plan{}, core.Scope{}, &robot.RobotResponse{Success: false, ErrorCode: robot.ErrCodeInvalidFlag,
-			Error: "nhm does not reserve files for spawn assignments (--spawn-require-reservation, --spawn-reservation-paths)",
+			Error: "nhm does not reserve files for spawn assignments (--require-reservation, --reservation-paths)",
 			Hint:  "drop the reservation flags; agents reserve their own files"}
+	}
+	cfg, err := loadEnrichConfig()
+	if err != nil {
+		return spawnassign.Plan{}, core.Scope{}, &robot.RobotResponse{Success: false, ErrorCode: robot.ErrCodeInvalidFlag,
+			Error: err.Error(), Hint: "fix ~/.config/nhm/config.toml"}
 	}
 	plan, s, refusal := assignPreflight(ctx, ie, f.strategyValue(), project, "give --spawn-dir a project directory", nil)
 	if refusal != nil {
 		return plan, s, refusal
 	}
-	plan.Context = spawnassign.PromptContextOptions{WithCASS: *f.withCASS, WithMemory: *f.withMemory}
+	plan.Context = f.promptContext(cfg)
 	return plan, s, nil
 }
 

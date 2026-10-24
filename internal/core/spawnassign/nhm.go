@@ -247,6 +247,6 @@ func normalizeAgentType(t string) string {
 	return string(agent.AgentType(strings.TrimSpace(t)).Canonical())
 }
 
-// errReservationsNotTaken refuses ntm's --spawn-require-reservation: nhm
-// does not take ntm's Agent Mail reservation runtime (no caller needs it).
-var errReservationsNotTaken = errors.New("nhm does not reserve files for spawn assignments (--spawn-require-reservation is not supported)")
+// errReservationsNotTaken refuses ntm's --require-reservation: nhm does
+// not take ntm's Agent Mail reservation runtime (no caller needs it).
+var errReservationsNotTaken = errors.New("nhm does not reserve files for spawn assignments (--require-reservation is not supported)")

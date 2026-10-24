@@ -5,9 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/arosl/nhm/internal/core/spawnassign"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -52,7 +55,7 @@ func TestRobotSpawnAssignPreflightComesFirst(t *testing.T) {
 		code  string
 		says  string
 	}{
-		{[]string{"--spawn-require-reservation"}, robot.ErrCodeInvalidFlag, "does not reserve files"},
+		{[]string{"--require-reservation"}, robot.ErrCodeInvalidFlag, "does not reserve files"},
 		{[]string{"--strategy=fastest"}, robot.ErrCodeInvalidFlag, "fastest"},
 		// No bv on PATH: the actionable plan cannot be verified.
 		{nil, robot.ErrCodeInternalError, "verify actionable spawn work"},
@@ -78,8 +81,8 @@ func TestRobotAssignPreflightRefusals(t *testing.T) {
 		args []string
 		code string
 	}{
-		{[]string{"--spawn-require-reservation"}, robot.ErrCodeInvalidFlag},
-		{[]string{"--spawn-reservation-paths=internal/**"}, robot.ErrCodeInvalidFlag},
+		{[]string{"--require-reservation"}, robot.ErrCodeInvalidFlag},
+		{[]string{"--reservation-paths=internal/**"}, robot.ErrCodeInvalidFlag},
 		{[]string{"--strategy=fastest"}, robot.ErrCodeInvalidFlag},
 	} {
 		fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
@@ -91,6 +94,73 @@ func TestRobotAssignPreflightRefusals(t *testing.T) {
 		_, _, refusal := robotAssignPreflight(context.Background(), ie, f, t.TempDir())
 		if refusal == nil || refusal.ErrorCode != tc.code || refusal.Success {
 			t.Fatalf("%v: refusal=%+v", tc.args, refusal)
+		}
+	}
+}
+
+// ntm's reservation flags are --require-reservation and
+// --reservation-paths (its root flags): nhm refuses them in the
+// preflight, as it reserves no files for agents. The --spawn- names,
+// which ntm does not have, are unknown flags.
+func TestRobotSpawnAssignReservationFlagNames(t *testing.T) {
+	s, _, _ := newSendInstance(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	base := []string{"--robot-spawn=swarm", "--spawn-dir=" + t.TempDir(), "--spawn-cc=1", "--spawn-assign-work", "--robot-format=json",
+		"--dry-run", "--socket=" + s.SocketPath}
+	for _, tc := range []struct {
+		flag, says string
+	}{
+		{"--require-reservation", "nhm does not reserve files for spawn assignments (--require-reservation, --reservation-paths)"},
+		{"--reservation-paths=internal/**", "nhm does not reserve files"},
+		{"--spawn-require-reservation", "flag provided but not defined: -spawn-require-reservation"},
+		{"--spawn-reservation-paths=internal/**", "flag provided but not defined: -spawn-reservation-paths"},
+	} {
+		out, code := robotJSON(t, append(append([]string(nil), base...), tc.flag)...)
+		if code != robotError || out["error_code"] != robot.ErrCodeInvalidFlag || !strings.Contains(fmt.Sprint(out["error"]), tc.says) {
+			t.Errorf("%s: %d %v", tc.flag, code, out)
+		}
+	}
+}
+
+// ntm's --no-cass turns the work prompts' CASS context off, over
+// --with-cass and the config; CASS and CM otherwise follow the flags or
+// nhm's config ([cass] context, [memory] cm), as --robot-send's do.
+func TestRobotSpawnAssignNoCass(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		args   []string
+		want   spawnassign.PromptContextOptions
+	}{
+		{"", nil, spawnassign.PromptContextOptions{}},
+		{"", []string{"--with-cass", "--with-memory"}, spawnassign.PromptContextOptions{WithCASS: true, WithMemory: true}},
+		{"", []string{"--with-cass", "--no-cass"}, spawnassign.PromptContextOptions{}},
+		{"[cass]\ncontext = \"best-effort\"\n", nil, spawnassign.PromptContextOptions{WithCASS: true}},
+		{"[cass]\ncontext = \"best-effort\"\n", []string{"--no-cass"}, spawnassign.PromptContextOptions{}},
+		{"[memory]\ncm = \"best-effort\"\n", []string{"--no-cass"}, spawnassign.PromptContextOptions{WithMemory: true}},
+	} {
+		dir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", dir)
+		if tc.config != "" {
+			writeAll(t, filepath.Join(dir, "nhm", "config.toml"), tc.config)
+		}
+		cfg, err := loadEnrichConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		f := addRobotAssignFlags(fs)
+		if err := fs.Parse(tc.args); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.promptContext(cfg); got != tc.want {
+			t.Errorf("%q %v = %+v, want %+v", tc.config, tc.args, got, tc.want)
+		}
+		// --no-cass enters the operation's fingerprint only when given.
+		if opts := f.options("p"); strings.Contains(opts, "no_cass") != slices.Contains(tc.args, "--no-cass") {
+			t.Errorf("%v: options %s", tc.args, opts)
 		}
 	}
 }
