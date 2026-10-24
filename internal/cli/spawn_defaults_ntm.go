@@ -7,8 +7,8 @@
 // (nhm-2p6.4.14): this header; package and imports; the types are
 // internal/ui/tui/agent's port of ntm's agent types; the counts become
 // nhm's wants, a type by the kind whose short type it is, and a type nhm
-// has no kind for refuses; the project's .ntm/config.toml is read here
-// for its [defaults] table only.
+// has no kind for refuses; the [defaults] table only, read from nhm's
+// project config, .nhm/config.toml.
 package cli
 
 import (
@@ -27,7 +27,7 @@ import (
 )
 
 // projectDefaults holds default settings for the project: the [defaults]
-// table of its .ntm/config.toml.
+// table of its .nhm/config.toml (ntm's is .ntm/config.toml).
 type projectDefaults struct {
 	Agents map[string]int `toml:"agents"` // e.g., { cc = 2, cod = 1 }
 }
@@ -123,7 +123,7 @@ func kindOfShortType(t string) string {
 }
 
 // loadProjectDefaults reads the [defaults] agents of the nearest
-// .ntm/config.toml from dir; nil when there is none.
+// .nhm/config.toml from dir; nil when there is none.
 func loadProjectDefaults(dir string) (map[string]int, error) {
 	path, err := spawnassign.FindProjectConfig(dir)
 	if err != nil || path == "" {

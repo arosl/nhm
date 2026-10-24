@@ -333,7 +333,7 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 			req.StaggerLegacy = f.staggerLegacy
 		}
 		// With no agent flag, the counts of the project's [defaults]
-		// agents (ntm's .ntm/config.toml).
+		// agents (nhm's .nhm/config.toml).
 		if len(req.Agents) == 0 {
 			dir := f.project
 			if dir == "" {

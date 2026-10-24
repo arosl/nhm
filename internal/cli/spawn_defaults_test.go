@@ -78,22 +78,27 @@ func TestSpawnStaggerDefaults(t *testing.T) {
 }
 
 // With no agent flag, spawn takes the counts of the project's [defaults]
-// agents in its .ntm/config.toml, in ntm's order, and says so; a type nhm
-// has no kind for refuses. An agent flag, or add, takes none
-// (nhm-2p6.4.14).
+// agents in its .nhm/config.toml, in ntm's order, and says so; a type nhm
+// has no kind for refuses. An agent flag, or add, takes none. ntm's
+// .ntm/config.toml plays no part (nhm-2p6.4.14).
 func TestSpawnProjectDefaults(t *testing.T) {
 	t.Setenv("NHM_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
 	project := t.TempDir()
-	write := func(body string) {
-		t.Helper()
-		writeAll(t, filepath.Join(project, ".ntm", "config.toml"), body)
-	}
-	write("[defaults]\nagents = { cod = 1, claude = 2 }\n")
+	writeAll(t, filepath.Join(project, ".ntm", "config.toml"), "[defaults]\nagents = { cc = 3 }\n")
 	sub := filepath.Join(project, "src")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	f, req, err := parseVerbArgs(t, false, "--project", sub)
+	if err != nil || len(req.Agents) != 0 || f.defaultsNote != "" {
+		t.Fatalf("ntm's file = %+v %q %v", req.Agents, f.defaultsNote, err)
+	}
+	write := func(body string) {
+		t.Helper()
+		writeAll(t, filepath.Join(project, ".nhm", "config.toml"), body)
+	}
+	write("[defaults]\nagents = { cod = 1, claude = 2 }\n")
+	f, req, err = parseVerbArgs(t, false, "--project", sub)
 	if err != nil || len(req.Agents) != 2 || req.Agents[0] != (spawn.Want{Kind: "claude", Count: 2}) ||
 		req.Agents[1] != (spawn.Want{Kind: "codex", Count: 1}) || f.defaultsNote != "Using default configuration: 2 cc, 1 cod" {
 		t.Fatalf("defaults = %+v %q %v", req.Agents, f.defaultsNote, err)
@@ -120,7 +125,7 @@ func TestSpawnProjectDefaultsNote(t *testing.T) {
 	t.Setenv("NHM_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
 	t.Setenv("PATH", t.TempDir())
 	project := t.TempDir()
-	writeAll(t, filepath.Join(project, ".ntm", "config.toml"), "[defaults]\nagents = { cc = 1 }\n")
+	writeAll(t, filepath.Join(project, ".nhm", "config.toml"), "[defaults]\nagents = { cc = 1 }\n")
 	code, out, errOut := run("spawn", "swarm", "--project", project, "--allow-unguarded", "--dry-run", "--socket", s.SocketPath)
 	if code != 0 || !strings.HasPrefix(out, "Using default configuration: 1 cc\n") || !strings.Contains(out, "would start 1 agents in swarm") {
 		t.Fatalf("note = %d %q %q", code, out, errOut)

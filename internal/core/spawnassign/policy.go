@@ -5,8 +5,8 @@
 // (AssignConfig, WorkSourceConfig.Policy) at commit 9d5ed977; see LICENSE in
 // this directory and PROVENANCE.md. Local changes: only the [assign] section
 // is read; the global file is nhm's config; an unknown key under [assign]
-// refuses; FindProjectConfig is exported for spawn's [defaults] agents
-// (nhm-2p6.4.14).
+// refuses; FindProjectConfig finds nhm's .nhm/config.toml, for spawn's
+// [defaults] agents (nhm-2p6.4.14).
 
 package spawnassign
 
@@ -110,21 +110,26 @@ func decodeAssign(path string, s *assignSection, missingOK bool) error {
 	return nil
 }
 
-// FindProjectConfig is findProjectConfig, for the spawn's [defaults]
-// agents (nhm-2p6.4.14): the path of the nearest .ntm/config.toml from
-// startDir, "" when there is none.
-func FindProjectConfig(startDir string) (string, error) { return findProjectConfig(startDir) }
+// FindProjectConfig is the path of the nearest .nhm/config.toml from
+// startDir, "" when there is none: nhm's project config, where ntm's is
+// .ntm/config.toml (nhm-2p6.4.14; the operator, 2026-10-24: never ntm's
+// paths). Spawn reads its [defaults] agents.
+func FindProjectConfig(startDir string) (string, error) { return findConfigIn(startDir, ".nhm") }
 
-// findProjectConfig walks up from startDir to the nearest .ntm/config.toml,
+// findProjectConfig is the project config that [assign] reads, still
+// .ntm/config.toml until nhm-2p6.28 moves it to nhm's.
+func findProjectConfig(startDir string) (string, error) { return findConfigIn(startDir, ".ntm") }
+
+// findConfigIn walks up from startDir to the nearest <folder>/config.toml,
 // as ntm's FindProjectConfig does: a lookup failure other than absence is an
 // error, and the entry must be a regular file.
-func findProjectConfig(startDir string) (string, error) {
+func findConfigIn(startDir, folder string) (string, error) {
 	dir, err := filepath.Abs(startDir)
 	if err != nil {
 		return "", err
 	}
 	for {
-		configPath := filepath.Join(dir, ".ntm", "config.toml")
+		configPath := filepath.Join(dir, folder, "config.toml")
 		info, statErr := os.Stat(configPath)
 		switch {
 		case statErr == nil:
