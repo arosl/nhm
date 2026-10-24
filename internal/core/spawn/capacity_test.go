@@ -105,7 +105,7 @@ func TestRobotSpawnIgnoresCapacity(t *testing.T) {
 
 	res, err := Spawn(ctx, w.env, r)
 	out := SpawnOutput(res, err, "json", time.Now())
-	if !errors.Is(err, ErrRefused) || len(w.h.calls) != 0 || out.Success || out.ErrorCode != "ADMISSION_REFUSED" ||
+	if !errors.Is(err, ErrRefused) || len(w.h.calls) != 0 || out.Success || out.ErrorCode != "RESOURCE_BUSY" ||
 		out.Admission.Decision != Refuse || !strings.Contains(out.Error, wayOutFlag) || !strings.Contains(out.Error, wayOutConfig) {
 		t.Fatalf("refused robot spawn = %v, calls %v, out %+v", err, w.h.calls, out.RobotResponse)
 	}

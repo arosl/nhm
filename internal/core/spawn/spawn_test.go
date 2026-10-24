@@ -636,9 +636,17 @@ func TestAdmission(t *testing.T) {
 	if !errors.Is(err, ErrRefused) || len(w.h.calls) != 0 || res.Admission.Decision != Refuse {
 		t.Fatalf("refused spawn = %v, calls %v", err, w.h.calls)
 	}
+	// ntm's refusal: RESOURCE_BUSY, "spawn admission refuse: <reason>" and
+	// the hint (nhm-2p6.4.12).
 	out := SpawnOutput(res, err, "json", time.Now())
-	if out.Success || out.ErrorCode != "ADMISSION_REFUSED" || out.Admission.Decision != "refuse" {
+	if out.Success || out.ErrorCode != "RESOURCE_BUSY" || out.Admission.Decision != "refuse" || out.Hint != AdmissionHint ||
+		out.Error != "spawn admission refuse: "+res.Admission.Reason {
 		t.Fatalf("robot refusal = %+v", out.RobotResponse)
+	}
+	// ntm's dry run reports the decision and succeeds.
+	res.DryRun = true
+	if out = SpawnOutput(res, err, "json", time.Now()); !out.Success || out.ErrorCode != "" || out.Admission.Decision != "refuse" {
+		t.Fatalf("robot dry run = %+v %+v", out.RobotResponse, out.Admission)
 	}
 }
 

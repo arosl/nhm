@@ -273,9 +273,10 @@ func TestRobotSpawnRefusesWithoutObservations(t *testing.T) {
 	// A new session: --spawn-safety refuses the existing swarm (nhm-lrx).
 	out, code := robotJSON(t, "--robot-spawn=fresh", "--spawn-dir="+project, "--spawn-cc=1", "--spawn-no-user",
 		"--spawn-safety", "--spawn-wait", "--timeout=60s", "--robot-format=json", "--dry-run", "--socket="+s.SocketPath)
+	// ntm's dry run reports the refusal and succeeds (nhm-2p6.4.12).
 	ad, _ := out["admission"].(map[string]any)
-	if code != 1 || out["success"] != false || out["error_code"] != "ADMISSION_REFUSED" || ad["decision"] != "refuse" ||
-		!strings.Contains(out["error"].(string), "needs an observation") {
+	if code != 0 || out["success"] != true || out["error_code"] != nil || ad["decision"] != "refuse" ||
+		!strings.Contains(ad["reason"].(string), "needs an observation") {
 		t.Fatalf("robot spawn = %d %v", code, out)
 	}
 	if len(out["would_create"].([]any)) != 1 || out["working_dir"] != project {

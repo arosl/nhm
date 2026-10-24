@@ -27,8 +27,9 @@ func TestRobotSpawnSafety(t *testing.T) {
 		out["hint"] != "Choose a new session name or disable --spawn-safety" {
 		t.Fatalf("an existing session = %d %v", code, out)
 	}
-	if out, _ := robotJSON(t, args("fresh")...); out["error_code"] != "ADMISSION_REFUSED" {
-		t.Fatalf("a new session = %v", out)
+	// A new session goes on to admission; a dry run reports its decision.
+	if out, code := robotJSON(t, args("fresh")...); code != 0 || out["admission"].(map[string]any)["decision"] != "refuse" {
+		t.Fatalf("a new session = %d %v", code, out)
 	}
 }
 

@@ -58,6 +58,9 @@ const (
 	ErrCodeInternalError     = "INTERNAL_ERROR"
 	ErrCodeInvalidFlag       = "INVALID_FLAG"
 	ErrCodeDependencyMissing = "DEPENDENCY_MISSING"
+	// ErrCodeResourceBusy is ntm's code for a spawn that its admission
+	// refuses.
+	ErrCodeResourceBusy = "RESOURCE_BUSY"
 	// ErrCodeDestructiveCommandBlocked is ntm's code for a send that its
 	// guard refused; nhm's guard refuses a prompt that the agent would run
 	// as a shell command (nhm-ubi).

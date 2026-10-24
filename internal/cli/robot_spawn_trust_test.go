@@ -40,13 +40,14 @@ func TestRobotSpawnTrustFolder(t *testing.T) {
 		}
 	}
 
-	// The runner takes the flag: a dry run goes on to admission.
+	// The runner takes the flag: a dry run goes on to admission, which
+	// reports its decision (ntm's dry run succeeds).
 	s, _, _ := newSendInstance(t)
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	out, code := robotJSON(t, "--robot-spawn=fresh", "--spawn-dir="+t.TempDir(), "--spawn-cc=1", "--spawn-safety",
 		"--trust-folder", "--robot-format=json", "--dry-run", "--socket="+s.SocketPath)
-	if code != 1 || out["error_code"] != "ADMISSION_REFUSED" {
+	if ad, _ := out["admission"].(map[string]any); code != 0 || out["success"] != true || ad["decision"] != "refuse" {
 		t.Fatalf("dry run with --trust-folder = %d %v", code, out)
 	}
 }

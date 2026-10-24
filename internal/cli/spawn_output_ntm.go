@@ -118,10 +118,6 @@ type spawnResponse struct {
 	NHM              any                   `json:"_nhm,omitempty"`
 }
 
-// errCodeResourceBusy is ntm's robot.ErrCodeResourceBusy, its code for an
-// admission that refuses agents.
-const errCodeResourceBusy = "RESOURCE_BUSY"
-
 type agentLifecycleFailureResponse struct {
 	timestampedResponse
 	Success         bool                  `json:"success"`

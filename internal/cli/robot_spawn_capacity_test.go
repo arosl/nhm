@@ -57,7 +57,8 @@ func TestRobotSpawnIgnoreCapacity(t *testing.T) {
 	}
 
 	// The runner, in a dry run: no dcg refuses the launch either way, so
-	// the capacity's part is in the reasons or in the warnings.
+	// the capacity's part is in the reasons or in the warnings. A dry run
+	// reports the decision and succeeds, as ntm's does.
 	s, _, _ := newSendInstance(t)
 	redCapacityConfig(t)
 	t.Setenv("PATH", t.TempDir())
@@ -66,7 +67,7 @@ func TestRobotSpawnIgnoreCapacity(t *testing.T) {
 	out, code := robotJSON(t, args...)
 	ad, _ := out["admission"].(map[string]any)
 	reasons, warnings := fmt.Sprint(ad["reasons"]), fmt.Sprint(ad["warnings"])
-	if code != 1 || out["error_code"] != "ADMISSION_REFUSED" ||
+	if code != 0 || out["success"] != true || ad["decision"] != "refuse" ||
 		!strings.Contains(reasons, "capacity red: MemAvailable 3000 MiB < 4096 MiB (to start anyway: "+capacityWayOutFlag+", or "+capacityWayOutConfig) ||
 		strings.Contains(warnings, "capacity") {
 		t.Fatalf("red = %d %v", code, out)
@@ -74,7 +75,7 @@ func TestRobotSpawnIgnoreCapacity(t *testing.T) {
 	out, code = robotJSON(t, append(args, "--ignore-capacity")...)
 	ad, _ = out["admission"].(map[string]any)
 	reasons, warnings = fmt.Sprint(ad["reasons"]), fmt.Sprint(ad["warnings"])
-	if code != 1 || strings.Contains(reasons, "capacity") ||
+	if code != 0 || ad["decision"] != "refuse" || strings.Contains(reasons, "capacity") ||
 		!strings.Contains(warnings, "capacity red: MemAvailable 3000 MiB < 4096 MiB (overridden by --ignore-capacity)") {
 		t.Fatalf("red, --ignore-capacity = %d %v", code, out)
 	}

@@ -1,12 +1,17 @@
 package spawn
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
 )
+
+// AdmissionHint is the hint of a refused admission.
+const AdmissionHint = "nhm quota, nhm doctor and the capacity provider say why"
 
 // ntmType is a kind's ntm agent type, as robot output writes it.
 func ntmType(kind string) string { return kinds.Lookup(kind).NTMType }
@@ -19,6 +24,11 @@ func ntmType(kind string) string { return kinds.Lookup(kind).NTMType }
 // stagger plan after the spawn. A spawn that does not wait (NoWait)
 // succeeds once every agent started, as ntm's without --spawn-wait.
 func SpawnOutput(res Result, err error, format string, now time.Time) robot.SpawnOutput {
+	if res.DryRun && errors.Is(err, ErrRefused) {
+		// ntm's dry run reports the admission's decision and succeeds
+		// (internal/robot/spawn.go:1003): only a real spawn is refused.
+		err = nil
+	}
 	ok := err == nil && (res.DryRun || res.Ready() || (res.NoWait && res.Started()))
 	out := robot.SpawnOutput{RobotResponse: robot.NewResponse(ok, format, now), Session: res.Session,
 		CreatedAt: now.UTC().Format(time.RFC3339), WorkingDir: res.ProjectRoot, Agents: []robot.SpawnedAgent{},
@@ -37,8 +47,12 @@ func SpawnOutput(res Result, err error, format string, now time.Time) robot.Spaw
 		out.Error = err.Error()
 		out.ErrorCode = robot.ErrCodeInternalError
 		if res.Admission.Decision == Refuse {
-			out.ErrorCode = "ADMISSION_REFUSED"
-			out.Admission.Hint = "nhm quota, nhm doctor and the capacity provider say why"
+			// ntm's refusal: RESOURCE_BUSY, "spawn admission <decision>:
+			// <reason>" and the admission's hint.
+			out.ErrorCode = robot.ErrCodeResourceBusy
+			out.Error = fmt.Sprintf("spawn admission %s: %s", res.Admission.Decision, res.Admission.Reason)
+			out.Admission.Hint = AdmissionHint
+			out.Hint = AdmissionHint
 		}
 	}
 	for _, t := range res.Targets {

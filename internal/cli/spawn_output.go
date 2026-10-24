@@ -227,9 +227,9 @@ func spawnFailureOf(o spawnOut, err error) agentLifecycleFailureResponse {
 	var outcome *spawnOutcome
 	switch {
 	case errors.Is(err, spawn.ErrRefused):
-		code = errCodeResourceBusy
+		code = robot.ErrCodeResourceBusy
 		admission = &robot.SpawnAdmission{Decision: res.Admission.Decision, Reason: res.Admission.Reason,
-			Hint: "nhm quota, nhm doctor and the capacity provider say why", Session: res.Session,
+			Hint: spawn.AdmissionHint, Session: res.Session,
 			RequestedAgents: len(res.Targets), Reasons: res.Admission.Reasons, Warnings: res.Admission.Warnings}
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = robot.ErrCodeTimeout
