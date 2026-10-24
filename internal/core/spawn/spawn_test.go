@@ -16,6 +16,7 @@ import (
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/guards"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/integrations/quota"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -541,9 +542,14 @@ func TestAdmissionScreensEveryArgv(t *testing.T) {
 	if err := r.Validate(); err == nil {
 		t.Fatal("a bad --effort was accepted")
 	}
+	// An effort for a kind that takes none is dropped at launch, as ntm
+	// drops it (TestLaunchArgvModelAndEffort).
 	r = req(Want{Kind: "agy", Count: 1, Effort: "high"})
-	if err := r.Validate(); err == nil {
-		t.Fatal("an effort for agy was accepted")
+	if err := r.Validate(); err != nil {
+		t.Fatalf("an effort for agy = %v", err)
+	}
+	if got := LaunchArgv(kinds.Lookup("agy"), "", "high", ""); len(got) != 1 {
+		t.Fatalf("agy argv = %q", got)
 	}
 	// A request-wide effort leaves the kinds that take none alone.
 	r = req(Want{Kind: "agy", Count: 1}, Want{Kind: "claude", Count: 1})

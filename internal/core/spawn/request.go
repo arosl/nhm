@@ -3,7 +3,6 @@ package spawn
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -11,30 +10,21 @@ import (
 	"github.com/arosl/nhm/internal/integrations/kinds"
 )
 
-// Want is one --cc=N[:MODEL] or --agent KIND=N[:MODEL].
+// Want is one agent spec: --cc=N[:MODEL[:EFFORT]] or --agent KIND=SPEC.
 type Want struct {
 	Kind  string `json:"kind"`
 	Count int    `json:"count"`
 	Model string `json:"model,omitempty"`
-	// Effort overrides the request's effort for these agents.
+	// Effort overrides the request's effort for these agents. A kind
+	// without an effort flag drops it at launch, as ntm does.
 	Effort string `json:"effort,omitempty"`
 }
 
-// ParseCount reads "N" or "N:MODEL".
-func ParseCount(kind, value string) (Want, error) {
-	n, model, _ := strings.Cut(value, ":")
-	count, err := strconv.Atoi(strings.TrimSpace(n))
-	if err != nil || count < 0 || count > 32 {
-		return Want{}, fmt.Errorf("--%s=%s: give a count from 0 to 32, optionally :MODEL", kind, value)
-	}
-	return Want{Kind: kind, Count: count, Model: strings.TrimSpace(model)}, nil
-}
-
-// ParseAgent reads --agent KIND=N[:MODEL].
+// ParseAgent reads --agent KIND=SPEC, where SPEC is ParseCount's.
 func ParseAgent(value string) (Want, error) {
 	kind, rest, ok := strings.Cut(value, "=")
 	if !ok {
-		return Want{}, fmt.Errorf("--agent %s: use KIND=N[:MODEL]", value)
+		return Want{}, fmt.Errorf("--agent %s: use KIND=N[:MODEL[:EFFORT]]", value)
 	}
 	return ParseCount(strings.TrimSpace(kind), rest)
 }
@@ -115,7 +105,8 @@ func (r *Request) Validate() error {
 		return fmt.Errorf("--spawn-safety refuses an existing session, and nhm add needs one")
 	}
 	if r.Effort != "" && !kinds.EffortPattern.MatchString(r.Effort) {
-		return fmt.Errorf("--effort %q is not a plain word (low, medium, high, xhigh, max)", r.Effort)
+		return fmt.Errorf("--effort %q is not a plain word (low, medium, high, xhigh, max; at most 32 of letters, numbers, . _ + -, "+
+			"a letter or a number first)", r.Effort)
 	}
 	if r.Role != "" && r.Role != RoleReviewer {
 		return fmt.Errorf("--role takes %q (or nothing), not %q", RoleReviewer, r.Role)
@@ -129,11 +120,16 @@ func (r *Request) Validate() error {
 		if w.Model != "" && a.ModelFlag == "" {
 			return fmt.Errorf("%s takes no model: its model is fixed outside nhm", w.Kind)
 		}
+		// nhm puts the model and the effort into an argv as values of their
+		// own, so each starts with a letter or a digit, never "-" (ntm's
+		// charset allows that first).
 		if w.Model != "" && !modelPattern.MatchString(w.Model) {
-			return fmt.Errorf("invalid model %q", w.Model)
+			return fmt.Errorf("invalid model %q: nhm takes a model of at most 128 of ntm's characters (letters, numbers, . _ / @ : + -) "+
+				"that starts with a letter or a number", w.Model)
 		}
-		if w.Effort != "" && (!kinds.EffortPattern.MatchString(w.Effort) || len(a.EffortArgs) == 0) {
-			return fmt.Errorf("%s takes no effort %q (the kind sets none, or it is not a plain word)", w.Kind, w.Effort)
+		if w.Effort != "" && !kinds.EffortPattern.MatchString(w.Effort) {
+			return fmt.Errorf("invalid reasoning effort %q: nhm takes an effort of at most 32 of ntm's characters (letters, numbers, . _ + -) "+
+				"that starts with a letter or a number", w.Effort)
 		}
 		r.Agents[i].Kind = a.Name
 		total += w.Count
@@ -160,7 +156,7 @@ func (r *Request) Validate() error {
 	return nil
 }
 
-var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,127}$`)
 
 // RoleReviewer marks agents spawned to review: they work no beads.
 const RoleReviewer = "reviewer"

@@ -36,8 +36,8 @@ import (
 // timeout per agent.
 const spawnLockWait = 10 * time.Second
 
-const spawnUsage = `Usage: nhm spawn <session> [--cc=N[:MODEL]] [--cod=N[:MODEL]] [--agy=N] [--pi=N] [--omp=N] [--oc=N] [--grok=N]
-                 [--agent KIND=N[:MODEL]]… [--label L] [--group G] [--per-tab N]
+const spawnUsage = `Usage: nhm spawn <session> [--cc|--cod|--grok|--omp|--pi=N[:MODEL[:EFFORT]]]… [--oc=N[:MODEL]]… [--agy=N]…
+                 [--agent KIND=N[:MODEL[:EFFORT]]]… [--label L] [--group G] [--per-tab N]
                  [--prompt T | --prompt-file F | --no-kickoff] [--no-user]
                  [--assign [--strategy S] [--limit N] [--init-prompt T] [--assign-agent TYPE]
                   [--assign-cc-only|--assign-cod-only|--assign-gmi-only|--assign-agy-only]
@@ -48,6 +48,11 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc=N[:MODEL]] [--cod=N[:MODEL]
                  [--socket PATH] [--json]
        nhm add <session> …    the same, into an existing workspace
        nhm new <session>      only the workspace
+
+Each agent flag takes ntm's spec: N, N:MODEL, N:MODEL:EFFORT, or
+N:MODEL@EFFORT for a kind that takes an effort; N is at least 1. Repeated
+flags add up, and the agents start in the order of their flags. agy's
+model is pinned, so it takes a count only.
 
 Start agents in a herdr workspace (the session, by label). For each agent:
 an Agent Mail identity first, a pane, the binding, agent.start, the labels,
@@ -114,10 +119,47 @@ Exit codes: 0 every agent ready; 1 an error or a partial spawn; 2 refused
 before anything started; 3 admission refused.
 `
 
+// specFlag is a kind's count flag (--cc, --cod, …): each value is an
+// agent spec (spawn.ParseCount), and the specs of every count flag and
+// --agent add up in command-line order, as ntm's AgentSpecs do.
+type specFlag struct {
+	kind  string
+	wants *[]spawn.Want
+}
+
+func (s *specFlag) String() string { return "" }
+
+func (s *specFlag) Set(v string) error {
+	w, err := spawn.ParseCount(s.kind, v)
+	if err != nil {
+		return err
+	}
+	*s.wants = append(*s.wants, w)
+	return nil
+}
+
+// Type is the value's name in pflag's usage, ntm's.
+func (s *specFlag) Type() string { return "N[:model[:effort]]" }
+
+// agentFlag is --agent KIND=SPEC, into the same list as the count flags.
+type agentFlag struct{ wants *[]spawn.Want }
+
+func (a *agentFlag) String() string { return "" }
+
+func (a *agentFlag) Set(v string) error {
+	w, err := spawn.ParseAgent(v)
+	if err != nil {
+		return err
+	}
+	*a.wants = append(*a.wants, w)
+	return nil
+}
+
+func (a *agentFlag) Type() string { return "KIND=N[:model[:effort]]" }
+
 // spawnFlags are the flags of spawn and add.
 type spawnFlags struct {
-	counts                  map[string]*string
-	agents                  listFlag
+	wants                   []spawn.Want
 	label, group            string
 	perTab                  int
 	prompt, promptFile      string
@@ -146,8 +188,8 @@ type spawnFlags struct {
 }
 
 func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
-	f := &spawnFlags{counts: map[string]*string{}}
-	fs.Var(&f.agents, "agent", "KIND=N[:MODEL] (repeatable)")
+	f := &spawnFlags{}
+	fs.Var(&agentFlag{wants: &f.wants}, "agent", "KIND=N[:MODEL[:EFFORT]] (repeatable)")
 	fs.StringVar(&f.effort, "effort", "", "reasoning effort (default: each kind's, ntm's xhigh for claude and codex)")
 	fs.StringVar(&f.role, "role", "", "reviewer: the agents work no beads (reap may retire them)")
 	fs.StringVar(&f.label, "label", "", "the tabs' label")
@@ -195,7 +237,7 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	for _, a := range kinds.All() {
 		for _, name := range append([]string{a.Name}, a.Flags...) {
 			if fs.Lookup(name) == nil {
-				f.counts[name] = fs.String(name, "", a.Name+" agents: N[:MODEL]")
+				fs.Var(&specFlag{kind: a.Name, wants: &f.wants}, name, a.Name+" agents: N, N:model, N:model:effort or N:model@effort (repeats add up)")
 			}
 		}
 	}
@@ -226,25 +268,8 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 		}
 		req.Prompt = text
 	}
-	for flagName, v := range f.counts {
-		if *v == "" {
-			continue
-		}
-		a, _ := kinds.Default().ByFlag(flagName)
-		w, err := spawn.ParseCount(a.Name, *v)
-		if err != nil {
-			return req, err
-		}
-		req.Agents = append(req.Agents, w)
-	}
-	for _, s := range f.agents {
-		w, err := spawn.ParseAgent(s)
-		if err != nil {
-			return req, err
-		}
-		req.Agents = append(req.Agents, w)
-	}
-	sortWants(req.Agents)
+	// The agents start in the order of their flags, as ntm's do.
+	req.Agents = append([]spawn.Want(nil), f.wants...)
 	return req, nil
 }
 
@@ -271,8 +296,9 @@ func spawnEnrichment(f *spawnFlags) (send.Enrichment, error) {
 	return e, nil
 }
 
-// sortWants orders the agents by the registry's kind order, so that a
-// plan is the same whatever order the flags came in.
+// sortWants orders --robot-spawn's agents by the registry's kind order:
+// its counts are one flag per kind, and the plan is the same whatever
+// order the flags came in.
 func sortWants(ws []spawn.Want) {
 	order := map[string]int{}
 	for i, n := range kinds.Names() {

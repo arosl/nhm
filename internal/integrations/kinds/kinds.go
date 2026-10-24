@@ -84,6 +84,10 @@ type Adapter struct {
 	LaunchArgs []string `json:"launch_args,omitempty"`
 	// ModelFlag sets the model; "" means spawn cannot set one.
 	ModelFlag string `json:"model_flag,omitempty"`
+	// PinnedModel is the one model the kind runs, pinned outside nhm
+	// (agy's, ntm's AntigravityRequiredModel): a spec that names a model
+	// is refused with ntm's words.
+	PinnedModel string `json:"pinned_model,omitempty"`
 	// EffortArgs set the reasoning effort; "{effort}" is the value, and
 	// DefaultEffort applies when the caller gives none (ntm's defaults).
 	EffortArgs    []string `json:"effort_args,omitempty"`
@@ -175,8 +179,10 @@ func (a Adapter) LimitPattern() *regexp.Regexp {
 // starts with "-", so it cannot become an option.
 var SessionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
-// EffortPattern is a reasoning effort nhm puts into an argv.
-var EffortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
+// EffortPattern is a reasoning effort nhm puts into an argv: ntm's
+// charset (letters, numbers, . _ + -), with a letter or a number first,
+// so it cannot become an option.
+var EffortPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$`)
 
 // Resume returns the resume argv for a native session, or nil when the
 // kind has none or the id is not a plain session id. It adds what the
@@ -542,7 +548,7 @@ func builtins() []Adapter {
 			Cannot: []string{"what Codex does with a SessionStart hook's output"},
 		},
 		{
-			Name: "agy", NTMType: "antigravity", Program: "antigravity", QuotaPool: "agy",
+			Name: "agy", NTMType: "antigravity", Program: "antigravity", QuotaPool: "agy", PinnedModel: "Gemini 3.8 Flash (High)",
 			Limit:      regexp.MustCompile(`(?i)resource_exhausted|quota (exceeded|exhausted)|(reached|exhausted) (your|the) [a-z0-9. -]{0,30}quota|usage limit reached|429 too many requests`),
 			CodeReview: true, GuardSettings: ".gemini/config/hooks.json", GuardSupported: true,
 			Cannot: []string{"its usage (no quota source)", "its interrupt key", "a SessionStart hook, so a name is not restored after a compaction",
@@ -583,16 +589,25 @@ func builtins() []Adapter {
 				"herdr's state reading of pi_agent_rust: herdr's pi support is written for the TypeScript pi"},
 		},
 		{
-			Name: "omp", NTMType: "omp", InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
+			// ntm's launch (DefaultOmpCommand): --model, and the effort as
+			// --thinking.
+			Name: "omp", NTMType: "omp", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
+			InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"its guard settings file", "its usage", "its session resume"},
 		},
 		{
-			// ntm's robot outputs type opencode as oc (nhm-i3k).
-			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
+			// ntm's robot outputs type opencode as oc (nhm-i3k). ntm's
+			// launch (DefaultOpencodeCommand) passes --model, and no effort:
+			// the TUI has no effort flag.
+			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, ModelFlag: "--model",
+			QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume"},
 		},
 		{
-			Name: "grok", NTMType: "grok", QuotaPool: "grok", CodeReview: true, GuardSupported: true,
+			// ntm's launch (DefaultAgentTemplates' Grok): --model and
+			// --effort.
+			Name: "grok", NTMType: "grok", ModelFlag: "--model", EffortArgs: []string{"--effort", "{effort}"},
+			QuotaPool: "grok", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume"},
 		},
 	}
