@@ -69,16 +69,18 @@ type AdmissionEnv struct {
 	// AdmitUnknown lists the pools whose unknown quota user config admits
 	// for robot calls.
 	AdmitUnknown []string
-	// Settings is the hook settings JSON a kind with a settings flag
-	// (Claude) gets at launch (HookSettings); "" passes none.
-	Settings string
+	// Settings are the guard settings that each kind with a settings flag
+	// gets at launch, by kind (LaunchSettings); a kind with none gets no
+	// settings flag.
+	Settings map[string]string
 	Now      func() time.Time
 }
 
 // LaunchArgv is the argv herdr runs for an agent, as ntm launches it:
 // the kind's command and launch args (the permission flags), the model,
 // the reasoning effort (the kind's default when empty), and the guard
-// hooks through the kind's settings flag when settings is not empty.
+// through the kind's settings flag and its args when settings is not
+// empty.
 func LaunchArgv(a kinds.Adapter, model, effort, settings string) []string {
 	argv := append([]string{a.Name}, a.LaunchArgs...)
 	if model != "" && a.ModelFlag != "" {
@@ -86,9 +88,26 @@ func LaunchArgv(a kinds.Adapter, model, effort, settings string) []string {
 	}
 	argv = append(argv, a.Effort(effort)...)
 	if settings != "" && a.SettingsFlag != "" {
-		argv = append(argv, a.SettingsFlag, settings)
+		argv = append(append(argv, a.SettingsFlag, settings), a.SettingsArgs...)
 	}
 	return argv
+}
+
+// LaunchSettings are the guard settings of a launch, by kind: Claude's
+// hook settings JSON (HookSettings), and the path of nhm's pi guard
+// extension, which it writes below instanceDir when dcg is installed. A
+// pi without it is not guarded, and admission refuses it unless
+// --allow-unguarded (guards.VerifyLaunch). lookPath is exec.LookPath.
+func LaunchSettings(lookPath func(string) (string, error), instanceDir string) map[string]string {
+	out := map[string]string{"claude": HookSettings(lookPath)}
+	if dcg, err := lookPath("dcg"); err == nil {
+		if abs, err := filepath.Abs(dcg); err == nil {
+			if path, err := guards.WritePiExtension(filepath.Join(instanceDir, guards.PiExtensionDir), abs); err == nil {
+				out["pi"] = path
+			}
+		}
+	}
+	return out
 }
 
 // hookEntry is one PreToolUse matcher group of Claude's settings.
@@ -248,7 +267,7 @@ func Decide(ctx context.Context, env AdmissionEnv, req Request) Admission {
 		}
 		// Every distinct launch argv is checked and screened, not only
 		// the first of a kind.
-		argv := LaunchArgv(a, w.Model, effortOf(req, w), env.Settings)
+		argv := LaunchArgv(a, w.Model, effortOf(req, w), env.Settings[a.Name])
 		key := strings.Join(argv, "\x00")
 		if seenArgv[key] {
 			continue

@@ -392,7 +392,7 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 	r := req(Want{Kind: "claude", Count: 1, Model: "opus"}, Want{Kind: "codex", Count: 1})
 	r.OperationID = "op-sp-1"
 	settings := HookSettings(func(bin string) (string, error) { return "/usr/bin/" + bin, nil })
-	w.env.Admission.Settings = settings
+	w.env.Admission.Settings = map[string]string{"claude": settings}
 	res, err := Spawn(ctx, w.env, r)
 	if err != nil {
 		t.Fatal(err)
@@ -617,9 +617,10 @@ func TestAdmission(t *testing.T) {
 			}
 		})
 	}
-	// pi is admitted with a warning that nothing guards it.
+	// pi has a guard (nhm-dyr): a missing one refuses it, as any kind's.
 	ad := Decide(context.Background(), AdmissionEnv{Guards: missing}, req(Want{Kind: "pi", Count: 1}))
-	if ad.Decision != Admit || !strings.Contains(strings.Join(ad.Warnings, ";"), "pi has no guard that nhm sets up") {
+	if ad.Decision != Refuse || !strings.Contains(ad.Reason, "pi guard dcg is missing") ||
+		strings.Contains(strings.Join(ad.Warnings, ";"), "has no guard that nhm sets up") {
 		t.Fatalf("pi = %+v", ad)
 	}
 	// A refusal creates nothing.

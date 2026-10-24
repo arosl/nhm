@@ -88,10 +88,15 @@ type Adapter struct {
 	// DefaultEffort applies when the caller gives none (ntm's defaults).
 	EffortArgs    []string `json:"effort_args,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
-	// SettingsFlag passes a settings JSON with the guard hooks (Claude's
-	// --settings, as ntm does): the hooks then run whatever the user's own
-	// settings hold.
-	SettingsFlag string `json:"settings_flag,omitempty"`
+	// SettingsFlag passes nhm's guard settings at launch: Claude's
+	// --settings with a JSON of the guard hooks, as ntm does (the hooks
+	// then run whatever the user's own settings hold), or pi's -e with
+	// nhm's guard extension file. SettingsArgs follow it.
+	SettingsFlag string   `json:"settings_flag,omitempty"`
+	SettingsArgs []string `json:"settings_args,omitempty"`
+	// GuardEnv is set in the pane of each agent of the kind that nhm
+	// starts (pi's PI_EXTENSION_HOOKS_FAIL_CLOSED, nhm-dyr).
+	GuardEnv map[string]string `json:"guard_env,omitempty"`
 	// ResumeArgv resumes a native session; "{session}" is the id. nil:
 	// nhm cannot resume this kind.
 	ResumeArgv []string `json:"resume_argv,omitempty"`
@@ -120,7 +125,7 @@ type Adapter struct {
 	CodeReview bool `json:"code_review"`
 	// GuardSettings is the settings file (relative to home) that holds the
 	// kind's guard hooks; GuardSupported false means nhm sets up no guard
-	// for the kind and every spawn warns (pi: nhm-dyr).
+	// for the kind and every spawn warns.
 	GuardSettings  string `json:"guard_settings,omitempty"`
 	GuardSupported bool   `json:"guard_supported"`
 	// Continue is the continuation rule for compaction and resume (2.7);
@@ -192,7 +197,7 @@ func (a Adapter) Resume(session, model, effort, settings string) []string {
 	}
 	ours = append(ours, a.Effort(effort)...)
 	if settings != "" && a.SettingsFlag != "" {
-		ours = append(ours, a.SettingsFlag, settings)
+		ours = append(append(ours, a.SettingsFlag, settings), a.SettingsArgs...)
 	}
 	out := make([]string, 0, len(a.ResumeArgv)+len(ours))
 	for _, s := range a.ResumeArgv {
@@ -545,22 +550,37 @@ func builtins() []Adapter {
 		},
 		{
 			// pi 0.7.1 (pi_agent_rust): --model, --thinking, /exit and /new
-			// are in its help; esc is its "esc to abort" (nhm-y7q). No pi
-			// session ran for this, so the rest stays in Cannot. No --yolo:
-			// pi then asks before each tool call, and nothing guards it
-			// (nhm-dyr).
+			// are in its help; esc is its "esc to abort" (nhm-y7q).
+			// The guard (nhm-dyr, proved with pi 0.8.0 in the sandbox): -e
+			// loads nhm's guard extension, which runs dcg on each bash call;
+			// only the permissive policy lets it run dcg without a prompt;
+			// and a hook that fails or hangs blocks the call only with
+			// PI_EXTENSION_HOOKS_FAIL_CLOSED. No --yolo: pi asks before each
+			// tool call, and the operator decides whether a guarded pi
+			// gets it.
 			Name: "pi", NTMType: "pi", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
+			SettingsFlag: "-e", SettingsArgs: []string{"--extension-policy", "permissive"},
+			GuardEnv:   map[string]string{"PI_EXTENSION_HOOKS_FAIL_CLOSED": "1"},
 			NewSession: "/new", ExitCommand: "/exit", InterruptKeys: []string{"esc"},
-			QuotaPool: "pi", CodeReview: true, GuardSupported: false,
-			Cannot: []string{"any guard: pi runs extension hooks, but nhm has no guard extension for pi (nhm-dyr)",
-				"unattended tool use: pi asks before each tool call, and nhm adds no --yolo while nothing guards pi",
+			QuotaPool: "pi", CodeReview: true, GuardSupported: true,
+			Cannot: []string{"rch: pi's tool_call hook cannot change a command, so nhm's pi guard does not offload builds (rch's cargo shim can)",
+				"the Agent Mail stop hook: Agent Mail installs none for pi",
+				"pi's hub, debug and subagent tools, and a tool that xdev runs (but bash and pi's tools that start no program): they may start programs that dcg cannot screen, so nhm's pi guard blocks them",
+				"a tool from an MCP server or another extension: nhm's pi guard screens bash only, as Claude's guard screens Bash",
+				"a \"!\" shell command at pi's prompt, also one that nhm send types: pi runs it with no approval question and no hook that can stop it (nhm-ubi)",
+				"the commands of pi's language servers (its lsp tool's code actions): dcg does not screen them",
+				"other extensions: --extension-policy permissive, pi 0.8.0's default, lets every extension that pi loads run commands, and it overrides a stricter policy in pi's settings (only pi's settings file can grant exec to one extension, and nhm does not write it)",
+				"a pi in a pane that nhm did not create (adopted, or spawned before nhm-dyr): the pane lacks PI_EXTENSION_HOOKS_FAIL_CLOSED, so nhm's pi guard does not load and pi does not start (its recycle stops at the start)",
+				"nhm's pi guard on the TypeScript pi: it is proved with pi_agent_rust 0.8.0 only",
+				"unattended tool use: pi asks before each tool call, and nhm adds no --yolo (the operator's decision, nhm-dyr)",
+				"pi's approval question: herdr reads a pi that waits at it as idle, so a send types into the question, and pi takes the text as a denial (the sandbox, nhm-dyr)",
 				"its usage: pi spends the quota of the provider it runs on, and nhm does not read `pi usage`",
 				"its session resume: pi resumes a session by its file path (--session), and nhm resumes by id",
 				"a SessionStart hook, so a name is not restored after a compaction",
 				"its workspace-trust question (\"Trust this workspace? [y/N]\", for a repo with .pi packages or extensions): not seen on a screen",
 				"its limit text on the screen (the generic recogniser applies)",
 				"its transcript layout under ~/.pi/agent/sessions",
-				"herdr's state reading of pi 0.7.1: herdr's pi support is written for the TypeScript pi"},
+				"herdr's state reading of pi_agent_rust: herdr's pi support is written for the TypeScript pi"},
 		},
 		{
 			Name: "omp", NTMType: "omp", InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,

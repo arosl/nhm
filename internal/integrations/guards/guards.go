@@ -14,7 +14,8 @@
 // user, project and local settings, and from --settings; --bare drops
 // them all; --setting-sources keeps only the named sources. Codex adds
 // every layer, the project's only when the project is trusted, and runs
-// a hook only when config.toml holds its current trusted_hash.
+// a hook only when config.toml holds its current trusted_hash. pi's dcg
+// guard is nhm's own extension, which the launch loads with -e (pi.go).
 package guards
 
 import (
@@ -92,6 +93,7 @@ var checkers = map[string]func(Env) []Result{
 	"claude": checkClaude,
 	"codex":  checkCodex,
 	"agy":    checkAgy,
+	"pi":     checkPi,
 }
 
 // Check reports every guard for a kind.
@@ -218,6 +220,8 @@ func fixFor(kind, guard string) string {
 	case guard == DCG && kind == "codex":
 		// dcg install configures Claude Code only (acfs-9hkh.81).
 		return "acfs update adds dcg's Bash guard to Codex's hooks.json and records its trust (nhm_hooks.sh codex-dcg register, then trust codex); dcg install covers Claude Code only"
+	case guard == DCG && kind == "pi":
+		return "install dcg (ACFS's install does); nhm writes and loads pi's guard extension itself"
 	case guard == DCG:
 		return "dcg install (ACFS's install runs it)"
 	case guard == RCH:
@@ -340,6 +344,12 @@ func VerifyLaunch(results []Result, argv []string) []Result {
 		case "codex":
 			// Codex adds every layer; trust was checked with the state.
 			out[i].State = VerifiedForLaunch
+		case "pi":
+			if keep, why := piKeeps(argv); keep {
+				out[i].State, out[i].Detail = VerifiedForLaunch, "the launch's -e loads nhm's pi guard extension"
+			} else {
+				out[i].State, out[i].Detail = Missing, why
+			}
 		}
 	}
 	return out

@@ -728,7 +728,7 @@ func TestRecycle(t *testing.T) {
 	w.env.Handoff = func(_ context.Context, _ bindings.Binding, _ *Bead, transcript string) Handoff {
 		return Handoff{Text: "# Handoff\nkeep going", Sources: []string{"excerpt"}, Degraded: []string{}}
 	}
-	w.env.LaunchSettings = `{"hooks":{}}`
+	w.env.LaunchSettings = map[string]string{"claude": `{"hooks":{}}`, "pi": "/i/pi/nhm-guard.ts"}
 	res, err := Recycle(ctx, w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "Continue the bead."})
 	if err != nil || res.Stage != StageDone || res.Generation != b.Generation+1 || res.Transcript == nil {
 		t.Fatalf("recycle = %+v %v", res, err)
@@ -892,7 +892,7 @@ func TestRestoreInspectResume(t *testing.T) {
 	// Resume: the dry run shows the argv, which keeps the model, the
 	// effort and the guard settings; the pane holds an agent, so a run is
 	// refused.
-	w.env.LaunchSettings = `{"hooks":{}}`
+	w.env.LaunchSettings = map[string]string{"claude": `{"hooks":{}}`, "pi": "/i/pi/nhm-guard.ts"}
 	p, err := Resume(ctx, w.env, icy.ID, false)
 	want := `claude --dangerously-skip-permissions --resume sess-icyknoll --model opus --effort xhigh --settings {"hooks":{}}`
 	if err != nil || strings.Join(p.Argv, " ") != want || p.Ready {

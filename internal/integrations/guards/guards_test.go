@@ -240,10 +240,12 @@ func TestAgyPiAndUnknownKinds(t *testing.T) {
 	if got := byGuard(Check("agy", Env{Home: t.TempDir()})); got[DCG].State != Missing {
 		t.Fatalf("agy without hooks = %+v", got[DCG])
 	}
-	for _, r := range Check("pi", Env{Home: home}) {
-		if r.State != Unsupported {
-			t.Fatalf("pi = %+v", r)
-		}
+	// pi's guard is nhm's own extension (TestCheckPi), not a settings file.
+	old := DCGPath
+	DCGPath = filepath.Join(t.TempDir(), "no-dcg")
+	t.Cleanup(func() { DCGPath = old })
+	if got := byGuard(Check("pi", Env{Home: home})); got[DCG].State != Missing || got[RCH].State != Unsupported {
+		t.Fatalf("pi = %+v", got)
 	}
 	for _, r := range Check("grok", Env{Home: home}) {
 		if r.State != Missing || r.Fix == "" {

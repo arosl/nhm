@@ -119,6 +119,12 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	if err != nil {
 		return fail(StageCheck, err)
 	}
+	// A kind whose only guard is nhm's launch settings (pi's extension,
+	// nhm-dyr) restarts with them or not at all; recycle has no admission
+	// to refuse it later.
+	if a.GuardSupported && a.GuardSettings == "" && a.SettingsFlag != "" && env.LaunchSettings[a.Name] == "" {
+		return fail(StageCheck, fmt.Errorf("%s's successor would start without nhm's %s guard (nhm doctor names what is missing)", b.MailName, a.Name))
+	}
 	if env.Caller != "" && b.PaneID == env.Caller {
 		return fail(StageCheck, fmt.Errorf("%s runs in this pane: stopping it would stop this recycle (nhm recycle --self runs it as a job of its own)", b.MailName))
 	}
@@ -263,7 +269,7 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	// Start the successor in the same pane, under the same name, in a
 	// fresh context, and bump the generation.
 	res.Stage = StageStart
-	argv := spawn.LaunchArgv(a, b.Model, b.Effort, env.LaunchSettings)
+	argv := spawn.LaunchArgv(a, b.Model, b.Effort, env.LaunchSettings[a.Name])
 	ms := readyWait.Milliseconds()
 	alias := b.HerdrAlias
 	if alias == "" {

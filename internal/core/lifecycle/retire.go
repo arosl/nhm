@@ -66,9 +66,9 @@ type Env struct {
 	Bead func(ctx context.Context, projectRoot, id string) (send.Bead, error)
 	// Handoff composes recycle's handoff; nil sends none.
 	Handoff HandoffFunc
-	// LaunchSettings is the hook settings JSON a kind with a settings
-	// flag gets at its start (spawn.HookSettings).
-	LaunchSettings string
+	// LaunchSettings are the guard settings that each kind with a
+	// settings flag gets at its start, by kind (spawn.LaunchSettings).
+	LaunchSettings map[string]string
 	// Index indexes a preserved transcript in CASS (plan-v8 2.13); nil
 	// skips it.
 	Index     func(ctx context.Context, path, project, key string) (string, error)

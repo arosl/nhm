@@ -323,8 +323,12 @@ func startOne(ctx context.Context, env Env, req Request, res *Result, t *Target,
 	// 2. A fresh pane with the launch id in its environment, and the
 	// name in AGENT_MAIL_AGENT, which ACFS's Agent Mail hook and am read
 	// first: in a tab several agents share, the tab label is not the
-	// agent's name (nhm-4c4).
+	// agent's name (nhm-4c4). The kind's guard env goes there too, as
+	// herdr's agent.start takes no env.
 	paneEnv := map[string]string{"NHM_LAUNCH_ID": t.LaunchID, "NHM_AGENT": name, "AGENT_MAIL_AGENT": name}
+	for k, v := range a.GuardEnv {
+		paneEnv[k] = v
+	}
 	if err := createPane(ctx, env, req, res, t, paneEnv); err != nil {
 		t.Cleanup = retireIdentity(ctx, env, req.ProjectRoot, t)
 		return fail(StatusFailed, fmt.Errorf("pane: %w", err))
@@ -578,7 +582,7 @@ func freeAlias(ctx context.Context, h Herdr, name string) (string, error) {
 // retried once. A first-run folder-trust dialog is answered only with
 // --trust-folder.
 func startAgent(ctx context.Context, env Env, req Request, t *Target, a kinds.Adapter) error {
-	argv := LaunchArgv(a, t.Model, t.Effort, env.Admission.Settings)
+	argv := LaunchArgv(a, t.Model, t.Effort, env.Admission.Settings[a.Name])
 	ms := req.ReadyTimeout.Milliseconds()
 	params := herdr.AgentStartParams{Name: t.HerdrName, Kind: a.Name, PaneID: t.PaneID, Args: argv[1:], TimeoutMS: &ms}
 	_, err := env.Herdr.AgentStart(ctx, params)

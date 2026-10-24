@@ -71,7 +71,7 @@ func (ie *instanceEnv) lifecycleEnv() (lifecycle.Env, error) {
 		Send:           func(ctx context.Context, r send.Request) (send.Result, error) { return send.Send(ctx, senv, r) },
 		Bead:           send.BrShow,
 		Handoff:        lifecycle.DefaultHandoff("", ""),
-		LaunchSettings: spawn.HookSettings(exec.LookPath),
+		LaunchSettings: spawn.LaunchSettings(exec.LookPath, ie.inst.Dir),
 		Index: func(ctx context.Context, path, project, key string) (string, error) {
 			return cass.Client{Run: cass.Exec("")}.IndexSession(ctx, path, project, key)
 		},

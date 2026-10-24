@@ -98,8 +98,9 @@ Admission runs first: a quota at 90 % or a known limit refuses (--force
 overrides the quota only); unknown quota is a warning (refused with
 --require-observations); a red capacity refuses; a guard that is not
 configured refuses unless --allow-unguarded, which records an exception for
-this launch; pi warns that no guard protects it. --dry-run prints the plan
-and the admission and creates nothing.
+this launch. pi's guard is nhm's own pi extension, which runs dcg on each
+bash call; it needs dcg. --dry-run prints the plan and the admission and
+creates nothing.
 
 If an agent fails, the agents before it stay, the rest are not started,
 and only what this spawn created and nothing uses is removed. Runs only
@@ -479,8 +480,9 @@ func (ie *instanceEnv) spawnEnv(projectRoot string) (spawn.Env, error) {
 			ad.Capacity = spawn.CommandCapacity(cfg.Providers.Capacity)
 		}
 		ad.AdmitUnknown = cfg.Quota.AdmitUnknown
-		// ntm's launch: Claude gets the dcg and rch hooks on --settings.
-		ad.Settings = spawn.HookSettings(exec.LookPath)
+		// ntm's launch: Claude gets the dcg and rch hooks on --settings;
+		// pi gets nhm's guard extension on -e (nhm-dyr).
+		ad.Settings = spawn.LaunchSettings(exec.LookPath, ie.inst.Dir)
 	} else {
 		return spawn.Env{}, err
 	}

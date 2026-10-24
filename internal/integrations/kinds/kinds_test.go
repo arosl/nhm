@@ -306,8 +306,8 @@ func TestBuiltins(t *testing.T) {
 	if a, _ := r.Get("agy"); a.NTMType != "antigravity" || a.ModelFlag != "" || a.InterruptKeys != nil || a.Resume("s", "", "", "") != nil || len(a.Cannot) == 0 {
 		t.Fatalf("agy = %+v", a)
 	}
-	if p, _ := r.Get("pi"); p.GuardSupported {
-		t.Fatal("pi supports guards")
+	if p, _ := r.Get("pi"); !p.GuardSupported {
+		t.Fatal("pi has no guard (nhm-dyr)")
 	}
 	for flag, want := range map[string]string{"cc": "claude", "cod": "codex", "oc": "opencode", "agy": "agy", "codex": "codex"} {
 		if a, ok := r.ByFlag(flag); !ok || a.Name != want {

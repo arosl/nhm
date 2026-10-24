@@ -278,7 +278,7 @@ func planResume(ctx context.Context, env Env, b bindings.Binding) (ResumePlan, e
 		session = b.NativeSession.Value
 	}
 	// The model, the effort and the guard hooks, as the launch had them.
-	p.Argv = a.Resume(session, b.Model, b.Effort, env.LaunchSettings)
+	p.Argv = a.Resume(session, b.Model, b.Effort, env.LaunchSettings[a.Name])
 	switch {
 	case b.Status == bindings.Retired:
 		return p, fmt.Errorf("%s is retired", b.MailName)
