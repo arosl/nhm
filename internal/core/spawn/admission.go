@@ -36,6 +36,10 @@ const quotaLimitPct = 90
 // quotaStaleAfter is the age at which a quota observation is stale.
 const quotaStaleAfter = time.Hour
 
+// capacityWayOut ends a capacity refusal: the two ways to start anyway.
+const capacityWayOut = "to start anyway: --ignore-capacity for this spawn, " +
+	"or capacity = [] under [providers] in ~/.config/nhm/config.toml for every spawn"
+
 // Admission is the decision before anything starts.
 type Admission struct {
 	Decision string   `json:"decision"`
@@ -239,18 +243,26 @@ func Decide(ctx context.Context, env AdmissionEnv, req Request) Admission {
 		now = env.Now()
 	}
 
-	// Capacity: red refuses, and nothing overrides it.
+	// Capacity: red refuses, and so does unknown in the robot profile;
+	// --ignore-capacity admits both with a warning (nhm-1pq).
 	if env.Capacity != nil {
 		c, err := env.Capacity(ctx)
+		blocked := ""
 		switch {
 		case err != nil && req.RequireObservations:
-			refuse("capacity unknown: %v", err)
+			blocked = fmt.Sprintf("capacity unknown: %v", err)
 		case err != nil:
 			warn("capacity unknown: %v", err)
 		case c.Status == "red":
-			refuse("capacity red: %s", strings.Join(c.Reasons, "; "))
+			blocked = "capacity red: " + strings.Join(c.Reasons, "; ")
 		case c.Status == "yellow":
 			warn("capacity yellow: %s", strings.Join(c.Reasons, "; "))
+		}
+		switch {
+		case blocked != "" && req.IgnoreCapacity:
+			warn("%s (overridden by --ignore-capacity)", blocked)
+		case blocked != "":
+			refuse("%s (%s)", blocked, capacityWayOut)
 		}
 	}
 

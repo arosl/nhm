@@ -892,6 +892,9 @@ func fingerprint(req Request) map[string]any {
 	if req.Safety {
 		fp["safety"] = true
 	}
+	if req.IgnoreCapacity {
+		fp["ignore_capacity"] = true
+	}
 	if req.AssignOptions != "" {
 		fp["assign_options"] = req.AssignOptions
 	}

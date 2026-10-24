@@ -629,7 +629,7 @@ var reserved = map[string]bool{}
 
 func init() {
 	for _, f := range strings.Fields(`all any after-op agent allow-unguarded assign bead cass-check count dry-run
-		file force group h help include-self include-user interactive json label limit msg msg-file name
+		file force group h help ignore-capacity include-self include-user interactive json label limit msg msg-file name
 		no-cass no-cass-check no-kickoff op-id pane panes per-tab poll project prompt prompt-file ready-timeout
 		require-observations socket stagger-delay stagger-mode state t template thread timeout trust-folder
 		type until var version wait when with-cass with-memory yes

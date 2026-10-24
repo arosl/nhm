@@ -43,8 +43,9 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc=N[:MODEL]] [--cod=N[:MODEL]
                   [--assign-cc-only|--assign-cod-only|--assign-gmi-only|--assign-agy-only]
                   [--assign-verbose|--assign-quiet] [--assign-timeout D] [--yes]]
                  [--stagger-mode fixed|smart] [--stagger-delay D] [--ready-timeout D]
-                 [--trust-folder] [--force] [--allow-unguarded] [--require-observations]
-                 [--project DIR] [--op-id ID] [--dry-run] [--socket PATH] [--json]
+                 [--trust-folder] [--force] [--ignore-capacity] [--allow-unguarded]
+                 [--require-observations] [--project DIR] [--op-id ID] [--dry-run]
+                 [--socket PATH] [--json]
        nhm add <session> …    the same, into an existing workspace
        nhm new <session>      only the workspace
 
@@ -96,11 +97,14 @@ joined: the agent opens a tab, so no pane gets narrower than a column.
 
 Admission runs first: a quota at 90 % or a known limit refuses (--force
 overrides the quota only); unknown quota is a warning (refused with
---require-observations); a red capacity refuses; a guard that is not
-configured refuses unless --allow-unguarded, which records an exception for
-this launch. pi's guard is nhm's own pi extension, which runs dcg on each
-bash call; it needs dcg. --dry-run prints the plan and the admission and
-creates nothing.
+--require-observations). A red capacity refuses, and so does an unknown
+one with --require-observations; --ignore-capacity starts anyway, with a
+warning. The capacity provider is [providers] capacity in
+~/.config/nhm/config.toml: none by default, and capacity = [] turns it
+off. A guard that is not configured refuses unless --allow-unguarded,
+which records an exception for this launch. pi's guard is nhm's own pi
+extension, which runs dcg on each bash call; it needs dcg. --dry-run
+prints the plan and the admission and creates nothing.
 
 If an agent fails, the agents before it stay, the rest are not started,
 and only what this spawn created and nothing uses is removed. Runs only
@@ -132,6 +136,7 @@ type spawnFlags struct {
 	staggerDelay, readyWait time.Duration
 	trustFolder, force      bool
 	allowUnguarded, require bool
+	ignoreCapacity          bool
 	withMemory, withCASS    bool
 	noCASSContext           bool
 	project, opID, socket   string
@@ -173,8 +178,9 @@ func addSpawnFlags(fs *flag.FlagSet) *spawnFlags {
 	fs.DurationVar(&f.readyWait, "ready-timeout", 60*time.Second, "the wait for each agent to be ready")
 	fs.BoolVar(&f.trustFolder, "trust-folder", false, "answer the kind's folder-trust dialog")
 	fs.BoolVar(&f.force, "force", false, "start over a quota at 90 % (not over a limit)")
+	fs.BoolVar(&f.ignoreCapacity, "ignore-capacity", false, "start over a red or unknown capacity, with a warning")
 	fs.BoolVar(&f.allowUnguarded, "allow-unguarded", false, "start with a guard missing, recorded as an exception")
-	fs.BoolVar(&f.require, "require-observations", false, "the robot admission profile: unknown quota refuses")
+	fs.BoolVar(&f.require, "require-observations", false, "the robot admission profile: unknown quota or capacity refuses")
 	fs.BoolVar(&f.withMemory, "with-memory", true, "CM rules in the kickoff (best-effort; the default)")
 	fs.BoolVar(&f.withCASS, "with-cass", false, "CASS context in the kickoff (best-effort)")
 	fs.BoolVar(&f.noCASSContext, "no-cass-context", false, "no CASS context in the kickoff")
@@ -200,7 +206,7 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 	req := spawn.Request{Session: session, Add: add, Label: f.label, Group: f.group, PerTab: f.perTab, Effort: f.effort, Role: f.role,
 		NoKickoff: f.noKickoff, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
 		ReadyTimeout: f.readyWait, TrustFolder: f.trustFolder, Force: f.force, AllowUnguarded: f.allowUnguarded,
-		RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID}
+		IgnoreCapacity: f.ignoreCapacity, RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID}
 	switch {
 	case f.prompt != "" && f.promptFile != "":
 		return req, errors.New("give --prompt or --prompt-file, not both")
@@ -770,6 +776,7 @@ type robotSpawnFlags struct {
 	counts                                     map[string]*int
 	readyTimeout, timeout                      *time.Duration
 	dryRun, assign, safety, trustFolder        *bool
+	ignoreCapacity                             *bool
 	assignFlags                                robotAssignFlags
 }
 
@@ -793,6 +800,10 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	// leaves an agent at the folder-trust dialog; nhm's always waits for
 	// ready, so without the flag that agent ends unresolved (nhm-cvg).
 	f.trustFolder = fs.Bool("trust-folder", false, "")
+	// nhm's own, as spawn's --ignore-capacity: ntm 9d5ed977 overrides no
+	// spawn admission. ACFS newproj passes it on a host whose capacity
+	// provider answers red, as ACFS's old spawn took --force (nhm-1pq).
+	f.ignoreCapacity = fs.Bool("ignore-capacity", false, "")
 	f.dryRun = fs.Bool("dry-run", false, "")
 	f.assign = fs.Bool("spawn-assign-work", false, "")
 	f.assignFlags = addRobotAssignFlags(fs)
@@ -825,11 +836,12 @@ func robotReadyWait(fs *flag.FlagSet, rf robotSpawnFlags) time.Duration {
 // sends no kickoff unless --spawn-prompt. With --spawn-assign-work (the
 // caller's consent) the assignment phase sends each agent its work, with
 // --spawn-prompt ahead of it, so the spawn itself sends nothing. Only
-// --trust-folder answers a folder-trust dialog.
+// --trust-folder answers a folder-trust dialog, and only
+// --ignore-capacity admits a red or unknown capacity.
 func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) spawn.Request {
 	req := spawn.Request{Session: *rf.session, Prompt: *rf.prompt, NoKickoff: *rf.prompt == "",
 		ReadyTimeout: robotReadyWait(fs, rf), TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
-		OperationID: *rf.opID, Safety: *rf.safety}
+		OperationID: *rf.opID, Safety: *rf.safety, IgnoreCapacity: *rf.ignoreCapacity}
 	if *rf.assign {
 		req.Prompt, req.NoKickoff, req.AssignOptions = "", true, rf.assignFlags.options(*rf.prompt)
 	}
@@ -858,7 +870,7 @@ func hasRobotSpawn(args []string) bool {
 // --spawn-cod=N [--spawn-agy=N] --spawn-no-user --spawn-safety
 // --spawn-wait [--ready-timeout=Ns] --timeout=60s --robot-format=json
 // [--dry-run] [--spawn-assign-work [--strategy=S]] [--spawn-prompt=T]
-// [--trust-folder].
+// [--trust-folder] [--ignore-capacity].
 func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	now := time.Now()
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)

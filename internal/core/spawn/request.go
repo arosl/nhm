@@ -96,6 +96,9 @@ type Request struct {
 	// AllowUnguarded records an exception for a missing guard, for this
 	// launch only.
 	AllowUnguarded bool
+	// IgnoreCapacity admits a red or unknown capacity with a warning,
+	// for this launch only (nhm-1pq).
+	IgnoreCapacity bool
 	// RequireObservations is the robot profile of admission.
 	RequireObservations bool
 	DryRun              bool
