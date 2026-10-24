@@ -156,7 +156,7 @@ next releases.
 // exit code. The robot flags have their own grammar (runRobot); every
 // other call goes through ntm's root (root.go).
 func Run(args []string, stdout, stderr io.Writer) int {
-	if code, ok := remoteCall(args, stdout, stderr); ok {
+	if code, ok := remoteRobotCall(args, stdout, stderr); ok {
 		return code
 	}
 	if len(args) > 0 && strings.HasPrefix(args[0], "--robot-") {

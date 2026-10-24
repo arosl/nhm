@@ -47,6 +47,11 @@ type rootOptions struct {
 	// set holds the root flags given, by name.
 	set     map[string]bool
 	restore []func()
+
+	// args, stdout and stderr are the Run's, for --ssh: the call goes to
+	// the host as it was given, less --ssh.
+	args           []string
+	stdout, stderr io.Writer
 }
 
 // rootFlag is one of ntm's root persistent flags; value is false for a
@@ -64,8 +69,8 @@ var rootFlags = []rootFlag{
 	{name: "json"},
 	// --config F names nhm's config file for the call (NHM_CONFIG).
 	{name: "config", value: true},
-	// --ssh H never reaches the root: Run hands the whole call to H
-	// (remoteCall). An empty --ssh is none, as in ntm.
+	// --ssh H hands the whole call to H once it is parsed (apply). An
+	// empty --ssh is none, as in ntm.
 	{name: "ssh", value: true},
 	{name: "no-color"},
 	{name: "redact", value: true, notBuilt: "nhm-2p6.20"},
@@ -97,11 +102,23 @@ func addRootFlags(fs *pflag.FlagSet, o *rootOptions) {
 // readers take for their path (the operator's ruling, 2026-10-24: F
 // replaces the path of nhm's config); an empty --config is none, as in
 // ntm.
-func (o *rootOptions) apply() error {
+//
+// --ssh H hands the whole call to H once it is parsed (the operator's
+// ruling, 2026-10-24), less the --ssh words that pflag took: cmd's flags
+// say which words are other flags' values. A legacy verb (cmd nil) parses
+// its own flags, so only the root's value flags are known there.
+func (o *rootOptions) apply(cmd *cobra.Command) error {
 	for _, f := range rootFlags {
 		if f.notBuilt != "" && o.set[f.name] {
 			return notBuiltError{flag: f.name, bead: f.notBuilt}
 		}
+	}
+	if o.ssh != "" {
+		v := rootValues
+		if cmd != nil {
+			v = pflagValues(cmd.Flags())
+		}
+		return verbExit{runOverSSH(o.ssh, stripSSH(o.args, v), o.stdout, o.stderr)}
 	}
 	if o.noColor {
 		o.setenv("NTM_NO_COLOR", "1")
@@ -303,7 +320,7 @@ func (v legacyVerb) command(o *rootOptions, stdout, stderr io.Writer) *cobra.Com
 				fmt.Fprint(stdout, u)
 				return nil
 			}
-			if err := o.apply(); err != nil {
+			if err := o.apply(nil); err != nil {
 				return err
 			}
 			if code := v.run(args, stdout, stderr); code != exitOK {
@@ -323,7 +340,7 @@ type root struct {
 // newRoot builds the command tree for one Run, so no flag value outlives
 // it.
 func newRoot(stdout, stderr io.Writer) *root {
-	o := &rootOptions{set: map[string]bool{}}
+	o := &rootOptions{set: map[string]bool{}, stdout: stdout, stderr: stderr}
 	cmd := &cobra.Command{
 		Use: "nhm",
 		// Version enables cobra's --version flag, as in ntm.
@@ -341,7 +358,10 @@ func newRoot(stdout, stderr io.Writer) *root {
 					o.set[f.name] = true
 				}
 			}
-			return o.apply()
+			if cmd.DisableFlagParsing {
+				return nil // a pass-through verb applies them itself
+			}
+			return o.apply(cmd)
 		},
 		// Bare nhm prints the usage and exits 0, as bare ntm prints its
 		// help.
@@ -399,6 +419,7 @@ func (r *root) execute(args []string, stdout, stderr io.Writer) int {
 	if args == nil {
 		args = []string{} // cobra reads os.Args when args is nil
 	}
+	r.opts.args = args
 	r.cmd.SetArgs(args)
 	err := r.cmd.Execute()
 	if err == nil {
