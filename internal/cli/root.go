@@ -263,7 +263,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "tutorial", run: runTutorial},
 		{name: "wake", run: runWake},
 		{name: "maintain", run: runMaintain},
-		{name: "mail", run: runMail},
 		{name: "capabilities", run: runCapabilities},
 		{name: "compatibility", run: runCompatibility},
 		{name: "quota", run: runQuota},
@@ -371,15 +370,16 @@ func newRoot(stdout, stderr io.Writer) *root {
 			fmt.Fprint(c.OutOrStdout(), adminUsage(nil))
 			return
 		}
-		// Only a verb's own name: a sub-verb that shares a verb's name
-		// (memory privacy status) gets cobra's help, not that verb's.
-		if u, ok := verbUsage[c.Name()]; ok && c.Parent() == c.Root() {
+		// By the command's path below the root ("mail inbox"): a
+		// sub-verb that only shares a verb's name (memory privacy status)
+		// gets cobra's help, not that verb's.
+		if u, ok := verbUsage[strings.TrimPrefix(c.CommandPath(), c.Root().Name()+" ")]; ok {
 			fmt.Fprint(c.OutOrStdout(), u)
 			return
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}

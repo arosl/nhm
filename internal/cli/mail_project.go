@@ -48,33 +48,34 @@ const projectInboxReaders = 8
 // mail in the session's project, read or not, each message once with the
 // agents that got it, oldest first. Unlike ntm's, it marks nothing read:
 // ntm's fetch would mark every agent's listed mail read on this Agent
-// Mail, and nhm maintain wakes agents on unread mail.
-func runProjectInbox(ctx context.Context, o projectInbox, stdout, stderr io.Writer) int {
+// Mail, and nhm maintain wakes agents on unread mail. An error comes back
+// before any output, for the root to print as ntm's.
+func runProjectInbox(ctx context.Context, o projectInbox, stdout, stderr io.Writer) error {
 	env := envelope{Command: "mail inbox"}
 	session := o.session
 	if session == "" && o.sessionAgents {
 		if session = os.Getenv("HERDR_WORKSPACE_ID"); session == "" {
-			return output(stdout, stderr, o.asJSON, env, errors.New("--session-agents: name the session, or run inside herdr"), exitRefused, nil)
+			return errors.New("--session-agents: name the session, or run inside herdr")
 		}
 	}
 	var bound []bindings.Binding
 	if session != "" {
 		ie, err := openInstance(o.socket)
 		if err != nil {
-			return output(stdout, stderr, o.asJSON, env, err, exitError, nil)
+			return err
 		}
 		defer ie.db.Close()
 		ws, err := sessionWorkspace(ctx, ie.herdr, session)
 		if err != nil {
-			return output(stdout, stderr, o.asJSON, env, fmt.Errorf("%w (nhm list shows the sessions)", err), exitRefused, nil)
+			return fmt.Errorf("%w (nhm list shows the sessions)", err)
 		}
 		if bound, err = bindings.NewStore(ie.db).List(ctx, bindings.Filter{WorkspaceID: ws, Statuses: []bindings.Status{bindings.Active}}); err != nil {
-			return output(stdout, stderr, o.asJSON, env, err, exitError, nil)
+			return err
 		}
 	}
 	key := firstOf(o.project, sessionProject(bound))
 	if key == "" && session != "" {
-		return output(stdout, stderr, o.asJSON, env, fmt.Errorf("session %s has no bound agent to name its project: give --project", session), exitRefused, nil)
+		return fmt.Errorf("session %s has no bound agent to name its project: give --project", session)
 	}
 	if key == "" {
 		key = firstOf(os.Getenv("AGENT_MAIL_PROJECT"), workTree(ctx))
@@ -86,13 +87,13 @@ func runProjectInbox(ctx context.Context, o projectInbox, stdout, stderr io.Writ
 	}
 	mail, err := agentmail.NewClient("")
 	if err != nil {
-		return output(stdout, stderr, o.asJSON, env, err, exitError, nil)
+		return err
 	}
 	names := []string{o.agent}
 	if o.agent == "" {
 		all, err := mail.ListAgents(ctx, key)
 		if err != nil {
-			return output(stdout, stderr, o.asJSON, env, fmt.Errorf("listing agents: %w", err), exitError, nil)
+			return fmt.Errorf("listing agents: %w", err)
 		}
 		names = names[:0]
 		for _, n := range all {
@@ -113,15 +114,15 @@ func runProjectInbox(ctx context.Context, o projectInbox, stdout, stderr io.Writ
 			}
 		}
 		if names = kept; len(names) == 0 {
-			return output(stdout, stderr, o.asJSON, env, fmt.Errorf("no agents found in session '%s'", session), exitError, nil)
+			return fmt.Errorf("no agents found in session '%s'", session)
 		}
 	}
 	msgs, err := readProjectInbox(ctx, mail, key, names, o.limit, o.urgent)
 	if err != nil {
-		return output(stdout, stderr, o.asJSON, env, err, exitError, nil)
+		return err
 	}
 	env.Result = msgs
-	return output(stdout, stderr, o.asJSON, env, nil, exitOK, func(w io.Writer) {
+	if output(stdout, stderr, o.asJSON, env, nil, exitOK, func(w io.Writer) {
 		if len(msgs) == 0 {
 			fmt.Fprintln(w, "Inbox empty")
 			return
@@ -141,7 +142,11 @@ func runProjectInbox(ctx context.Context, o projectInbox, stdout, stderr io.Writ
 				fmt.Fprintf(w, "%s → %s\n", from, strings.Join(to, ", "))
 			}
 		}
-	})
+	}) != exitOK {
+		// The JSON could not be written; output said so on stderr.
+		return verbExit{exitError}
+	}
+	return nil
 }
 
 // sessionProject is the project key of most of the session's bound

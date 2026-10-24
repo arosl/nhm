@@ -94,7 +94,7 @@ func viewsEnv(c ui.Context) views.Env {
 			if err != nil {
 				return "", err
 			}
-			return verbText(runMail, withSocket(inboxArgs(b)...)...)(ctx)
+			return verbText(verbRun("mail"), withSocket(inboxArgs(b)...)...)(ctx)
 		},
 		RunStatus: func(ctx context.Context, id string) (string, error) {
 			return verbText(runEnsemble, withSocket("status", id)...)(ctx)

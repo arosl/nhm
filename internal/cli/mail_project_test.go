@@ -219,27 +219,33 @@ func TestMailInboxSessionEmptyAndRefusals(t *testing.T) {
 		t.Errorf("empty --json = %d %s", code, out)
 	}
 	m.fetched(t)
+	// On the shared parser, as ntm's: "Error: <msg>" and exit 1 (the
+	// operator's ruling, 2026-10-24: a ported verb takes ntm's codes).
 	for _, c := range []struct {
 		args []string
-		code int
 		want string
 	}{
-		{[]string{"nosuch"}, exitRefused, `session "nosuch": no such workspace (nhm list shows the sessions)`},
-		{[]string{"swarm", "--agent", "NoSuchAgent"}, exitError, "fetching inbox for NoSuchAgent"},
-		{[]string{"swarm", "extra"}, exitRefused, "Usage: nhm mail inbox"},
-		{[]string{"swarm", "--limit", "0"}, exitRefused, "Usage: nhm mail inbox"},
-		{[]string{"--session-agents"}, exitRefused, "--session-agents: name the session"},
+		{[]string{"nosuch"}, `Error: session "nosuch": no such workspace (nhm list shows the sessions)` + "\n"},
+		{[]string{"swarm", "--agent", "NoSuchAgent"}, "fetching inbox for NoSuchAgent"},
+		{[]string{"swarm", "extra"}, "Error: accepts at most 1 arg(s), received 2\n"},
+		{[]string{"swarm", "--limit", "0"}, "Error: --limit must be greater than 0\n"},
+		{[]string{"--session-agents"}, "Error: --session-agents: name the session, or run inside herdr\n"},
 		// nhm's own form reads one agent's unread mail.
-		{[]string{"--mark-read", "--keep-unread"}, exitRefused, "give --mark-read or --keep-unread, not both"},
-		{[]string{"swarm", "--keep-unread"}, exitRefused, "they take no session, --urgent or --session-agents"},
-		{[]string{"--urgent", "--mark-read"}, exitRefused, "they take no session, --urgent or --session-agents"},
-		{[]string{"--session-agents", "--keep-unread"}, exitRefused, "they take no session, --urgent or --session-agents"},
+		{[]string{"--mark-read", "--keep-unread"}, "Error: give --mark-read or --keep-unread, not both\n"},
+		{[]string{"swarm", "--keep-unread"}, "they take no session, --urgent or --session-agents"},
+		{[]string{"--urgent", "--mark-read"}, "they take no session, --urgent or --session-agents"},
+		{[]string{"--session-agents", "--keep-unread"}, "they take no session, --urgent or --session-agents"},
 	} {
 		t.Setenv("HERDR_WORKSPACE_ID", "")
 		code, _, errOut := run(append(append([]string{"mail", "inbox"}, c.args...), "--socket", s.SocketPath)...)
-		if code != c.code || !strings.Contains(errOut, c.want) {
-			t.Errorf("mail inbox %v = %d %q, want %d %q", c.args, code, errOut, c.code, c.want)
+		if code != exitError || !strings.HasPrefix(errOut, "Error: ") || !strings.Contains(errOut, c.want) {
+			t.Errorf("mail inbox %v = %d %q, want 1 %q", c.args, code, errOut, c.want)
 		}
+	}
+	// Under --json, an error is ntm's robot error envelope on stdout.
+	code, out, errOut := run("mail", "inbox", "--mark-read", "--keep-unread", "--json", "--socket", s.SocketPath)
+	if code != exitError || errOut != "" || !strings.Contains(out, `"success": false`) || !strings.Contains(out, "give --mark-read or --keep-unread") {
+		t.Errorf("--json error = %d %q %q", code, out, errOut)
 	}
 }
 

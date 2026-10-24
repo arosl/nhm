@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -42,59 +41,49 @@ of the cwd. A listing that reaches --limit (default 200) is refused:
 older mail would sink out of sight.
 `
 
-func runMail(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "inbox" {
-		if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-			fmt.Fprint(stdout, mailUsage)
-			return exitOK
-		}
-		fmt.Fprint(stderr, mailUsage)
-		return exitRefused
-	}
-	fs := flag.NewFlagSet("mail inbox", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, mailUsage) }
-	agent := fs.String("agent", "", "the Agent Mail name")
-	project := fs.String("project", "", "Agent Mail's project key")
-	markRead := fs.Bool("mark-read", false, "nhm's form: list one agent's unread mail and mark it read")
-	keep := fs.Bool("keep-unread", false, "nhm's form: list one agent's unread mail and mark nothing read")
-	limit := fs.Int("limit", 0, "the most messages one listing reads (50 per agent; nhm's form: 200)")
-	urgent := fs.Bool("urgent", false, "only the urgent mail")
-	sessionAgents := fs.Bool("session-agents", false, "only the agents bound in the session")
-	socket := fs.String("socket", "", "herdr API socket")
-	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
-	pos, err := parseInterleaved(fs, args[1:])
-	limitSet := false
-	fs.Visit(func(f *flag.Flag) { limitSet = limitSet || f.Name == "limit" })
-	if err != nil || len(pos) > 1 || (len(pos) == 1 && pos[0] == "") || (limitSet && *limit <= 0) {
-		fmt.Fprint(stderr, mailUsage)
-		return exitRefused
+// mailInboxFlags are mail inbox's flags, as its cobra command
+// (newMailInboxCmd) parsed them.
+type mailInboxFlags struct {
+	agent, project, socket                string
+	markRead, keep, urgent, sessionAgents bool
+	limit                                 int
+	limitSet, asJSON                      bool
+}
+
+// runMailInbox is mail inbox: ntm's project inbox, or with --mark-read or
+// --keep-unread nhm.wake's listing of one agent's unread mail. An error
+// that comes before any output is returned for the root to print, as
+// ntm's; one after the listing is the listing's, and verbExit.
+func runMailInbox(f mailInboxFlags, pos []string, stdout, stderr io.Writer) error {
+	switch {
+	case len(pos) == 1 && pos[0] == "":
+		return errors.New("session name cannot be empty")
+	case f.limitSet && f.limit <= 0:
+		return errors.New("--limit must be greater than 0")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	switch {
-	case *markRead && *keep:
-		fmt.Fprintf(stderr, "nhm mail inbox: give --mark-read or --keep-unread, not both\n%s", mailUsage)
-		return exitRefused
-	case (*markRead || *keep) && (len(pos) == 1 || *urgent || *sessionAgents):
-		fmt.Fprintf(stderr, "nhm mail inbox: --mark-read and --keep-unread list one agent's unread mail; they take no session, --urgent or --session-agents\n%s", mailUsage)
-		return exitRefused
-	case !*markRead && !*keep:
+	case f.markRead && f.keep:
+		return errors.New("give --mark-read or --keep-unread, not both")
+	case (f.markRead || f.keep) && (len(pos) == 1 || f.urgent || f.sessionAgents):
+		return errors.New("--mark-read and --keep-unread list one agent's unread mail; they take no session, --urgent or --session-agents")
+	case !f.markRead && !f.keep:
 		// ntm's mail inbox [session], with or without a session (the
 		// operator's rulings: read-only, nhm-k9d, 2026-10-23; the bare
 		// form too, nhm-2p6, 2026-10-24).
-		o := projectInbox{agent: *agent, project: *project, urgent: *urgent, sessionAgents: *sessionAgents,
-			limit: 50, socket: *socket, asJSON: *asJSON}
+		o := projectInbox{agent: f.agent, project: f.project, urgent: f.urgent, sessionAgents: f.sessionAgents,
+			limit: 50, socket: f.socket, asJSON: f.asJSON}
 		if len(pos) == 1 {
 			o.session = pos[0]
 		}
-		if limitSet {
-			o.limit = *limit
+		if f.limitSet {
+			o.limit = f.limit
 		}
 		return runProjectInbox(ctx, o, stdout, stderr)
 	}
-	if !limitSet {
-		*limit = 200
+	if !f.limitSet {
+		f.limit = 200
 	}
 	env := envelope{Command: "mail inbox"}
 
@@ -102,7 +91,8 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	// keeps the wake table in step with what this listing marks read.
 	var ie *instanceEnv
 	var self *bindings.Binding
-	if ie, err = openInstance(*socket); err == nil {
+	var err error
+	if ie, err = openInstance(f.socket); err == nil {
 		defer ie.db.Close()
 		if pane := ie.callerPane(ctx); pane != "" {
 			if b, err := bindings.NewStore(ie.db).ActiveByPane(ctx, pane); err == nil {
@@ -112,11 +102,11 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	} else {
 		ie = nil
 	}
-	name := inboxAgent(*agent, self, os.Getenv)
+	name := inboxAgent(f.agent, self, os.Getenv)
 	if name == "" {
-		return output(stdout, stderr, *asJSON, env, errors.New("no agent: give --agent, or set AGENT_MAIL_AGENT or AGENT_NAME"), exitRefused, nil)
+		return errors.New("no agent: give --agent, or set AGENT_MAIL_AGENT or AGENT_NAME")
 	}
-	key := firstOf(*project, os.Getenv("AGENT_MAIL_PROJECT"))
+	key := firstOf(f.project, os.Getenv("AGENT_MAIL_PROJECT"))
 	if key == "" && self != nil && strings.EqualFold(self.MailName, name) {
 		key = self.MailProjectKey
 	}
@@ -132,25 +122,35 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	}
 	mail, err := agentmail.NewClient("")
 	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
+		return err
 	}
-	l, err := wake.Inbox(ctx, mail, key, name, *limit, *keep)
+	l, err := wake.Inbox(ctx, mail, key, name, f.limit, f.keep)
 	env.Result = l
 	if ie != nil {
 		markWakeRead(ctx, ie, key, name, l.MarkedIDs(), &env)
 	}
-	code := exitOK
-	if err != nil {
-		code = exitError
-	}
-	if *asJSON {
-		return output(stdout, stderr, true, env, err, code, nil)
+	switch {
+	case f.asJSON:
+		// The envelope carries the listing and the error, if any.
+		code := exitOK
+		if err != nil {
+			code = exitError
+		}
+		if output(stdout, stderr, true, env, err, code, nil) != exitOK {
+			return verbExit{exitError}
+		}
+		return nil
+	case err != nil && len(l.Messages) == 0:
+		return err
 	}
 	// The listing comes first, also when some marks failed.
-	if err == nil || len(l.Messages) > 0 {
-		printInbox(stdout, l)
+	printInbox(stdout, l)
+	output(stdout, stderr, false, env, nil, exitOK, nil) // the warnings
+	if err != nil {
+		fmt.Fprintln(stderr, "Error:", err)
+		return verbExit{exitError}
 	}
-	return output(stdout, stderr, false, env, err, code, nil)
+	return nil
 }
 
 // markWakeRead marks the wake rows of the listed messages read, so no

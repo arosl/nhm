@@ -212,7 +212,7 @@ func TestMailInboxListsAndMarksRead(t *testing.T) {
 		SELECT binding_id, '11', '2026-10-12T05:00:00Z' FROM bindings WHERE mail_name = 'IcyKnoll'`); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errOut := runVerb(runMail, "inbox", "--agent", "IcyKnoll", "--project", "/p", "--mark-read")
+	code, out, errOut := runVerb(verbRun("mail"), "inbox", "--agent", "IcyKnoll", "--project", "/p", "--mark-read")
 	if code != exitOK {
 		t.Fatalf("exit %d: %s %s", code, out, errOut)
 	}
@@ -227,7 +227,8 @@ func TestMailInboxListsAndMarksRead(t *testing.T) {
 	if err := db.SQL().QueryRow(`SELECT COALESCE(last_outcome, '') FROM wake WHERE message_id = '11'`).Scan(&outcome); err != nil || outcome != wake.OutcomeRead {
 		t.Fatalf("wake row = %q, %v", outcome, err)
 	}
-	if code, _, _ := runVerb(runMail, "outbox"); code != exitRefused {
-		t.Fatalf("unknown mail verb: exit %d", code)
+	// As ntm's: a word that is no mail sub-verb prints mail's help.
+	if code, out, _ := runVerb(verbRun("mail"), "outbox"); code != exitOK || out != mailVerbUsage {
+		t.Fatalf("unknown mail verb: exit %d %q", code, out)
 	}
 }
