@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -245,6 +246,12 @@ func TestReadState(t *testing.T) {
 	w.bashFile(t, "tokens/"+h+"/sub/BlueLake", "x\n")
 	w.bashFile(t, "tokens/.old/BlueLake", "x\n")
 	w.bashFile(t, "wake/"+h+"/notes.txt", "x\n")
+	// Dangling links, which the Bash's glob skips.
+	for _, link := range []string{"tokens/" + h + "/GoneFox", "tokens/" + ProjectHash("/gone")} {
+		if err := os.Symlink(filepath.Join(w.env.AcfsHome, "missing"), filepath.Join(w.env.AcfsHome, "state", link)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// A wake file that is not a wake state is left out, with a note.
 	w.bashFile(t, "wake/"+wh+"/RedFox.json", `{"cursor": 1, "last_wake": 2}`)
 	w.bashFile(t, "wake/"+wh+"/OldFox.json", `{"cursor": 1.5, "last_wake": 2, "overdue": []}`)
@@ -278,24 +285,32 @@ func TestReadState(t *testing.T) {
 		t.Fatalf("takeover notes = %q", rep.Notes)
 	}
 
-	// A state directory that cannot be read fails: no token is missed.
+	// A state directory that cannot be read fails: no token is missed. One
+	// that can be listed but not searched (r--) too (TealHawk's review).
 	tokensDir := filepath.Join(w.env.AcfsHome, "state", "tokens")
-	if err := os.Chmod(tokensDir, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(tokensDir, 0o700) })
-	if _, err := os.ReadDir(tokensDir); err == nil {
-		t.Skip("the directory stays readable (running as root)")
-	}
-	if _, _, err := ReadState(w.env.AcfsHome); err == nil {
-		t.Fatal("an unreadable tokens directory read as no tokens")
-	}
-	if _, err := Takeover(context.Background(), w.env, false); err == nil || errors.Is(err, ErrRefused) ||
-		!strings.Contains(err.Error(), "the Bash's state cannot be read") {
-		t.Fatalf("takeover = %v (a failure, not a refusal)", err)
-	}
-	if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerBash {
-		t.Fatalf("owner = %+v", o)
+	for _, dir := range []string{tokensDir, filepath.Join(tokensDir, h), filepath.Join(w.env.AcfsHome, "state", "wake", h)} {
+		for _, mode := range []os.FileMode{0, 0o400} {
+			if err := os.Chmod(dir, mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			if _, err := os.Stat(filepath.Join(dir, "x")); !errors.Is(err, fs.ErrPermission) {
+				t.Skip("the directory stays searchable (running as root)")
+			}
+			if _, _, err := ReadState(w.env.AcfsHome); err == nil {
+				t.Fatalf("%s at %o read as no state", dir, mode)
+			}
+			if _, err := Takeover(context.Background(), w.env, false); err == nil || errors.Is(err, ErrRefused) ||
+				!strings.Contains(err.Error(), "the Bash's state cannot be read") {
+				t.Fatalf("%s at %o: takeover = %v (a failure, not a refusal)", dir, mode, err)
+			}
+			if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerBash {
+				t.Fatalf("owner = %+v", o)
+			}
+			if err := os.Chmod(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }
 

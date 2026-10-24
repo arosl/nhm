@@ -148,9 +148,12 @@ func subdirs(dir string) ([]string, error) {
 	}
 	var out []string
 	for _, e := range entries {
-		path := filepath.Join(dir, e.Name())
-		if info, err := os.Stat(path); !strings.HasPrefix(e.Name(), ".") && err == nil && info.IsDir() {
-			out = append(out, path)
+		info, ok, err := statEntry(dir, e)
+		if err != nil {
+			return nil, err
+		}
+		if ok && info.IsDir() {
+			out = append(out, filepath.Join(dir, e.Name()))
 		}
 	}
 	return out, nil
@@ -165,11 +168,34 @@ func regularFiles(dir string) ([]string, error) {
 	}
 	var out []string
 	for _, e := range entries {
-		if info, err := os.Stat(filepath.Join(dir, e.Name())); !strings.HasPrefix(e.Name(), ".") && err == nil && info.Mode().IsRegular() {
+		info, ok, err := statEntry(dir, e)
+		if err != nil {
+			return nil, err
+		}
+		if ok && info.Mode().IsRegular() {
 			out = append(out, e.Name())
 		}
 	}
 	return out, nil
+}
+
+// statEntry stats an entry of dir through symlinks. ok is false for a
+// name the Bash's glob skips: a hidden one, or a dangling link. Any other
+// failure, such as a directory that can be listed but not searched, is an
+// error: the Bash's glob would skip such an entry too, and with it a token
+// (TealHawk's review).
+func statEntry(dir string, e fs.DirEntry) (info fs.FileInfo, ok bool, err error) {
+	if strings.HasPrefix(e.Name(), ".") {
+		return nil, false, nil
+	}
+	info, err = os.Stat(filepath.Join(dir, e.Name()))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("owner: the Bash's state: %w", err)
+	}
+	return info, true, nil
 }
 
 // firstLine is the first line of a file, or nil when the file cannot be
