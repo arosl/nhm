@@ -48,11 +48,10 @@ func TestSpawnAssignPreflightComesFirst(t *testing.T) {
 	code, out, _ := run(append(append([]string(nil), base...), "--dry-run", "--no-kickoff", "--strategy", "speed",
 		"--limit", "3", "--assign-cc-only")...)
 	// The flags parse and the spawn plans (admission may refuse it on a
-	// host without the guards; that comes after the flags).
-	env := decodeEnvelope(t, out)
-	result, _ := env["result"].(map[string]any)
-	if code == exitRefused || result == nil || result["dry_run"] != true {
-		t.Fatalf("assignment flags without --assign: exit %d, %v", code, env)
+	// host without the guards; that comes after the flags). Without
+	// --assign the output is plain spawn's, ntm's.
+	if result := spawnNHMResult(t, out); code == exitRefused || result["dry_run"] != true {
+		t.Fatalf("assignment flags without --assign: exit %d, %v", code, result)
 	}
 }
 

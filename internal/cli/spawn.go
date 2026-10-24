@@ -317,10 +317,11 @@ func spawnEnrichment(f *spawnFlags) (send.Enrichment, error) {
 	return e, nil
 }
 
-// verbOutput is output for spawn and add on the shared parser: nhm's
-// envelope with --json (until nhm-2p6.4.8 gives them ntm's), else the
-// text; an error is ntm's "Error: <msg>" on stderr; and every error or
-// partial outcome exits 1, ntm's code.
+// verbOutput is output for add and spawn --assign on the shared parser
+// (spawn's own is runSpawnNTM's): nhm's envelope with --json (until
+// nhm-2p6.4.9 and nhm-2p6.4.11 give them ntm's), else the text; an error
+// is ntm's "Error: <msg>" on stderr; and every error or partial outcome
+// exits 1, ntm's code.
 func verbOutput(stdout, stderr io.Writer, asJSON bool, env envelope, err error, code int, text func(io.Writer)) int {
 	if code != exitOK || err != nil {
 		code = exitError
@@ -351,7 +352,11 @@ func newSpawnVerbCmd(verb, short string) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f.asJSON = wantJSON(cmd)
-			if code := spawnVerb(verb, args[0], f, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != exitOK {
+			code, err := spawnVerb(verb, args[0], f, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			if code != exitOK {
 				return verbExit{code: code}
 			}
 			return nil
@@ -361,12 +366,18 @@ func newSpawnVerbCmd(verb, short string) *cobra.Command {
 	return cmd
 }
 
-func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) int {
-	env := envelope{Command: verb}
+// spawnVerb runs spawn or add. An argument error is returned, as ntm's
+// RunE returns it: the root writes "Error: <msg>", or under --json ntm's
+// error envelope, and exits 1.
+func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) (int, error) {
 	req, err := f.request(session, verb == "add")
 	if err != nil {
-		return verbOutput(stdout, stderr, f.asJSON, env, err, exitError, nil)
+		return exitError, err
 	}
+	if verb == "spawn" && !f.assign {
+		return runSpawnNTM(context.Background(), req, f.project, f.socket, f.asJSON, stdout, stderr), nil
+	}
+	env := envelope{Command: verb}
 	// ntm takes the assignment flags without --assign and does nothing
 	// with them; so does nhm.
 	var assign *humanAssign
@@ -378,7 +389,7 @@ func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) in
 			}
 		}
 	}
-	return runSpawnRequest(context.Background(), req, f.project, f.socket, f.asJSON, env, stdout, stderr, assign)
+	return runSpawnRequest(context.Background(), req, f.project, f.socket, f.asJSON, env, stdout, stderr, assign), nil
 }
 
 // confirm asks a yes/no question on the terminal; without a terminal the

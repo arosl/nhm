@@ -167,7 +167,7 @@ func TestQuotaCaamSwitchMakesThePoolUnknown(t *testing.T) {
 		args := append([]string{"spawn", "swarm", "--cc=1", "--project", project, "--prompt", "say hi", "--allow-unguarded",
 			"--dry-run", "--json", "--socket", s.SocketPath}, extra...)
 		code, out, errOut := run(args...)
-		ad, _ := decodeEnvelope(t, out)["result"].(map[string]any)["admission"].(map[string]any)
+		ad, _ := spawnNHMResult(t, out)["admission"].(map[string]any)
 		if ad == nil || ad["decision"] == "" {
 			t.Fatalf("%v = %d %s %s", extra, code, out, errOut)
 		}

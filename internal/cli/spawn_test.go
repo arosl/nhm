@@ -155,6 +155,15 @@ func TestSpawnVerb(t *testing.T) {
 		!strings.Contains(errOut, "Error: admission refused the spawn: claude guard dcg is missing") {
 		t.Fatalf("unguarded = %d %s", code, errOut)
 	}
+	// Under --json the refusal is ntm's agentLifecycleFailureResponse
+	// (nhm-2p6.4.8).
+	code, out, _ = run("spawn", "swarm", "--cc=1", "--project", project, "--dry-run", "--socket", sock, "--json")
+	fail := decodeSpawnResponse(t, out)
+	if ad, _ := fail["admission"].(map[string]any); code != exitError || fail["success"] != false ||
+		fail["error_code"] != "RESOURCE_BUSY" || fail["code"] != "RESOURCE_BUSY" || ad["decision"] != "refuse" ||
+		fail["partial_mutation"] != false {
+		t.Fatalf("unguarded --json = %d %v", code, fail)
+	}
 	// A real spawn needs nhm as the owner.
 	if code, _, _ = run("spawn", "swarm", "--cc=1", "--project", project, "--allow-unguarded", "--socket", sock); code != exitError {
 		t.Fatalf("under the Bash = %d", code)
@@ -164,10 +173,26 @@ func TestSpawnVerb(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("spawn = %d %s %s", code, out, errOut)
 	}
-	res := decodeEnvelope(t, out)["result"].(map[string]any)
-	agent := res["agents"].([]any)[0].(map[string]any)
+	// ntm's SpawnResponse, nhm's result under _nhm (nhm-2p6.4.8).
+	resp := decodeSpawnResponse(t, out)
+	agent := spawnNHMResult(t, out)["agents"].([]any)[0].(map[string]any)
 	if agent["mail_name"] != "GreenPike" || agent["slot"] != "2.1" || agent["status"] != "kickoff_submitted" || agent["herdr_name"] != "greenpike" {
 		t.Fatalf("agent = %v", agent)
+	}
+	am, _ := resp["agent_mail"].(map[string]any)
+	if counts, _ := resp["agent_counts"].(map[string]any); resp["session"] != "swarm" || resp["created"] != true ||
+		resp["working_directory"] != project || counts["claude"] != 1.0 || am["agents_registered"] != 1.0 ||
+		am["agent_map"].(map[string]any)[agent["pane_id"].(string)] != "GreenPike" {
+		t.Fatalf("spawn response = %v", resp)
+	}
+	var pane map[string]any
+	for _, p := range resp["panes"].([]any) {
+		if m := p.(map[string]any); m["pane_id"] == agent["pane_id"] {
+			pane = m
+		}
+	}
+	if pane == nil || pane["type"] != "claude" || pane["pane_target"] != "2.1" || pane["window_index"] != 2.0 || pane["index"] != 1.0 {
+		t.Fatalf("the agent's pane = %v in %v", pane, resp["panes"])
 	}
 	if got := h.sent(); len(got) != 1 || !strings.Contains(got[0], "name GreenPike, project key "+project) || !strings.HasSuffix(got[0], "Read AGENTS.md.") {
 		t.Fatalf("kickoff = %q", got)
