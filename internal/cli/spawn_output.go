@@ -107,7 +107,13 @@ func (e *spawnOutcome) timedOut() bool {
 
 // made reports whether the spawn made anything: its workspace or a pane.
 func made(res spawn.Result) bool {
-	return res.WorkspaceNew || slices.ContainsFunc(res.Targets, func(t spawn.Target) bool { return t.PaneID != "" })
+	return madeWorkspace(res) || slices.ContainsFunc(res.Targets, func(t spawn.Target) bool { return t.PaneID != "" })
+}
+
+// madeWorkspace reports whether the spawn made its workspace: the plan
+// says a new one (WorkspaceNew), and it has an id once it is made.
+func madeWorkspace(res spawn.Result) bool {
+	return res.WorkspaceNew && res.WorkspaceID != "" && !res.DryRun
 }
 
 // targetUp reports whether an agent came up: ready, or started by a spawn
@@ -234,7 +240,9 @@ func spawnFailureOf(o spawnOut, err error) agentLifecycleFailureResponse {
 	for _, t := range res.Targets {
 		paneIDs = append(paneIDs, t.PaneID)
 	}
-	out := newAgentLifecycleFailureResponse(err, code, res.Session, made(res), res.WorkspaceID != "", paneIDs, admission)
+	// --safety refused a session that exists, as ntm's does.
+	mayExist := res.WorkspaceID != "" || errors.Is(err, spawn.ErrSessionExists)
+	out := newAgentLifecycleFailureResponse(err, code, res.Session, made(res), mayExist, paneIDs, admission)
 	out.NHM = spawnNHM(res, o.scope, o.warnings)
 	return out
 }
@@ -330,7 +338,7 @@ func panesOf(snap herdr.SessionSnapshot, bs []bindings.Binding, res spawn.Result
 // herdr has none, and nhm prints no step for it.
 func printSpawnSteps(w io.Writer, res spawn.Result) {
 	st := newSteps(w)
-	if res.WorkspaceNew {
+	if madeWorkspace(res) {
 		st.start(fmt.Sprintf("Creating session '%s'", res.Session)).done()
 	}
 	panes, down := 0, false

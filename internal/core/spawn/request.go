@@ -46,6 +46,9 @@ type Request struct {
 	// Safety refuses a workspace that exists already: --robot-spawn's
 	// --spawn-safety, as ntm refuses to reuse a session (ErrSessionExists).
 	Safety bool
+	// SafetyFlag is the flag the refusal names: --spawn-safety when empty,
+	// spawn's --safety.
+	SafetyFlag string
 	// ProjectRoot is the agents' cwd and the Agent Mail project key.
 	ProjectRoot string
 	ProjectID   string

@@ -182,10 +182,11 @@ func TestSpawnText(t *testing.T) {
 		t.Fatalf("stderr = %s", stderr.String())
 	}
 
-	// An error before anything was made is the error alone.
+	// An error before anything was made is the error alone; a new
+	// workspace that was only planned is not made.
 	stdout.Reset()
 	stderr.Reset()
-	refused := spawn.Result{Session: "swarm", Targets: []spawn.Target{{Kind: "claude", Slot: "1.1", Status: spawn.StatusPlanned}}}
+	refused := spawn.Result{Session: "swarm", WorkspaceNew: true, Targets: []spawn.Target{{Kind: "claude", Slot: "1.1", Status: spawn.StatusPlanned}}}
 	if code := writeSpawnNTM(&stdout, &stderr, false, spawnOut{res: refused}, fmt.Errorf("%w: no guard", spawn.ErrRefused)); code != exitError ||
 		stdout.Len() != 0 || stderr.String() != "Error: admission refused the spawn: no guard\n" {
 		t.Fatalf("refused = %d %q %q", code, stdout.String(), stderr.String())
@@ -203,7 +204,7 @@ func TestSpawnText(t *testing.T) {
 // A failure under --json is ntm's agentLifecycleFailureResponse, with
 // ntm's codes, and exits 1 (nhm-2p6.4.8).
 func TestSpawnFailureResponse(t *testing.T) {
-	refused := spawn.Result{Session: "swarm", Admission: spawn.Admission{Decision: spawn.Refuse, Reason: "claude guard dcg is missing",
+	refused := spawn.Result{Session: "swarm", WorkspaceNew: true, Admission: spawn.Admission{Decision: spawn.Refuse, Reason: "claude guard dcg is missing",
 		Reasons: []string{"claude guard dcg is missing"}, Warnings: []string{}},
 		Targets: []spawn.Target{{Kind: "claude", Slot: "1.1", Status: spawn.StatusPlanned}}}
 	var stdout, stderr bytes.Buffer

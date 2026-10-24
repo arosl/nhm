@@ -193,6 +193,7 @@ type spawnFlags struct {
 	effort                  string
 	role                    string
 	dryRun, asJSON          bool
+	safety                  bool
 }
 
 func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
@@ -269,7 +270,8 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 	req := spawn.Request{Session: session, Add: add, Label: f.tabLabel, Group: f.group, PerTab: f.perTab, Effort: f.effort, Role: f.role,
 		NoKickoff: f.noKickoff, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
 		ReadyTimeout: f.readyWait, TrustFolder: f.trustFolder, Force: f.force, AllowUnguarded: f.allowUnguarded,
-		IgnoreCapacity: f.ignoreCapacity, RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID}
+		IgnoreCapacity: f.ignoreCapacity, RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID,
+		Safety: f.safety, SafetyFlag: "--safety"}
 	switch {
 	case f.prompt != "" && f.promptFile != "":
 		return req, errors.New("give --prompt or --prompt-file, not both")
@@ -363,6 +365,10 @@ func newSpawnVerbCmd(verb, short string) *cobra.Command {
 		},
 	}
 	f = addSpawnFlags(cmd.Flags())
+	if verb == "spawn" {
+		// ntm's spawn only; its add has no --safety.
+		cmd.Flags().BoolVar(&f.safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
+	}
 	return cmd
 }
 
@@ -777,6 +783,16 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	return output(stdout, stderr, asJSON, env, nil, spawnExit(res), show)
 }
 
+// sessionExistsError is the safety refusal in ntm's words, without the
+// core's "spawn safety: ".
+type sessionExistsError struct{ err error }
+
+func (e sessionExistsError) Error() string {
+	return strings.TrimPrefix(e.err.Error(), spawn.ErrSessionExists.Error()+": ")
+}
+
+func (e sessionExistsError) Unwrap() error { return e.err }
+
 // spawnUnderOwner fills the project scope and runs the spawn.
 func spawnUnderOwner(ctx context.Context, ie *instanceEnv, req *spawn.Request, project string) (spawn.Result, int, error) {
 	s, err := projectScope(ctx, ie.inst.ID, project)
@@ -790,6 +806,9 @@ func spawnUnderOwner(ctx context.Context, ie *instanceEnv, req *spawn.Request, p
 	}
 	run := func() (spawn.Result, int, error) {
 		res, err := spawn.Spawn(ctx, senv, *req)
+		if errors.Is(err, spawn.ErrSessionExists) {
+			err = sessionExistsError{err}
+		}
 		switch {
 		case errors.Is(err, spawn.ErrRefused):
 			return res, exitAdmission, err

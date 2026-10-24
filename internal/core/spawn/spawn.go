@@ -1,6 +1,7 @@
 package spawn
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -227,9 +228,10 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		return res, fmt.Errorf("%w: %s (nhm add needs an existing workspace; nhm spawn creates it)", ErrNoWorkspace, req.Session)
 	}
 	if ws != "" && req.Safety {
-		// ntm's words (internal/robot/spawn.go, setSpawnSafetyConflict).
-		return res, fmt.Errorf("%w: session '%s' already exists (--spawn-safety mode prevents reuse; use 'nhm kill %s' first)",
-			ErrSessionExists, req.Session, req.Session)
+		// ntm's words (internal/robot/spawn.go, setSpawnSafetyConflict;
+		// internal/cli/spawn.go, spawnSafetySessionExistsError).
+		return res, fmt.Errorf("%w: session '%s' already exists (%s mode prevents reuse; use 'nhm kill %s' first)",
+			ErrSessionExists, req.Session, cmp.Or(req.SafetyFlag, "--spawn-safety"), req.Session)
 	}
 	res.WorkspaceID, res.WorkspaceNew = ws, ws == ""
 	// Before anything is created: an existing workspace may hold other
@@ -529,8 +531,8 @@ func createPane(ctx context.Context, env Env, req Request, res *Result, t *Targe
 			if ws, err := findWorkspace(ctx, env.Herdr, req.Session); err != nil {
 				return err
 			} else if ws != "" {
-				return fmt.Errorf("%w: session '%s' appeared while the spawn ran (--spawn-safety mode prevents reuse; use 'nhm kill %s' first)",
-					ErrSessionExists, req.Session, req.Session)
+				return fmt.Errorf("%w: session '%s' appeared while the spawn ran (%s mode prevents reuse; use 'nhm kill %s' first)",
+					ErrSessionExists, req.Session, cmp.Or(req.SafetyFlag, "--spawn-safety"), req.Session)
 			}
 		}
 		c, err := env.Herdr.WorkspaceCreate(ctx, herdr.WorkspaceCreateParams{Cwd: req.ProjectRoot, Label: req.Session,

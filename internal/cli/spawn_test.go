@@ -218,6 +218,35 @@ func TestSpawnVerb(t *testing.T) {
 	}
 }
 
+// spawn --safety refuses a session that exists, in ntm's words; under
+// --json the failure response says the session may exist. ntm's add has
+// no --safety (nhm-2p6.4.5).
+func TestSpawnSafety(t *testing.T) {
+	s, _, h := newSendInstance(t)
+	spawnHerdr(t, s, h)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	project := t.TempDir()
+	base := []string{"--cc=1", "--project", project, "--allow-unguarded", "--prompt", "hi", "--dry-run", "--safety", "--socket", s.SocketPath}
+	code, _, errOut := run(append([]string{"spawn", "swarm"}, base...)...)
+	if code != exitError || !strings.HasSuffix(errOut,
+		"Error: session 'swarm' already exists (--safety mode prevents reuse; use 'nhm kill swarm' first)\n") {
+		t.Fatalf("an existing session = %d %q", code, errOut)
+	}
+	code, out, _ := run(append([]string{"spawn", "swarm", "--json"}, base...)...)
+	if m := decodeSpawnResponse(t, out); code != exitError || m["error_code"] != "INTERNAL_ERROR" || m["session_may_exist"] != true ||
+		m["error"] != "session 'swarm' already exists (--safety mode prevents reuse; use 'nhm kill swarm' first)" {
+		t.Fatalf("an existing session --json = %d %v", code, m)
+	}
+	if code, out, errOut := run(append([]string{"spawn", "fresh"}, base...)...); code != 0 || !strings.Contains(out, "would start 1 agents in fresh (a new workspace)") {
+		t.Fatalf("a new session = %d %s %s", code, out, errOut)
+	}
+	if code, _, errOut := run("add", "swarm", "--cc=1", "--safety", "--socket", s.SocketPath); code != exitError ||
+		!strings.HasPrefix(errOut, "Error: unknown flag: --safety") {
+		t.Fatalf("add --safety = %d %q", code, errOut)
+	}
+}
+
 // ntm's -l/--label makes the session <session>--<label> in the same
 // project, for spawn and add; nhm's tab label is --tab-label
 // (nhm-2p6.4.5).
