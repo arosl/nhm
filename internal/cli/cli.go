@@ -117,6 +117,8 @@ Usage:
   nhm --robot-assign=S [--beads=a,b] [--strategy=simple|balanced|speed|quality|dependency]
                          which ready bead each idle agent should take,
                          ntm's AssignOutput; it assigns nothing
+  nhm --robot-palette [--session=S] [--category=C] [--search=Q]
+                         the palette's prompts, pins and favorites, ntm's PaletteOutput
   nhm --robot-spawn=S --spawn-dir=R --spawn-cc=N --spawn-cod=N [--spawn-agy=N]
       --spawn-no-user --spawn-safety --spawn-wait [--ready-timeout=Ns] [--dry-run]
                          ntm's robot spawn, ntm's SpawnOutput
