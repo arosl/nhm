@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,5 +53,46 @@ func TestSpawnVerifyBoot(t *testing.T) {
 	}
 	if f := spawnFailureOf(spawnOut{res: res}, err); f.ErrorCode != "TIMEOUT" || f.Error != want {
 		t.Fatalf("json = %s %q", f.ErrorCode, f.Error)
+	}
+}
+
+// ntm's --create-dir, on --project's folder: --create-dir or --json makes
+// a missing folder; without a terminal the spawn refuses in ntm's words; a
+// dry run makes nothing; add has no --create-dir (nhm-2p6.4.5).
+func TestSpawnCreateDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "new", "proj")
+	var out bytes.Buffer
+	want := "project directory " + dir + " does not exist; pass --create-dir to create it, or scaffold with 'nhm quick proj'"
+	if code, done, err := ensureProjectDir(dir, "proj", &spawnFlags{}, &out); !done || code != exitError || err == nil || err.Error() != want {
+		t.Fatalf("no terminal = %d %v %v", code, done, err)
+	}
+	if _, done, err := ensureProjectDir(dir, "proj", &spawnFlags{createDir: true, dryRun: true}, &out); !done || err == nil ||
+		!strings.Contains(err.Error(), "a dry run creates nothing") {
+		t.Fatalf("dry run = %v %v", done, err)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("made before --create-dir: %v", err)
+	}
+	if code, done, err := ensureProjectDir(dir, "proj", &spawnFlags{createDir: true}, &out); done || code != 0 || err != nil {
+		t.Fatalf("--create-dir = %d %v %v", code, done, err)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("--create-dir made %v %v", info, err)
+	}
+	asJSON := filepath.Join(t.TempDir(), "j")
+	if _, done, err := ensureProjectDir(asJSON, "proj", &spawnFlags{asJSON: true}, &out); done || err != nil {
+		t.Fatalf("--json = %v %v", done, err)
+	}
+	if _, err := os.Stat(asJSON); err != nil || out.Len() != 0 {
+		t.Fatalf("--json made %v, printed %q", err, out.String())
+	}
+	// Through the verb, the refusal is the root's error.
+	missing := filepath.Join(t.TempDir(), "x")
+	if code, stdout, errOut := run("spawn", "proj", "--cc=1", "--project", missing, "--allow-unguarded"); code != exitError ||
+		stdout != "" || errOut != "Error: project directory "+missing+" does not exist; pass --create-dir to create it, or scaffold with 'nhm quick proj'\n" {
+		t.Fatalf("spawn = %d %q %q", code, stdout, errOut)
+	}
+	if _, _, err := parseVerbArgs(t, true, "--cc=1", "--create-dir"); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+		t.Fatalf("add --create-dir = %v", err)
 	}
 }

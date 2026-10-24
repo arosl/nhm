@@ -22,12 +22,13 @@ func TestEveryVerbFlagIsReservedForKinds(t *testing.T) {
 			isKindFlag[n] = true
 		}
 	}
-	// Each verb's flag names; spawn and add are on the shared parser.
+	// Each verb's flag names; spawn and add are on the shared parser, and
+	// spawn has its own flags too.
 	names := func(verb string) []string {
 		var out []string
 		if verb == "spawn" {
 			fs := pflag.NewFlagSet(verb, pflag.ContinueOnError)
-			addSpawnFlags(fs)
+			addSpawnOnlyFlags(fs, addSpawnFlags(fs))
 			fs.VisitAll(func(f *pflag.Flag) { out = append(out, f.Name) })
 			return out
 		}

@@ -48,7 +48,7 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc|--cod|--grok|--omp|--pi=N[:
                   [--assign-verbose|--assign-quiet] [--assign-timeout D] [--yes]]
                  [--stagger[=D]] [--stagger-mode none|fixed|smart] [--stagger-delay D] [--ready-timeout D]
                  [--trust-folder] [--force] [--ignore-capacity] [--allow-unguarded]
-                 [--require-observations] [--project DIR] [--op-id ID] [--dry-run]
+                 [--require-observations] [--project DIR [--create-dir]] [--op-id ID] [--dry-run]
                  [--socket PATH] [--json]
        nhm add <session> …    the same, into an existing workspace, in its
                               agents' project unless --project names one
@@ -205,7 +205,7 @@ type spawnFlags struct {
 	effort                  string
 	role                    string
 	dryRun, asJSON          bool
-	safety                  bool
+	safety, createDir       bool
 	// staggerLegacy is spawn's --stagger[=D]; staggerOn says it was given.
 	staggerLegacy time.Duration
 	staggerOn     bool
@@ -463,10 +463,12 @@ func newSpawnVerbCmd(verb, short string) *cobra.Command {
 }
 
 // addSpawnOnlyFlags adds the flags of ntm's spawn that its add does not
-// have: --safety, --stagger, --pane-env, --verify-boot and --no-hooks.
+// have: --safety, --create-dir, --stagger, --pane-env, --verify-boot and
+// --no-hooks.
 func addSpawnOnlyFlags(fs *pflag.FlagSet, f *spawnFlags) {
 	fs.BoolVar(&f.safety, "safety", false, "Fail if session already exists (prevents accidental reuse)")
-	fs.StringToStringVar(&f.paneEnv, "pane-env", nil, "NTM-owned pane environment (KEY=TEMPLATE; templates: {project}, {pane}, {role})")
+	fs.BoolVar(&f.createDir, "create-dir", false, "Create the project directory if it does not exist (non-TTY spawns error instead of prompting)")
+	fs.StringToStringVar(&f.paneEnv, "pane-env", nil, "nhm-owned pane environment (KEY=TEMPLATE; templates: {project}, {pane}, {role})")
 	fs.BoolVar(&f.verifyBoot, "verify-boot", false,
 		"After launching, wait up to 30s for every agent to reach a working prompt; exit non-zero naming what failed to boot")
 	// ntm's command hooks ([hooks] pre-spawn, post-spawn): nhm runs none,
@@ -489,6 +491,11 @@ func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) (i
 	if f.defaultsNote != "" && !f.asJSON {
 		fmt.Fprintln(stdout, f.defaultsNote)
 	}
+	if verb == "spawn" && f.project != "" {
+		if code, done, err := ensureProjectDir(f.project, req.Session, f, stdout); done {
+			return code, err
+		}
+	}
 	if !f.assign {
 		return runSpawnNTM(context.Background(), verb, req, f.project, f.socket, f.asJSON, stdout, stderr), nil
 	}
@@ -505,6 +512,43 @@ func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) (i
 		}
 	}
 	return runSpawnRequest(context.Background(), req, f.project, f.socket, f.asJSON, env, stdout, stderr, assign), nil
+}
+
+// ensureProjectDir is ntm's check of a missing project folder
+// (spawnSessionLogic), on --project's folder: nhm's other folder, the
+// cwd's work tree, always exists. --json or --create-dir makes it; without
+// a terminal, or with NHM_NONINTERACTIVE (ntm's NTM_NONINTERACTIVE), the
+// spawn refuses; on a terminal the user is asked, and a no ends the spawn
+// with exit 0. A dry run makes nothing. done reports that the spawn ends
+// here, with code and err.
+func ensureProjectDir(dir, session string, f *spawnFlags, stdout io.Writer) (code int, done bool, err error) {
+	_, statErr := os.Stat(dir)
+	switch {
+	case statErr == nil:
+		return 0, false, nil
+	case !errors.Is(statErr, os.ErrNotExist):
+		return exitError, true, fmt.Errorf("inspect spawn project directory %s: %w", dir, statErr)
+	case f.dryRun:
+		return exitError, true, fmt.Errorf("project directory %s does not exist; a dry run creates nothing", dir)
+	case f.asJSON || f.createDir:
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return exitError, true, fmt.Errorf("creating directory: %w", err)
+		}
+		return 0, false, nil
+	case !interactive(stdout) || os.Getenv("NHM_NONINTERACTIVE") != "":
+		return exitError, true, fmt.Errorf("project directory %s does not exist; pass --create-dir to create it, or scaffold with 'nhm quick %s'",
+			dir, session)
+	}
+	fmt.Fprintf(stdout, "Directory not found: %s\n", dir)
+	if !confirm(stdout, "Create it?") {
+		fmt.Fprintln(stdout, "Aborted.")
+		return exitOK, true, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return exitError, true, fmt.Errorf("creating directory: %w", err)
+	}
+	fmt.Fprintf(stdout, "Created %s\n", dir)
+	return 0, false, nil
 }
 
 // confirm asks a yes/no question on the terminal; without a terminal the
