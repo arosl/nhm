@@ -143,8 +143,6 @@ func TestRootFlagNotBuiltIsRefused(t *testing.T) {
 		flag       []string
 		name, bead string
 	}{
-		{[]string{"--ssh", "user@host"}, "ssh", "nhm-2p6.1.7"},
-		{[]string{"--ssh=user@host"}, "ssh", "nhm-2p6.1.7"},
 		{[]string{"--config", "/x.toml"}, "config", "nhm-2p6.1.7"},
 		{[]string{"--redact", "off"}, "redact", "nhm-2p6.20"},
 		{[]string{"--allow-secret"}, "allow-secret", "nhm-2p6.20"},
@@ -165,11 +163,11 @@ func TestRootFlagNotBuiltIsRefused(t *testing.T) {
 	}
 	// Under --json: ntm's error envelope on stdout, NOT_IMPLEMENTED, exit 2
 	// as ntm's encoder gives it; nothing on stderr.
-	code, out, errOut := run("--json", "--ssh", "h", "compatibility", "status")
+	code, out, errOut := run("--json", "--redact", "off", "compatibility", "status")
 	var resp robot.RobotResponse
 	if err := json.Unmarshal([]byte(out), &resp); err != nil || code != 2 || errOut != "" ||
 		resp.Success || resp.ErrorCode != robot.ErrCodeNotImplemented || resp.Meta == nil || resp.Meta.ExitCode != 2 {
-		t.Errorf("--json --ssh: exit %d, stdout %q, stderr %q", code, out, errOut)
+		t.Errorf("--json --redact: exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
 

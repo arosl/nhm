@@ -62,7 +62,9 @@ type rootFlag struct {
 var rootFlags = []rootFlag{
 	{name: "json"},
 	{name: "config", value: true, notBuilt: "nhm-2p6.1.7"},
-	{name: "ssh", value: true, notBuilt: "nhm-2p6.1.7"},
+	// --ssh H never reaches the root: Run hands the whole call to H
+	// (remoteCall). An empty --ssh is none, as in ntm.
+	{name: "ssh", value: true},
 	{name: "no-color"},
 	{name: "redact", value: true, notBuilt: "nhm-2p6.20"},
 	{name: "allow-secret", notBuilt: "nhm-2p6.20"},
