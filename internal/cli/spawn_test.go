@@ -1,19 +1,23 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/integrations/agentmail"
+	"github.com/arosl/nhm/internal/store"
 )
 
 // spawnAgentMail answers Agent Mail's JSON-RPC tools/call for a spawn.
@@ -291,6 +295,75 @@ func TestAddFindsTheSession(t *testing.T) {
 	if m := decodeSpawnResponse(t, out); code != exitError || m["success"] != false ||
 		!strings.HasPrefix(m["error"].(string), `session "swa" not found (available: `) {
 		t.Fatalf("a prefix under --json = %d %v", code, m)
+	}
+}
+
+// ntm's add runs in the session's folder: without --project, nhm takes
+// the project of the session's active agents; agents of two projects
+// refuse, in ntm's words; --project still names one (nhm-2p6.4.9).
+func TestAddRunsInTheSessionFolder(t *testing.T) {
+	s, inst, h := newSendInstance(t)
+	spawnHerdr(t, s, h)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	p1, p2 := t.TempDir(), t.TempDir()
+	// The instance's swarm holds agents of /p, which is no folder here.
+	db, err := store.Open(inst.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs := bindings.NewStore(db)
+	active, err := bs.List(context.Background(), bindings.Filter{Statuses: []bindings.Status{bindings.Active}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range active {
+		if _, err := bs.Retire(context.Background(), b.ID, b.Generation, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	bind := func(name, project, pane string) {
+		t.Helper()
+		db, err := store.Open(inst.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		if _, err := bindings.NewStore(db).Create(context.Background(), bindings.New{MailName: name, MailProjectKey: project,
+			ProjectID: "proj-" + name, Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1",
+				PaneID: pane, HerdrAlias: strings.ToLower(name), Kind: "claude"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(extra ...string) (int, map[string]any) {
+		t.Helper()
+		code, out, _ := run(append([]string{"add", "swarm", "--cc=1", "--allow-unguarded", "--prompt", "hi", "--dry-run", "--json",
+			"--socket", s.SocketPath}, extra...)...)
+		return code, decodeSpawnResponse(t, out)
+	}
+	root := func(m map[string]any) any {
+		nhm, _ := m["_nhm"].(map[string]any)
+		scope, _ := nhm["scope"].(map[string]any)
+		return scope["project_root"]
+	}
+	bind("GreenPike", p1, "w1:p1")
+	bind("RedFox", p1, "w1:p2")
+	if code, m := add(); code != 0 || root(m) != p1 {
+		t.Fatalf("the session's folder = %d %v", code, m)
+	}
+	if code, m := add("--project", p2); code != 0 || root(m) != p2 {
+		t.Fatalf("--project = %d %v", code, m)
+	}
+	bind("TanOwl", p2, "w1:p3")
+	parts := []string{p1 + " (w1:p1,w1:p2)", p2 + " (w1:p3)"}
+	slices.Sort(parts)
+	want := `resolve live project for session "swarm": panes span multiple project roots: ` + strings.Join(parts, "; ")
+	if code, m := add(); code != exitError || m["error"] != want || m["session_may_exist"] != true {
+		t.Fatalf("two projects = %d %v", code, m)
+	}
+	if code, m := add("--project", p2); code != 0 || root(m) != p2 {
+		t.Fatalf("two projects and --project = %d %v", code, m)
 	}
 }
 

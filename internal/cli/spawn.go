@@ -50,7 +50,8 @@ const spawnUsage = `Usage: nhm spawn <session> [--cc|--cod|--grok|--omp|--pi=N[:
                  [--trust-folder] [--force] [--ignore-capacity] [--allow-unguarded]
                  [--require-observations] [--project DIR] [--op-id ID] [--dry-run]
                  [--socket PATH] [--json]
-       nhm add <session> …    the same, into an existing workspace
+       nhm add <session> …    the same, into an existing workspace, in its
+                              agents' project unless --project names one
        nhm new <session>      only the workspace
 
 Each agent flag takes ntm's spec: N, N:MODEL, N:MODEL:EFFORT, or
@@ -268,7 +269,7 @@ func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
 	fs.StringVar(&f.cassQuery, "cass-context", "", "Explicit context query for CASS")
 	fs.IntVar(&f.cassLimit, "cass-context-limit", 0, "Max past sessions to include")
 	fs.IntVar(&f.cassDays, "cass-context-days", 0, "Look back N days")
-	fs.StringVar(&f.project, "project", "", "the project (default: the git work tree of the cwd)")
+	fs.StringVar(&f.project, "project", "", "the project (default: the git work tree of the cwd; for add, the session's agents' project)")
 	fs.StringVar(&f.opID, "op-id", "", "operation id, for an idempotent retry")
 	fs.StringVar(&f.socket, "socket", "", "herdr API socket")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "print the plan and the admission; create nothing")

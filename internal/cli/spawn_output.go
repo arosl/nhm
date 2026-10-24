@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -44,6 +45,14 @@ func runSpawnNTM(ctx context.Context, verb string, req spawn.Request, project, s
 			return write(stdout, stderr, asJSON, spawnOut{res: spawn.Result{Session: req.Session}}, err)
 		}
 		req.Session = r.Session
+		// ntm's add runs in the session's folder
+		// (resolveWorkspaceProjectDirForExplicitSession); nhm's --project
+		// still names one.
+		if project == "" {
+			if project, err = addSessionFolder(ctx, ie, r.Session, r.WorkspaceID); err != nil {
+				return write(stdout, stderr, asJSON, spawnOut{res: spawn.Result{Session: r.Session, WorkspaceID: r.WorkspaceID}}, err)
+			}
+		}
 	}
 	res, _, err := spawnUnderOwner(ctx, ie, &req, project)
 	out := spawnOut{res: res, warnings: append(append([]string{}, res.Admission.Warnings...), res.Warnings...)}
@@ -65,6 +74,37 @@ func runSpawnNTM(ctx context.Context, verb string, req spawn.Request, project, s
 		}
 	}
 	return write(stdout, stderr, asJSON, out, err)
+}
+
+// addSessionFolder is the folder of the session that add joins: the one
+// project of its active agents, as ntm takes the one project root of its
+// live panes (ResolveLiveSessionProjectContext). Agents of more than one
+// project refuse, in ntm's words; with no agent it is "", the cwd's work
+// tree, as ntm then takes the cwd.
+func addSessionFolder(ctx context.Context, ie *instanceEnv, session, workspaceID string) (string, error) {
+	active, err := bindings.NewStore(ie.db).List(ctx, bindings.Filter{Statuses: []bindings.Status{bindings.Active}})
+	if err != nil {
+		return "", err
+	}
+	roots := map[string][]string{}
+	for _, b := range active {
+		if b.WorkspaceID == workspaceID && b.MailProjectKey != "" {
+			roots[b.MailProjectKey] = append(roots[b.MailProjectKey], b.PaneID)
+		}
+	}
+	if len(roots) <= 1 {
+		for root := range roots {
+			return root, nil
+		}
+		return "", nil
+	}
+	parts := make([]string, 0, len(roots))
+	for _, root := range slices.Sorted(maps.Keys(roots)) {
+		panes := roots[root]
+		slices.Sort(panes)
+		parts = append(parts, fmt.Sprintf("%s (%s)", root, strings.Join(panes, ",")))
+	}
+	return "", fmt.Errorf("resolve live project for session %q: panes span multiple project roots: %s", session, strings.Join(parts, "; "))
 }
 
 // spawnOut is what spawn's output shows: the spawn, its scope (nil when
