@@ -26,8 +26,9 @@ prints ntm's explanation card.
 
 func runModes(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, modesUsage)
-		return exitRefused
+		// As ntm: bare modes prints the verb's help and exits 0.
+		fmt.Fprint(stdout, modesUsage)
+		return exitOK
 	}
 	switch args[0] {
 	case "list", "ls":
@@ -37,10 +38,19 @@ func runModes(args []string, stdout, stderr io.Writer) int {
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, modesUsage)
 		return exitOK
-	default:
-		fmt.Fprintf(stderr, "nhm modes: unknown verb %q\n%s", args[0], modesUsage)
-		return exitRefused
 	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if strings.HasPrefix(a, "-") && a != "-" {
+			fmt.Fprintf(stderr, "nhm modes: unknown flag %q\n%s", a, modesUsage)
+			return exitRefused
+		}
+	}
+	// As ntm: a word that is not a subcommand prints the help too.
+	fmt.Fprint(stdout, modesUsage)
+	return exitOK
 }
 
 // formatFlags are ntm's --format and nhm's --json.

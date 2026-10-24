@@ -77,7 +77,20 @@ func TestModesExplain(t *testing.T) {
 	if code, _, errOut := run("modes", "explain", "telepathy"); code != 2 || !strings.Contains(errOut, "unknown mode") {
 		t.Fatalf("unknown mode = %d %q", code, errOut)
 	}
-	if code, _, _ := run("modes"); code != 2 {
-		t.Fatalf("no verb = %d", code)
+}
+
+// As ntm: bare modes, and a word that is no subcommand, print the help on
+// stdout and exit 0; an unknown flag is refused.
+func TestModesBarePrintsHelp(t *testing.T) {
+	for _, args := range [][]string{{"modes"}, {"modes", "telepathy"}} {
+		code, out, errOut := run(args...)
+		if code != 0 || out != modesUsage || errOut != "" {
+			t.Fatalf("%v = %d %q %q", args, code, out, errOut)
+		}
+	}
+	for _, args := range [][]string{{"modes", "--bogus"}, {"modes", "telepathy", "--bogus"}} {
+		if code, out, errOut := run(args...); code != 2 || out != "" || !strings.Contains(errOut, `unknown flag "--bogus"`) {
+			t.Fatalf("%v = %d %q %q", args, code, out, errOut)
+		}
 	}
 }
