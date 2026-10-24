@@ -66,6 +66,8 @@ type doctorCheck struct {
 	Result string `json:"result"`
 	Detail string `json:"detail"`
 	Fix    string `json:"fix,omitempty"`
+	// guard is a guard line's state: ntm's No Silent Data Loss reads it.
+	guard guards.State
 }
 
 // runDoctor is nhm's doctor --herdr-fit, on its own flags: ntm's doctor
@@ -130,39 +132,25 @@ func doctorChecks(ctx context.Context, socket string, withMail bool) []doctorChe
 	if socket == "" {
 		add(doctorCheck{Name: "herdr", Result: checkFail, Detail: "no herdr socket",
 			Fix: "run nhm inside a herdr pane, or give --socket PATH"})
-		return checks
-	}
-	h := herdr.New(socket)
-	pong, err := h.Ping(ctx)
-	switch {
-	case err != nil:
-		add(doctorCheck{Name: "herdr", Result: checkFail, Detail: fmt.Sprintf("%s: %v", socket, err),
-			Fix: "start the herdr server, or check the socket path"})
-	case pong.Protocol != herdr.Protocol:
-		add(doctorCheck{Name: "herdr", Result: checkFail,
-			Detail: fmt.Sprintf("herdr %s speaks protocol %d; this nhm speaks %d", pong.Version, pong.Protocol, herdr.Protocol),
-			Fix:    "install the nhm release for this herdr, or the herdr release this nhm pins"})
-	default:
-		add(doctorCheck{Name: "herdr", Result: checkOK, Detail: fmt.Sprintf("herdr %s, protocol %d, %s", pong.Version, pong.Protocol, socket)})
-	}
-
-	root, err := store.StateRoot()
-	if err != nil {
-		add(doctorCheck{Name: "state", Result: checkFail, Detail: err.Error(), Fix: "set HOME or XDG_STATE_HOME"})
-		return checks
-	}
-	inst, err := store.Lookup(root, socket)
-	switch {
-	case errors.Is(err, store.ErrNotEnrolled):
-		add(doctorCheck{Name: "enrollment", Result: checkWarn, Detail: "this herdr server is not enrolled; hooks and actions do nothing",
-			Fix: "nhm admin instance enroll (ACFS's install runs it)"})
-	case err != nil:
-		add(doctorCheck{Name: "enrollment", Result: checkFail, Detail: err.Error()})
-	default:
-		add(doctorCheck{Name: "enrollment", Result: checkOK, Detail: fmt.Sprintf("%s (session %s) in %s", inst.ID, inst.Session, inst.Dir)})
-		checks = append(checks, instanceChecks(ctx, inst)...)
+		add(doctorCheck{Name: "enrollment", Result: checkSkip, Detail: "not checked: no herdr socket"})
+	} else {
+		h := herdr.New(socket)
+		pong, err := h.Ping(ctx)
+		switch {
+		case err != nil:
+			add(doctorCheck{Name: "herdr", Result: checkFail, Detail: fmt.Sprintf("%s: %v", socket, err),
+				Fix: "start the herdr server, or check the socket path"})
+		case pong.Protocol != herdr.Protocol:
+			add(doctorCheck{Name: "herdr", Result: checkFail,
+				Detail: fmt.Sprintf("herdr %s speaks protocol %d; this nhm speaks %d", pong.Version, pong.Protocol, herdr.Protocol),
+				Fix:    "install the nhm release for this herdr, or the herdr release this nhm pins"})
+		default:
+			add(doctorCheck{Name: "herdr", Result: checkOK, Detail: fmt.Sprintf("herdr %s, protocol %d, %s", pong.Version, pong.Protocol, socket)})
+		}
+		checks = append(checks, enrollmentChecks(ctx, socket)...)
 	}
 
+	// The checks below need no herdr server: they run without one too.
 	home, err := agentmail.ConfigHome()
 	if err != nil {
 		add(doctorCheck{Name: "identity files", Result: checkFail, Detail: err.Error()})
@@ -194,6 +182,25 @@ func doctorChecks(ctx context.Context, socket string, withMail bool) []doctorChe
 	return checks
 }
 
+// enrollmentChecks report the enrollment of the herdr server at socket
+// and, when it is enrolled, its instance: database, owner, maintenance.
+func enrollmentChecks(ctx context.Context, socket string) []doctorCheck {
+	root, err := store.StateRoot()
+	if err != nil {
+		return []doctorCheck{{Name: "state", Result: checkFail, Detail: err.Error(), Fix: "set HOME or XDG_STATE_HOME"}}
+	}
+	inst, err := store.Lookup(root, socket)
+	switch {
+	case errors.Is(err, store.ErrNotEnrolled):
+		return []doctorCheck{{Name: "enrollment", Result: checkWarn, Detail: "this herdr server is not enrolled; hooks and actions do nothing",
+			Fix: "nhm admin instance enroll (ACFS's install runs it)"}}
+	case err != nil:
+		return []doctorCheck{{Name: "enrollment", Result: checkFail, Detail: err.Error()}}
+	}
+	checks := []doctorCheck{{Name: "enrollment", Result: checkOK, Detail: fmt.Sprintf("%s (session %s) in %s", inst.ID, inst.Session, inst.Dir)}}
+	return append(checks, instanceChecks(ctx, inst)...)
+}
+
 // kindsCheck reports the kind registry: a [kinds.*] table of nhm's config
 // that does not load adds none of its kinds, and only doctor says so.
 func kindsCheck(err error, names []string) doctorCheck {
@@ -216,7 +223,7 @@ func guardChecks(ctx context.Context) []doctorCheck {
 	var checks []doctorCheck
 	for _, kind := range guards.Kinds {
 		for _, r := range guards.Check(kind, env) {
-			c := doctorCheck{Name: "guard " + kind + " " + r.Guard, Detail: string(r.State)}
+			c := doctorCheck{Name: "guard " + kind + " " + r.Guard, Detail: string(r.State), guard: r.State}
 			switch r.State {
 			case guards.Configured, guards.VerifiedForLaunch:
 				c.Result = checkOK

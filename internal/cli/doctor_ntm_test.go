@@ -11,6 +11,8 @@ import (
 
 	"github.com/arosl/nhm/internal/core/contention"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
+	"github.com/arosl/nhm/internal/integrations/guards"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 )
 
 // doctorWorld is an enrolled herdr server (swarmInstance) and a PATH of
@@ -147,8 +149,67 @@ func TestDoctorExitsOneOnlyWhenUnhealthy(t *testing.T) {
 		!strings.Contains(r.Dependencies[0].Message, none) {
 		t.Fatalf("doctor --json without herdr = %d %q %+v", code, errOut, r.Dependencies[0])
 	}
-	if code, _, errOut := run("doctor", "stray"); code != exitError || !strings.Contains(errOut, `unknown command "stray" for "nhm doctor"`) {
-		t.Fatalf("doctor stray = %d %q", code, errOut)
+	// As ntm's: a word that is no sub-verb is ignored, and the doctor runs.
+	if code, out, errOut := run("doctor", "stray", "--no-mail", "--socket", none); code != exitError || errOut != "Error: ecosystem is unhealthy\n" ||
+		!strings.Contains(out, "Overall: UNHEALTHY (") {
+		t.Fatalf("doctor stray = %d %q\n%s", code, errOut, out)
+	}
+}
+
+// Without a herdr socket, the checks that need no server still run, and a
+// check that did not run says why: no item claims what doctor did not see.
+func TestDoctorWithoutHerdrRunsTheOtherChecks(t *testing.T) {
+	doctorWorld(t) // HERDR_SOCKET_PATH is empty; Agent Mail's URL is a dead port
+	code, out, _ := run("doctor", "--json")
+	r := decodeDoctor(t, out)
+	if code != exitError || r.Dependencies[0].Name != "herdr" || r.Dependencies[0].Status != "error" ||
+		!strings.Contains(r.Dependencies[0].Message, "no herdr socket") {
+		t.Fatalf("herdr = %d %+v", code, r.Dependencies[0])
+	}
+	cfg := map[string]ConfigCheck{}
+	for _, c := range r.Configuration {
+		cfg[c.Name] = c
+	}
+	if e := cfg["enrollment"]; e.Status != "unknown" || e.Message != "not checked: no herdr socket" {
+		t.Fatalf("enrollment = %+v", e)
+	}
+	for _, name := range []string{"identity files", "kinds", "guard claude dcg", "guard codex rch"} {
+		if cfg[name].Status == "" {
+			t.Errorf("no %q in %v", name, cfg)
+		}
+	}
+	for _, d := range r.Daemons {
+		if d.Status == "" {
+			t.Errorf("daemon %s has no status: %+v", d.Name, d)
+		}
+	}
+	if am := r.Daemons[0]; am.Name != "agent-mail" || am.Running || am.Status != "warning" || !strings.Contains(am.Message, "fix: start Agent Mail") {
+		t.Fatalf("agent-mail = %+v", am)
+	}
+	if r.Invariants[0].Status == "unverified" {
+		t.Fatalf("no silent data loss = %+v", r.Invariants[0])
+	}
+}
+
+// No Silent Data Loss reads each dcg guard's state: a kind that cannot take
+// dcg is unguarded, though its doctor line is ok.
+func TestDoctorNoSilentDataLossReadsTheGuardState(t *testing.T) {
+	checks := func(unsupported string) []doctorCheck {
+		var out []doctorCheck
+		for _, k := range kinds.Names() {
+			c := doctorCheck{Name: "guard " + k + " dcg", Result: checkOK, Detail: "configured", guard: guards.Configured}
+			if k == unsupported {
+				c.Detail, c.guard = "unsupported: no hook", guards.Unsupported
+			}
+			out = append(out, c)
+		}
+		return out
+	}
+	if i := doctorInvariants(&DoctorReport{}, checks(""))[0]; i.Status != "ok" || i.Message != "dcg guards every agent kind" {
+		t.Fatalf("all guarded = %+v", i)
+	}
+	if i := doctorInvariants(&DoctorReport{}, checks("agy"))[0]; i.Status != "warning" || i.Message != "dcg does not guard: agy" {
+		t.Fatalf("agy unsupported = %+v", i)
 	}
 }
 
@@ -188,11 +249,13 @@ func TestDoctorContention(t *testing.T) {
 
 	fakeContention(t, map[string][2]string{
 		"42": {"br\x00ready\x00", filepath.Join(cwd, "sub")},
-		"7":  {"/usr/bin/cargo\x00build\x00", "/elsewhere"},
+		// A cwd and an argument with an escape, a newline and a tab: each
+		// row stays one line.
+		"7": {"/usr/bin/cargo\x00build\tx\x00", "/else\x1b[31mwhere\nx"},
 	})
 	code, out, errOut := run("doctor", "contention")
 	want := "PID\tAGE\tRESOURCE\tIN_SWARM\tCWD\tCOMMAND\n" +
-		"7\t0s\tcargo_registry\tfalse\t/elsewhere\t/usr/bin/cargo build\n" +
+		"7\t0s\tcargo_registry\tfalse\t/elsewhere x\t/usr/bin/cargo build x\n" +
 		"42\t0s\tbeads_db\ttrue\t" + filepath.Join(cwd, "sub") + "\tbr ready\n"
 	if code != 0 || out != want || errOut != "" {
 		t.Fatalf("holders = %d %q %q", code, out, errOut)

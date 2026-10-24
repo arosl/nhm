@@ -16,8 +16,8 @@
 // per-tool health and capability probes; the safety defaults and the
 // invariants read nhm's guards, store and herdr, and the ones with no nhm
 // evidence are unverified. --socket, --no-mail and --herdr-fit stay nhm's.
-// contention scans through internal/core/contention, and prints each
-// command without control characters.
+// contention scans through internal/core/contention, and prints each cwd
+// and command on one line, without control characters.
 package cli
 
 import (
@@ -143,7 +143,7 @@ and configured. Checks:
   - Safety defaults and design invariants
 
 This command helps diagnose issues before spawning sessions.`,
-		Args: cobra.NoArgs,
+		// No Args, as ntm's: an extra word that is no sub-verb is ignored.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			if fit || placements {
@@ -239,7 +239,7 @@ func newDoctorContentionCmd() *cobra.Command {
 			}
 			fmt.Fprintln(out, "PID\tAGE\tRESOURCE\tIN_SWARM\tCWD\tCOMMAND")
 			for _, h := range holders {
-				fmt.Fprintf(out, "%d\t%s\t%s\t%t\t%s\t%s\n", h.PID, h.Age, h.Resource, h.InSwarm, h.CWD, stripControl(h.Command))
+				fmt.Fprintf(out, "%d\t%s\t%s\t%t\t%s\t%s\n", h.PID, h.Age, h.Resource, h.InSwarm, contentionCell(h.CWD), contentionCell(h.Command))
 			}
 			return nil
 		},
@@ -250,6 +250,17 @@ func newDoctorContentionCmd() *cobra.Command {
 	return cmd
 }
 
+// contentionCell is a holder's cwd or command made safe for one cell of
+// the table: no control characters, and a newline or tab as a space.
+func contentionCell(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, stripControl(s))
+}
+
 // doctorStatus is ntm's status word of one of nhm's check results.
 func doctorStatus(result string) string {
 	switch result {
@@ -257,6 +268,8 @@ func doctorStatus(result string) string {
 		return "ok"
 	case checkWarn:
 		return "warning"
+	case checkSkip:
+		return "unknown" // not checked; its detail says why
 	default:
 		return "error"
 	}
@@ -392,6 +405,7 @@ func doctorDaemons(ctx context.Context, nhm []doctorCheck, withMail bool) []Daem
 	case !withMail:
 		am.Status, am.Message = "unknown", "not checked (--no-mail)"
 	default:
+		am.Status, am.Message = "unknown", "not checked"
 		for _, c := range nhm {
 			if c.Name != "agent mail" {
 				continue
@@ -457,10 +471,10 @@ func doctorConfiguration(nhm []doctorCheck) []ConfigCheck {
 	return out
 }
 
-// doctorSafetyDefaults are nhm's: its redaction scan's mode (ntm's
-// default, warn, as nhm has no [redaction] config yet), no privacy mode,
-// encryption at rest or strict preflight, and the guards nhm puts on
-// Claude Code.
+// doctorSafetyDefaults are nhm's: the redaction mode of mail send's scan
+// (ntm's default, warn, as nhm has no [redaction] config yet; nhm send
+// does not scan the operator's prompt), no privacy mode, encryption at
+// rest or strict preflight, and the guards nhm puts on Claude Code.
 func doctorSafetyDefaults(ctx context.Context) SafetyDefaults {
 	sd := SafetyDefaults{RedactionMode: "warn", ClaudeAgentHooks: []string{}}
 	env := guards.Env{}
@@ -491,6 +505,8 @@ func doctorInvariants(r *DoctorReport, nhm []doctorCheck) []InvariantCheck {
 	var out []InvariantCheck
 
 	// No Silent Data Loss: dcg guards the shell of every kind nhm spawns.
+	// The guard's state decides: a kind that cannot take dcg is unguarded,
+	// though its doctor line is ok.
 	nsdl := InvariantCheck{ID: "no_silent_data_loss", Name: "No Silent Data Loss"}
 	var unguarded []string
 	for _, k := range kinds.Names() {
@@ -499,7 +515,7 @@ func doctorInvariants(r *DoctorReport, nhm []doctorCheck) []InvariantCheck {
 			continue
 		}
 		nsdl.Details = append(nsdl.Details, fmt.Sprintf("dcg for %s: %s", k, c.Detail))
-		if c.Result != checkOK {
+		if c.guard != guards.Configured && c.guard != guards.VerifiedForLaunch {
 			unguarded = append(unguarded, k)
 		}
 	}
