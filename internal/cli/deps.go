@@ -183,12 +183,26 @@ func depVersion(ctx context.Context, path string, args []string, firstLine bool)
 	if len(args) == 0 {
 		args = []string{"--version"}
 	}
+	v, _ := runVersion(ctx, path, args, firstLine)
+	return v
+}
+
+// runVersion is depVersion with the command's own result: nil when it
+// exited 0.
+func runVersion(ctx context.Context, path string, args []string, firstLine bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, depVersionTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.WaitDelay = 2 * time.Second
-	raw, _ := cmd.CombinedOutput()
-	text := stripControl(string(raw))
+	raw, err := cmd.CombinedOutput()
+	return sanitizeVersion(string(raw), firstLine), err
+}
+
+// sanitizeVersion is a version command's output made safe for a
+// terminal: no control or format characters, spaces collapsed, at most
+// 240 runes; with firstLine, only its first line that is not blank.
+func sanitizeVersion(raw string, firstLine bool) string {
+	text := stripControl(raw)
 	if firstLine {
 		for _, l := range strings.Split(text, "\n") {
 			if strings.TrimSpace(l) != "" {

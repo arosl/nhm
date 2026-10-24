@@ -20,15 +20,20 @@ import (
 	"github.com/arosl/nhm/internal/store"
 )
 
-const doctorUsage = `Usage: nhm doctor [--socket PATH] [--no-mail] [--json]
+const doctorUsage = `Usage: nhm doctor [-v|--verbose] [--socket PATH] [--no-mail] [--json]
        nhm doctor --herdr-fit [--placements] [--socket PATH] [--json]
 
-Check what nhm needs: the herdr server and its protocol, the enrollment of
-this server, the state database, the owner switch, Agent Mail, and the
-directory of Agent Mail's identity files, the kinds (built-in and from
-nhm's config), and, when nhm owns the server,
-the maintenance runner (nhm maintain). Each check says ok, warn or
-fail, and what to do. Exits 1 when a check fails.
+ntm's doctor on herdr: Tools (bv and br required, the other flywheel
+tools optional), Dependencies (herdr in tmux's place, on nhm's protocol;
+go; the optional grok and omp), Daemons (Agent Mail, the cm server),
+Configuration (nhm's state directory, .beads, and nhm's checks: the
+enrollment of this server, the state database, the owner switch, the
+directory of Agent Mail's identity files, the kinds, each guard per
+kind, and, when nhm owns the server, the maintenance runner), Safety
+Defaults and Design Invariants. Each line is ✓, ⚠, ✗ or ?, and a box
+ends it: Overall: HEALTHY, or UNHEALTHY with the counts. -v adds each
+invariant's details. --json prints ntm's DoctorReport. It exits 1 only
+when the report is unhealthy. --no-mail skips the Agent Mail check.
 
 --herdr-fit checks that the running herdr still fits nhm's interactive
 surfaces (the X0 fit test): its protocol and version, nhm's plugin, and a
@@ -56,6 +61,8 @@ type doctorCheck struct {
 	Fix    string `json:"fix,omitempty"`
 }
 
+// runDoctor is nhm's doctor --herdr-fit, on its own flags: ntm's doctor
+// (newDoctorCmd) hands that mode to it. Its checks and envelope are nhm's.
 func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -66,7 +73,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	placements := fs.Bool("placements", false, "with --herdr-fit: also open a tab, a split and an overlay (sandbox, CI)")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args)
-	if err != nil || len(pos) > 0 || *placements && !*fit || *fit && *noMail {
+	// The report itself is ntm's (newDoctorCmd); this runs --herdr-fit.
+	if err != nil || len(pos) > 0 || !*fit || *fit && *noMail {
 		if err == nil {
 			fmt.Fprint(stderr, doctorUsage)
 		}
@@ -76,18 +84,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "nhm doctor: --placements opens panes that a live server's clients see; it runs only in CI (CI=true) or in nhm's sandbox (SANDBOX_INSIDE=1)")
 		return exitRefused
 	}
-	budget := 20 * time.Second
-	if *fit {
-		budget = 90 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	var checks []doctorCheck
-	if *fit {
-		checks = herdrFitChecks(ctx, *socket, *placements)
-	} else {
-		checks = doctorChecks(ctx, *socket, !*noMail)
-	}
+	checks := herdrFitChecks(ctx, *socket, *placements)
 	failed := 0
 	for _, c := range checks {
 		if c.Result == checkFail {

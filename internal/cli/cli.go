@@ -93,7 +93,8 @@ Usage:
                          the project's inbox, read-only, as ntm's mail inbox
   nhm mail inbox (--mark-read | --keep-unread) [--agent NAME] [--json]
                          one agent's unread mail by thread; --mark-read marks it read
-  nhm doctor [--json]    check what nhm needs
+  nhm doctor [-v] [--json]
+                         ntm's ecosystem check, on herdr and nhm's setup
   nhm deps [-v] [--json] (also check)
                          the tools and agent CLIs installed, as ntm's deps
   nhm tutorial           where ACFS's lessons are (ntm's tutorial is about tmux)

@@ -301,7 +301,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "watch", aliases: []string{"w"}, run: runWatch, own: []string{"no-color"}},
 		{name: "activity", run: runActivity},
 		{name: "health", run: runHealth},
-		{name: "doctor", run: runDoctor},
 		// ntm's deps, with its alias check (the operator's ruling, nhm-k9d,
 		// 2026-10-23).
 		{name: "deps", aliases: []string{"check"}, run: runDeps},
@@ -432,6 +431,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		defaultHelp(c, args)
 	})
 	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd())
+	cmd.AddCommand(newDoctorCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}

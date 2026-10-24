@@ -361,20 +361,22 @@ func TestStripControl(t *testing.T) {
 	}
 }
 
+// nhm's own checks reach ntm's report: herdr as a dependency, the rest as
+// configuration (the full report: doctor_ntm_test.go).
 func TestDoctor(t *testing.T) {
 	s := swarmInstance(t)
-	code, out, _ := run("doctor", "--no-mail", "--json", "--socket", s.SocketPath)
-	checks := envelopeOf(t, out)["result"].(map[string]any)["checks"].([]any)
+	_, out, _ := run("doctor", "--no-mail", "--json", "--socket", s.SocketPath)
+	r := decodeDoctor(t, out)
 	results := map[string]string{}
-	for _, c := range checks {
-		m := c.(map[string]any)
-		results[m["name"].(string)] = m["result"].(string)
+	for _, c := range r.Configuration {
+		results[c.Name] = c.Status
 	}
-	if code != 0 || results["herdr"] != "ok" || results["enrollment"] != "ok" || results["database"] != "ok" || results["owner"] != "warn" {
-		t.Fatalf("doctor = %d %v", code, results)
+	if r.Dependencies[0].Name != "herdr" || r.Dependencies[0].Status != "ok" || results["enrollment"] != "ok" ||
+		results["database"] != "ok" || results["owner"] != "warning" {
+		t.Fatalf("doctor = %+v %v", r.Dependencies[0], results)
 	}
-	code, out, _ = run("doctor", "--no-mail", "--socket", filepath.Join(t.TempDir(), "none.sock"))
-	if code != 1 || !strings.Contains(out, "fail herdr") {
+	code, out, _ := run("doctor", "--no-mail", "--socket", filepath.Join(t.TempDir(), "none.sock"))
+	if code != 1 || !strings.Contains(out, "✗ herdr") {
 		t.Fatalf("doctor without herdr = %d %s", code, out)
 	}
 }
