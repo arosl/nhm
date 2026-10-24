@@ -62,7 +62,7 @@ func viewsEnv(c ui.Context) views.Env {
 			}
 			return b.String(), nil
 		},
-		Version:       verbText(runVersion),
+		Version:       verbText(verbRun("version")),
 		Compatibility: verbText(runCompatibility, "status"),
 		Recover:       verbText(runRecoverInspect, withSocket()...),
 		Feedback:      verbText(runFeedback, withSocket("list")...),

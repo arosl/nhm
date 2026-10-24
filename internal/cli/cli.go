@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/arosl/nhm/internal/herdr/schema"
 )
 
@@ -150,135 +152,13 @@ next releases.
 `
 
 // Run executes nhm with args (without the program name) and returns the
-// exit code.
+// exit code. The robot flags have their own grammar (runRobot); every
+// other call goes through ntm's root (root.go).
 func Run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return 2
+	if len(args) > 0 && strings.HasPrefix(args[0], "--robot-") {
+		return runRobot(args, stdout, stderr)
 	}
-	if u, ok := leafHelp(args); ok {
-		fmt.Fprint(stdout, u)
-		return 0
-	}
-	switch args[0] {
-	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usage)
-		return 0
-	case "version", "--version":
-		return runVersion(args[1:], stdout, stderr)
-	case "resolve":
-		return runResolve(args[1:], stdout, stderr)
-	case "adopt":
-		return runAdopt(args[1:], stdout, stderr)
-	case "move":
-		return runMove(args[1:], stdout, stderr)
-	case "arrange":
-		return runArrange(args[1:], stdout, stderr)
-	case "retire":
-		return runRetire(args[1:], stdout, stderr)
-	case "recycle":
-		return runRecycle(args[1:], stdout, stderr)
-	case "reap":
-		return runReap(args[1:], stdout, stderr)
-	case "kill":
-		return runKill(args[1:], stdout, stderr)
-	case "attach":
-		return runAttach(args[1:], stdout, stderr)
-	case "zoom":
-		return runZoom(args[1:], stdout, stderr)
-	case "view", "tile", "v":
-		// ntm's view, with its aliases (the operator's ruling, nhm-k9d,
-		// 2026-10-23).
-		return runView(args[1:], stdout, stderr)
-	case "diff":
-		return runDiff(args[1:], stdout, stderr)
-	case "spawn":
-		return runSpawn(args[1:], stdout, stderr)
-	case "add":
-		return runAdd(args[1:], stdout, stderr)
-	case "new":
-		return runNew(args[1:], stdout, stderr)
-	case "admin":
-		return runAdmin(args[1:], stdout, stderr)
-	case "status":
-		return runStatus(args[1:], stdout, stderr)
-	case "list":
-		return runList(args[1:], stdout, stderr)
-	case "snapshot":
-		return runSnapshot(args[1:], stdout, stderr)
-	case "attention":
-		return runAttention(args[1:], stdout, stderr)
-	case "read":
-		return runRead(args[1:], stdout, stderr)
-	case "logs":
-		// ntm's logs <session>; an agent's name runs read (the operator's
-		// ruling, nhm-k9d, 2026-10-23).
-		return runLogs(args[1:], stdout, stderr)
-	case "watch", "w":
-		// ntm's watch and its alias w (the operator's ruling, nhm-zac,
-		// 2026-10-23).
-		return runWatch(args[1:], stdout, stderr)
-	case "activity":
-		return runActivity(args[1:], stdout, stderr)
-	case "health":
-		return runHealth(args[1:], stdout, stderr)
-	case "doctor":
-		return runDoctor(args[1:], stdout, stderr)
-	case "deps", "check":
-		// ntm's deps, with its alias check (the operator's ruling,
-		// nhm-k9d, 2026-10-23).
-		return runDeps(args[1:], stdout, stderr)
-	case "tutorial":
-		return runTutorial(args[1:], stdout, stderr)
-	case "wake":
-		return runWake(args[1:], stdout, stderr)
-	case "maintain":
-		return runMaintain(args[1:], stdout, stderr)
-	case "mail":
-		return runMail(args[1:], stdout, stderr)
-	case "capabilities":
-		return runCapabilities(args[1:], stdout, stderr)
-	case "compatibility":
-		return runCompatibility(args[1:], stdout, stderr)
-	case "quota":
-		return runQuota(args[1:], stdout, stderr)
-	case "limits":
-		return runLimits(args[1:], stdout, stderr)
-	case "palette":
-		return runPalette(args[1:], stdout, stderr)
-	case "board", "dashboard", "dash", "d":
-		// dashboard, with ntm's short names dash and d, is ntm's name for
-		// the board (the operator's F.7 ruling, nhm-k9d); dashboard
-		// <session> shows that session's workspace (the operator's ruling,
-		// 2026-10-23).
-		return runBoard(args[1:], stdout, stderr)
-	case "menu":
-		return runMenu(args[1:], stdout, stderr)
-	case "bind":
-		return runBind(args[1:], stdout, stderr)
-	case "ui":
-		return runUI(args[1:], stdout, stderr)
-	case "wait":
-		return runWait(args[1:], stdout, stderr)
-	case "interrupt":
-		return runInterrupt(args[1:], stdout, stderr)
-	case "send":
-		return runSend(args[1:], stdout, stderr)
-	case "memory":
-		return runMemory(args[1:], stdout, stderr)
-	case "feedback":
-		return runFeedback(args[1:], stdout, stderr)
-	case "modes":
-		return runModes(args[1:], stdout, stderr)
-	case "ensemble":
-		return runEnsemble(args[1:], stdout, stderr)
-	default:
-		if strings.HasPrefix(args[0], "--robot-") {
-			return runRobot(args, stdout, stderr)
-		}
-		fmt.Fprintf(stderr, "nhm: unknown command %q\n\n%s", args[0], usage)
-		return 2
-	}
+	return newRoot(stdout, stderr).execute(args, stdout, stderr)
 }
 
 // VersionInfo is the JSON form of `nhm version --json`.
@@ -289,41 +169,39 @@ type VersionInfo struct {
 	HerdrProtocol int    `json:"herdr_protocol"`
 }
 
-func runVersion(args []string, stdout, stderr io.Writer) int {
-	asJSON, short := false, false
-	for _, a := range args {
-		switch a {
-		case "--json":
-			asJSON = true
-		case "--short", "-s":
-			short = true
-		default:
-			fmt.Fprintf(stderr, "nhm version: unknown flag %q\n", a)
-			return 2
-		}
+// newVersionCmd is ntm's version verb on the shared parser: --short
+// (-s), and the root's --json. Like ntm's, it takes no argument check.
+func newVersionCmd() *cobra.Command {
+	var short bool
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return printVersion(cmd.OutOrStdout(), wantJSON(cmd), short)
+		},
 	}
+	cmd.Flags().BoolVarP(&short, "short", "s", false, "print the version alone")
+	return cmd
+}
+
+func printVersion(stdout io.Writer, asJSON, short bool) error {
 	s, err := schema.Load()
 	if err != nil {
-		fmt.Fprintf(stderr, "nhm version: %v\n", err)
-		return 1
+		return err
 	}
 	info := VersionInfo{Version: Version, Commit: Commit, NTMCommit: NTMCommit, HerdrProtocol: s.Protocol}
 	if asJSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(info); err != nil {
-			fmt.Fprintf(stderr, "nhm version: %v\n", err)
-			return 1
-		}
-		return 0
+		return enc.Encode(info)
 	}
 	if short {
 		// ntm's --short: the version alone (--json wins over it, as in ntm).
 		fmt.Fprintln(stdout, info.Version)
-		return 0
+		return nil
 	}
 	// ntm's headline, "ntm version <v>": ACFS's export-config.sh reads
 	// field 3 of line 1. The detail goes to line 2 (nhm-k9d).
 	fmt.Fprintf(stdout, "nhm version %s\ncommit %s, herdr protocol %d, ntm %.8s\n", info.Version, info.Commit, info.HerdrProtocol, info.NTMCommit)
-	return 0
+	return nil
 }

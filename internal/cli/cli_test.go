@@ -28,20 +28,48 @@ func TestVersionJSON(t *testing.T) {
 }
 
 func TestVersionText(t *testing.T) {
-	code, out, _ := run("--version")
-	if code != 0 || !strings.HasPrefix(out, "nhm ") || !strings.Contains(out, "herdr protocol 22") {
+	code, out, _ := run("version")
+	if code != 0 || !strings.HasPrefix(out, "nhm version ") || !strings.Contains(out, "herdr protocol 22") {
 		t.Fatalf("exit %d, stdout %q", code, out)
 	}
 }
 
+// ntm's --version and -V print the one line "ntm version X" (cobra's
+// version flag with ntm's template).
+func TestVersionFlagPrintsOneLine(t *testing.T) {
+	for _, flag := range []string{"--version", "-V"} {
+		code, out, errOut := run(flag)
+		if code != 0 || out != "nhm version "+Version+"\n" || errOut != "" {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q", flag, code, out, errOut)
+		}
+	}
+}
+
+// ntm exits 1 for a usage error, with "Error: <msg>" on stderr and
+// nothing on stdout.
 func TestUsageErrors(t *testing.T) {
-	for _, args := range [][]string{{}, {"frobnicate"}, {"version", "--yaml"}} {
-		code, out, errOut := run(args...)
-		if code != 2 || out != "" || errOut == "" {
-			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"frobnicate"}, `Error: unknown command "frobnicate" for "nhm"` + "\n"},
+		{[]string{"version", "--yaml"}, "Error: unknown flag: --yaml\n"},
+	} {
+		code, out, errOut := run(c.args...)
+		if code != 1 || out != "" || errOut != c.want {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", c.args, code, out, errOut)
 		}
 	}
 	if code, out, _ := run("help"); code != 0 || !strings.Contains(out, "Usage:") {
 		t.Errorf("help: exit %d, stdout %q", code, out)
+	}
+}
+
+// Bare nhm prints the usage on stdout and exits 0, as bare ntm prints its
+// help.
+func TestBareRootPrintsUsage(t *testing.T) {
+	code, out, errOut := run()
+	if code != 0 || out != usage || errOut != "" {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
