@@ -212,7 +212,7 @@ func TestMailInboxListsAndMarksRead(t *testing.T) {
 		SELECT binding_id, '11', '2026-10-12T05:00:00Z' FROM bindings WHERE mail_name = 'IcyKnoll'`); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errOut := runVerb(runMail, "inbox", "--agent", "IcyKnoll", "--project", "/p")
+	code, out, errOut := runVerb(runMail, "inbox", "--agent", "IcyKnoll", "--project", "/p", "--mark-read")
 	if code != exitOK {
 		t.Fatalf("exit %d: %s %s", code, out, errOut)
 	}

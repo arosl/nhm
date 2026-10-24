@@ -142,9 +142,32 @@ func TestMailInboxSessionIsNTMsProjectInbox(t *testing.T) {
 	m.fetched(t)
 }
 
+// The bare form is ntm's project inbox too (the operator's ruling,
+// nhm-2p6, 2026-10-24): the cwd's project, or AGENT_MAIL_PROJECT, every
+// agent's mail, nothing marked read; --agent keeps one agent.
+func TestMailInboxBareIsNTMsProjectInbox(t *testing.T) {
+	m := swarmMail(t)
+	t.Setenv("AGENT_MAIL_PROJECT", "/q")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	code, out, errOut := run("mail", "inbox")
+	want := "Project Inbox: q\n[URGENT] Build plan\nBlueLake → IcyKnoll\nshared\nOther → IcyKnoll, BlueLake\n"
+	if code != 0 || out != want || errOut != "" {
+		t.Fatalf("mail inbox = %d %q %q, want %q", code, out, errOut, want)
+	}
+	if got := m.fetched(t); fmt.Sprint(got) != "[BlueLake IcyKnoll Other]" || fmt.Sprint(m.project) != "[/q]" {
+		t.Fatalf("read %v of project %v", got, m.project)
+	}
+	code, out, _ = run("mail", "inbox", "--agent", "BlueLake", "--project", "/p")
+	if code != 0 || out != "Project Inbox: p\nshared\nOther → BlueLake\n" {
+		t.Fatalf("mail inbox --agent BlueLake = %d %q", code, out)
+	}
+	if got := m.fetched(t); fmt.Sprint(got) != "[BlueLake]" {
+		t.Fatalf("--agent read %v", got)
+	}
+}
+
 // --limit is per agent (50 by default), --urgent asks for the urgent
-// mail, --agent and --session-agents keep the agents, and nhm's own
-// --keep-unread changes nothing.
+// mail, and --agent and --session-agents keep the agents.
 func TestMailInboxSessionFlags(t *testing.T) {
 	s, _, _ := waitInstance(t, func(string) map[string]any { return nil })
 	m := swarmMail(t)
@@ -164,7 +187,7 @@ func TestMailInboxSessionFlags(t *testing.T) {
 	if got := m.fetched(t); fmt.Sprint(got) != "[BlueLake]" {
 		t.Errorf("--agent read %v", got)
 	}
-	code, out, _ := run("mail", "inbox", "swarm", "--urgent", "--limit", "5", "--keep-unread", "--socket", s.SocketPath)
+	code, out, _ := run("mail", "inbox", "swarm", "--urgent", "--limit", "5", "--socket", s.SocketPath)
 	if code != 0 || out != "Project Inbox: p\n[URGENT] Build plan\nBlueLake → IcyKnoll\n" {
 		t.Errorf("--urgent = %d %q", code, out)
 	}
@@ -206,6 +229,11 @@ func TestMailInboxSessionEmptyAndRefusals(t *testing.T) {
 		{[]string{"swarm", "extra"}, exitRefused, "Usage: nhm mail inbox"},
 		{[]string{"swarm", "--limit", "0"}, exitRefused, "Usage: nhm mail inbox"},
 		{[]string{"--session-agents"}, exitRefused, "--session-agents: name the session"},
+		// nhm's own form reads one agent's unread mail.
+		{[]string{"--mark-read", "--keep-unread"}, exitRefused, "give --mark-read or --keep-unread, not both"},
+		{[]string{"swarm", "--keep-unread"}, exitRefused, "they take no session, --urgent or --session-agents"},
+		{[]string{"--urgent", "--mark-read"}, exitRefused, "they take no session, --urgent or --session-agents"},
+		{[]string{"--session-agents", "--keep-unread"}, exitRefused, "they take no session, --urgent or --session-agents"},
 	} {
 		t.Setenv("HERDR_WORKSPACE_ID", "")
 		code, _, errOut := run(append(append([]string{"mail", "inbox"}, c.args...), "--socket", s.SocketPath)...)

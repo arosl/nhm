@@ -17,30 +17,29 @@ import (
 	"github.com/arosl/nhm/internal/integrations/agentmail"
 )
 
-const mailUsage = `Usage: nhm mail inbox [--agent NAME] [--project KEY] [--keep-unread] [--limit N] [--socket PATH] [--json]
-       nhm mail inbox <session> [--agent NAME] [--urgent] [--session-agents] [--limit N] [--project KEY] [--json]
+const mailUsage = `Usage: nhm mail inbox [session] [--agent NAME] [--urgent] [--session-agents] [--limit N] [--project KEY] [--socket PATH] [--json]
+       nhm mail inbox (--mark-read | --keep-unread) [--agent NAME] [--project KEY] [--limit N] [--socket PATH] [--json]
 
-List every unread message sent to the agent (to or bcc), oldest first,
-grouped by thread, with bodies; then mark each listed message read. cc
-mail is counted and stays unread. --keep-unread marks nothing.
+ntm's mail inbox: the project's inbox, every agent's recent mail
+(--limit per agent, default 50), read or not, each message once with the
+agents that got it, oldest first. --agent keeps one agent, --urgent the
+urgent mail, --session-agents the agents bound in the session (without
+a session, the calling pane's). The session is a workspace id or label.
+The project is --project (Agent Mail's project key, the project's
+absolute path), else that of the session's bound agents, else
+AGENT_MAIL_PROJECT, else the git work tree of the cwd. Unlike ntm's, it
+marks nothing read.
 
-The agent is --agent, else AGENT_MAIL_AGENT or AGENT_NAME, else the
-binding of the calling pane. The AGENT_MAIL_AGENT that nhm spawn set in
-the pane does not count once the pane's binding names another agent.
-The project is --project (Agent Mail's
-project key, the project's absolute path), else AGENT_MAIL_PROJECT, else
-the binding's project, else the git work tree of the cwd. A listing that
-reaches --limit (default 200) is refused: older mail would sink out of
-sight.
-
-With a session (a workspace id or label), or with ntm's --urgent or
---session-agents, it is ntm's mail inbox: the project's inbox, every
-agent's recent mail (--limit per agent, default 50), read or not, each
-message once with the agents that got it, oldest first. --agent keeps
-one agent, --urgent the urgent mail, --session-agents the agents bound
-in the session (without a session, the calling pane's). The project is
---project, else that of the session's bound agents, else as above.
-Unlike ntm's, it marks nothing read.
+--mark-read (nhm's own) lists every unread message sent to one agent (to
+or bcc), oldest first, grouped by thread, with bodies; then it marks each
+listed message read. cc mail is counted and stays unread. --keep-unread
+lists the same and marks nothing. The agent is --agent, else
+AGENT_MAIL_AGENT or AGENT_NAME, else the binding of the calling pane.
+The AGENT_MAIL_AGENT that nhm spawn set in the pane does not count once
+the pane's binding names another agent. The project is --project, else
+AGENT_MAIL_PROJECT, else the binding's project, else the git work tree
+of the cwd. A listing that reaches --limit (default 200) is refused:
+older mail would sink out of sight.
 `
 
 func runMail(args []string, stdout, stderr io.Writer) int {
@@ -57,10 +56,11 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, mailUsage) }
 	agent := fs.String("agent", "", "the Agent Mail name")
 	project := fs.String("project", "", "Agent Mail's project key")
-	keep := fs.Bool("keep-unread", false, "mark nothing read")
-	limit := fs.Int("limit", 0, "the most messages one listing reads (200; ntm's form: 50 per agent)")
-	urgent := fs.Bool("urgent", false, "ntm's form: only the urgent mail")
-	sessionAgents := fs.Bool("session-agents", false, "ntm's form: only the agents bound in the session")
+	markRead := fs.Bool("mark-read", false, "nhm's form: list one agent's unread mail and mark it read")
+	keep := fs.Bool("keep-unread", false, "nhm's form: list one agent's unread mail and mark nothing read")
+	limit := fs.Int("limit", 0, "the most messages one listing reads (50 per agent; nhm's form: 200)")
+	urgent := fs.Bool("urgent", false, "only the urgent mail")
+	sessionAgents := fs.Bool("session-agents", false, "only the agents bound in the session")
 	socket := fs.String("socket", "", "herdr API socket")
 	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
 	pos, err := parseInterleaved(fs, args[1:])
@@ -72,10 +72,17 @@ func runMail(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if len(pos) == 1 || *urgent || *sessionAgents {
-		// ntm's mail inbox [session] (the operator's ruling, nhm-k9d,
-		// 2026-10-23); --keep-unread changes nothing there, as it marks
-		// nothing read.
+	switch {
+	case *markRead && *keep:
+		fmt.Fprintf(stderr, "nhm mail inbox: give --mark-read or --keep-unread, not both\n%s", mailUsage)
+		return exitRefused
+	case (*markRead || *keep) && (len(pos) == 1 || *urgent || *sessionAgents):
+		fmt.Fprintf(stderr, "nhm mail inbox: --mark-read and --keep-unread list one agent's unread mail; they take no session, --urgent or --session-agents\n%s", mailUsage)
+		return exitRefused
+	case !*markRead && !*keep:
+		// ntm's mail inbox [session], with or without a session (the
+		// operator's rulings: read-only, nhm-k9d, 2026-10-23; the bare
+		// form too, nhm-2p6, 2026-10-24).
 		o := projectInbox{agent: *agent, project: *project, urgent: *urgent, sessionAgents: *sessionAgents,
 			limit: 50, socket: *socket, asJSON: *asJSON}
 		if len(pos) == 1 {
