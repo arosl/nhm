@@ -61,9 +61,13 @@ model is pinned, so it takes a count only.
 Start agents in a herdr workspace (the session, by label). -l L makes the
 session <session>--L, as ntm's goal label; a session name may not hold
 "--". Every agent starts first: an Agent Mail identity, a pane, the
-binding, agent.start, the labels. Then the spawn waits for them to be
-ready, and sends each its kickoff, paced by --stagger-mode: --prompt, or
-ACFS's default_new_agent palette prompt.
+binding, agent.start, the labels. As in ntm, an agent of spawn gets its
+kind's [prompts] default (cc_default, cod_default, agy_default,
+omp_default, or the *_default_file), then --prompt; add sends --prompt
+only. An agent with neither gets no prompt. When an agent gets one, the
+spawn waits for the agents to be ready and sends the prompts, paced by
+--stagger-mode; when none does, it does not wait, except with --assign
+or --trust-folder.
 
 --assign claims a bead for each agent and sends it, after your yes, as
 ntm's spawn --assign does, with ntm's choice of beads. The work is
@@ -293,6 +297,23 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 	}
 	// The agents start in the order of their flags, as ntm's do.
 	req.Agents = append([]spawn.Want(nil), f.wants...)
+	// ntm's spawn sends each kind's [prompts] default ahead of --prompt;
+	// its add sends --prompt only. --assign sends --prompt ahead of the
+	// work (AssignPrefix).
+	if !add && !f.noKickoff && !f.assign {
+		cfg, err := loadSpawnConfig()
+		if err != nil {
+			return req, err
+		}
+		if req.DefaultPrompts, err = cfg.Prompts.defaultPrompts(req.Agents); err != nil {
+			return req, err
+		}
+	}
+	// As ntm's spawn and add: with no prompt to send, they start the
+	// agents and do not wait for them. --assign waits (its work goes to
+	// ready agents), and so does nhm's --trust-folder, which answers the
+	// folder-trust dialog during the wait.
+	req.NoWait = !f.assign && !f.trustFolder && (f.noKickoff || (req.Prompt == "" && len(req.DefaultPrompts) == 0))
 	return req, nil
 }
 
@@ -514,6 +535,8 @@ func herdrWorkspace(label, cwd string, focus *bool) herdr.WorkspaceCreateParams 
 //	[spawn]                         # ntm's [spawn] table
 //	stagger_mode = "none"           # none (the default), fixed or smart
 //	stagger_delay = "30s"           # 0 to 5m; 30s by default
+//	[prompts]                       # ntm's [prompts] table: spawn's defaults
+//	cc_default = "Read AGENTS.md."  # also cod_, gmi_, agy_, omp_; or *_default_file
 //
 // Other keys belong to other parts of nhm.
 type spawnConfig struct {
@@ -528,6 +551,7 @@ type spawnConfig struct {
 		// StaggerDelay is nil when the key is not set (ntm's default 30s).
 		StaggerDelay *time.Duration `toml:"stagger_delay"`
 	} `toml:"spawn"`
+	Prompts promptsConfig `toml:"prompts"`
 }
 
 // resolveSpawnStaggerDefaults is ntm's: a stagger setting the caller did

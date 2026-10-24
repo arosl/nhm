@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -41,14 +40,12 @@ func newReplayWorld(t *testing.T) *replayWorld {
 	s, inst, h := newSendInstance(t)
 	spawnHerdr(t, s, h)
 	spawnAgentMail(t, "GreenPike", "RedFox")
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	writeAll(t, filepath.Join(home, ".acfs/onboard/docs/ntm/command_palette.md"),
-		"## A\n### default_new_agent | Default\nRead AGENTS.md.\n")
+	t.Setenv("HOME", t.TempDir())
 	project := assignTools(t)
 	ownNhm(t, inst)
 	w := &replayWorld{s: s, inst: inst, h: h, args: []string{"spawn", "swarm", "--cc=2", "--per-tab=1", "--project", project,
-		"--allow-unguarded", "--assign", "--yes", "--init-prompt", "Then check your mail.", "--op-id", "sp-r1", "--socket", s.SocketPath}}
+		"--allow-unguarded", "--assign", "--yes", "--prompt", "Read AGENTS.md.", "--init-prompt", "Then check your mail.",
+		"--op-id", "sp-r1", "--socket", s.SocketPath}}
 	fs := pflag.NewFlagSet("spawn", pflag.ContinueOnError)
 	f := addSpawnFlags(fs)
 	if err := fs.Parse(w.args[1:]); err != nil {

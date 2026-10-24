@@ -138,8 +138,10 @@ func TestSpawnVerb(t *testing.T) {
 	spawnAgentMail(t, "GreenPike")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeAll(t, filepath.Join(home, ".acfs/onboard/docs/ntm/command_palette.md"),
-		"## A\n### default_new_agent | Default\nRead AGENTS.md.\n")
+	// ntm's [prompts] default for Claude is the kickoff (nhm-2p6.4.6).
+	config := filepath.Join(home, "config.toml")
+	writeAll(t, config, "[prompts]\ncc_default = \"Read AGENTS.md.\"\n")
+	t.Setenv("NHM_CONFIG", config)
 	project := t.TempDir()
 	sock := s.SocketPath
 	t.Setenv("PATH", t.TempDir()) // no dcg: the argv cannot be screened
@@ -215,6 +217,27 @@ func TestSpawnVerb(t *testing.T) {
 		if code, _, errOut := run(args...); code != exitError || !strings.HasPrefix(errOut, "Error: ") {
 			t.Errorf("%v = %d %q, want 1 and ntm's Error:", args, code, errOut)
 		}
+	}
+}
+
+// As ntm's spawn: without --prompt or a [prompts] default no agent gets a
+// prompt, and the spawn does not wait for them (nhm-2p6.4.6).
+func TestSpawnNoKickoffWithoutPrompt(t *testing.T) {
+	s, inst, h := newSendInstance(t)
+	spawnHerdr(t, s, h)
+	spawnAgentMail(t, "GreenPike")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NHM_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
+	t.Setenv("PATH", t.TempDir())
+	ownNhm(t, inst)
+	code, out, errOut := run("spawn", "swarm", "--cc=1", "--project", t.TempDir(), "--allow-unguarded", "--socket", s.SocketPath, "--json")
+	if code != 0 {
+		t.Fatalf("spawn = %d %s %s", code, out, errOut)
+	}
+	agent := spawnNHMResult(t, out)["agents"].([]any)[0].(map[string]any)
+	if sent := h.sent(); len(sent) != 0 || agent["status"] != "started" || agent["ready"] != false ||
+		spawnNHMResult(t, out)["no_wait"] != true {
+		t.Fatalf("no prompt: sent %q, agent %v", sent, agent)
 	}
 }
 

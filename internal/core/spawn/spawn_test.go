@@ -392,6 +392,7 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 	ctx := context.Background()
 	r := req(Want{Kind: "claude", Count: 1, Model: "opus"}, Want{Kind: "codex", Count: 1})
 	r.OperationID = "op-sp-1"
+	r.DefaultPrompts = map[string]string{"claude": "Read AGENTS.md.", "codex": "Read AGENTS.md."}
 	settings := HookSettings(func(bin string) (string, error) { return "/usr/bin/" + bin, nil })
 	w.env.Admission.Settings = map[string]string{"claude": settings}
 	res, err := Spawn(ctx, w.env, r)
@@ -438,7 +439,7 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 	if tok, err := store.ReadSecret(w.inst.Dir, b.ID); err != nil || tok != "tok-IcyKnoll" {
 		t.Fatalf("token = %q %v", tok, err)
 	}
-	// The kickoff: the identity preamble, then ACFS's default prompt.
+	// The kickoff: the identity preamble, then the kind's [prompts] default.
 	if len(w.sent) != 2 || !strings.HasPrefix(w.sent[0].Message, "Your Agent Mail identity is already registered: name IcyKnoll, project key /p") ||
 		!strings.HasSuffix(w.sent[0].Message, "Read AGENTS.md.") || w.sent[0].Selector.Names[0] != "IcyKnoll" {
 		t.Fatalf("kickoffs = %+v", w.sent)
@@ -482,7 +483,7 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 func TestDryRunCreatesNothing(t *testing.T) {
 	w := newWorld(t)
 	r := req(Want{Kind: "claude", Count: 2})
-	r.DryRun, r.OperationID = true, "op-dry"
+	r.DryRun, r.OperationID, r.Prompt = true, "op-dry", "Read AGENTS.md."
 	res, err := Spawn(context.Background(), w.env, r)
 	if err != nil || !res.DryRun || len(res.Targets) != 2 || res.Targets[1].Slot != "1.1" || res.Admission.Decision != Admit {
 		t.Fatalf("dry = %+v %v", res, err)
@@ -832,6 +833,7 @@ func TestAliasSuffixAndOwnPrompt(t *testing.T) {
 	// IcyKnoll's herdr name is live in another project.
 	w.h.agents["w9:p9"] = herdr.AgentInfo{PaneID: "w9:p9", Name: "icyknoll", StateChangeSeq: &seq}
 	r := req(Want{Kind: "claude", Count: 1})
+	r.DefaultPrompts = map[string]string{"claude": "Read AGENTS.md."}
 	res, err := Spawn(context.Background(), w.env, r)
 	if err != nil || res.Targets[0].HerdrName != "icyknoll-2" {
 		t.Fatalf("alias = %+v %v", res.Targets[0], err)
@@ -867,32 +869,21 @@ func TestFingerprintAssignOptions(t *testing.T) {
 }
 
 // spawn --assign's kickoff goes ahead of every agent's work prompt
-// (nhm-cvw): the operator's prompt as typed, else default_new_agent with
-// the session and project filled in, else nothing. A palette prompt that
-// names one agent refuses, since one text goes to all.
+// (nhm-cvw): the operator's prompt as typed, else nothing, as ntm's spawn
+// sends no prompt without one (nhm-2p6.4.6).
 func TestAssignPrefix(t *testing.T) {
 	newWorld(t)
 	r := req(Want{Kind: "claude", Count: 1})
-	if got, err := AssignPrefix(r); err != nil || got != "Read AGENTS.md." {
-		t.Fatalf("palette prefix = %q, %v", got, err)
+	if got, err := AssignPrefix(r); err != nil || got != "" {
+		t.Fatalf("no prompt = %q, %v", got, err)
 	}
 	r.Prompt = "Check {{this}} literally."
 	if got, err := AssignPrefix(r); err != nil || got != r.Prompt {
 		t.Fatalf("own prompt = %q, %v", got, err)
 	}
-	r.Prompt, r.NoKickoff = "", true
+	r.NoKickoff = true
 	if got, err := AssignPrefix(r); err != nil || got != "" {
 		t.Fatalf("no kickoff = %q, %v", got, err)
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := writeFileAll(home+"/.acfs/onboard/docs/ntm/command_palette.md",
-		"## A\n### default_new_agent | Default\nYou are {{agent}} in {{session}}.\n"); err != nil {
-		t.Fatal(err)
-	}
-	r.NoKickoff = false
-	if got, err := AssignPrefix(r); err == nil || !strings.Contains(err.Error(), "every agent") {
-		t.Fatalf("per-agent placeholder = %q, %v", got, err)
 	}
 }
 

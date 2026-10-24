@@ -151,21 +151,22 @@ type Target struct {
 
 // Result is a spawn's outcome.
 type Result struct {
-	OperationID     string    `json:"operation_id,omitempty"`
-	Replayed        bool      `json:"replayed,omitempty"`
-	DryRun          bool      `json:"dry_run,omitempty"`
-	Session         string    `json:"session"`
-	WorkspaceID     string    `json:"workspace_id,omitempty"`
-	WorkspaceNew    bool      `json:"workspace_created"`
-	ProjectRoot     string    `json:"working_dir"`
-	Admission       Admission `json:"admission"`
-	StaggerMode     string    `json:"stagger_mode"`
-	StaggerDelayMS  int64     `json:"stagger_delay_ms"`
-	Targets         []Target  `json:"agents"`
-	Warnings        []string  `json:"warnings"`
-	CreatedAt       time.Time `json:"created_at"`
-	TotalStartupMS  int64     `json:"total_startup_ms"`
-	KickoffTemplate string    `json:"kickoff_template,omitempty"`
+	OperationID    string    `json:"operation_id,omitempty"`
+	Replayed       bool      `json:"replayed,omitempty"`
+	DryRun         bool      `json:"dry_run,omitempty"`
+	Session        string    `json:"session"`
+	WorkspaceID    string    `json:"workspace_id,omitempty"`
+	WorkspaceNew   bool      `json:"workspace_created"`
+	ProjectRoot    string    `json:"working_dir"`
+	Admission      Admission `json:"admission"`
+	StaggerMode    string    `json:"stagger_mode"`
+	StaggerDelayMS int64     `json:"stagger_delay_ms"`
+	Targets        []Target  `json:"agents"`
+	Warnings       []string  `json:"warnings"`
+	CreatedAt      time.Time `json:"created_at"`
+	TotalStartupMS int64     `json:"total_startup_ms"`
+	// KickoffTemplate is Request.KickoffTemplate.
+	KickoffTemplate string `json:"kickoff_template,omitempty"`
 	// NoWait: the spawn started the agents and did not wait for them to
 	// be ready (Request.NoWait).
 	NoWait bool `json:"no_wait,omitempty"`
@@ -242,13 +243,11 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 	} else if others != nil {
 		res.Warnings = append(res.Warnings, bindings.MixedWorkspaceWarning(ws, req.ProjectRoot, others))
 	}
-	kickoff, err := kickoffBody(req)
+	kickoff, err := kickoffOf(req)
 	if err != nil {
 		return res, err
 	}
-	if !req.NoKickoff && req.Prompt == "" {
-		res.KickoffTemplate = defaultKickoff
-	}
+	res.KickoffTemplate = kickoff.template
 	res.Admission = Decide(ctx, env.Admission, req)
 	targets, err := plan(ctx, env, ws, req)
 	if err != nil {
@@ -259,11 +258,22 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		return res, fmt.Errorf("%w: %s", ErrRefused, res.Admission.Reason)
 	}
 	if req.DryRun {
-		// The kickoffs' schedule, as ntm plans it in a dry run.
-		if !kickoff.empty() {
-			stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.ProjectRoot, res.Targets)
-			for i := range res.Targets {
-				res.Targets[i].DelayMS = stagger.Delay(i).Milliseconds()
+		// The kickoffs' schedule, as ntm plans it in a dry run: the agents
+		// that get one, in order.
+		var prompted []int
+		for i := range res.Targets {
+			if kickoff.text(&res.Targets[i]) != "" {
+				prompted = append(prompted, i)
+			}
+		}
+		if len(prompted) > 0 {
+			targets := make([]Target, len(prompted))
+			for order, i := range prompted {
+				targets[order] = res.Targets[i]
+			}
+			stagger, plan := PlanStagger(req.StaggerMode, req.StaggerDelay, req.ProjectRoot, targets)
+			for order, i := range prompted {
+				res.Targets[i].DelayMS = stagger.Delay(order).Milliseconds()
 			}
 			res.Stagger = plan
 		}
@@ -321,7 +331,7 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		}
 	}
 	res.TotalStartupMS = env.now().Sub(start).Milliseconds()
-	if !kickoff.empty() && (!req.KickoffAllReady || res.Ready()) {
+	if !req.KickoffAllReady || res.Ready() {
 		kickoffs(ctx, env, req, &res, kickoff)
 	}
 	status := "completed"
@@ -334,14 +344,14 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 	return res, nil
 }
 
-// kickoffs sends each ready target its kickoff through send, paced by
-// ntm's stagger schedule: the agent at delivery order i gets it
-// i*interval after the first (SpawnStagger), and res.Stagger reports the
-// plan.
+// kickoffs sends each ready target that has a kickoff its kickoff through
+// send, paced by ntm's stagger schedule: the agent at delivery order i
+// gets it i*interval after the first (SpawnStagger), and res.Stagger
+// reports the plan.
 func kickoffs(ctx context.Context, env Env, req Request, res *Result, kick kickoff) {
 	var ready []int
-	for i, t := range res.Targets {
-		if t.Ready {
+	for i := range res.Targets {
+		if res.Targets[i].Ready && kick.text(&res.Targets[i]) != "" {
 			ready = append(ready, i)
 		}
 	}
@@ -365,7 +375,7 @@ func kickoffs(ctx context.Context, env Env, req Request, res *Result, kick kicko
 			continue
 		}
 		t.DelayMS = stagger.Delay(order).Milliseconds()
-		sendKickoff(ctx, env, req, res, t, kick.text(req, t), nil)
+		sendKickoff(ctx, env, req, res, t, kick.text(t), nil)
 		_ = writeTarget(ctx, env.DB, res.OperationID, *t, env.now())
 	}
 }
@@ -984,6 +994,12 @@ func fingerprint(req Request) map[string]any {
 	if req.AssignOptions != "" {
 		fp["assign_options"] = req.AssignOptions
 	}
+	if len(req.DefaultPrompts) > 0 {
+		fp["default_prompts"] = req.DefaultPrompts
+	}
+	if req.KickoffTemplate != "" {
+		fp["kickoff_template"] = req.KickoffTemplate
+	}
 	return fp
 }
 
@@ -1100,35 +1116,36 @@ func nullGen(bindingID string) any {
 
 func ptr[T any](v T) *T { return &v }
 
-// The kickoff (plan-v8 2.2 step 6).
-const defaultKickoff = "default_new_agent"
-
-// kickoff is the kickoff's text: the operator's --prompt goes out as
-// typed, as a plain send does; the palette prompt (default_new_agent) is a
-// template whose per-agent placeholders are filled.
+// kickoff is the kickoffs' text (plan-v8 2.2 step 6): --prompt as typed,
+// as a plain send sends it, the [prompts] defaults by kind, and a palette
+// prompt (KickoffTemplate), a template whose per-agent placeholders are
+// filled.
 type kickoff struct {
-	raw     string
-	palette string
+	raw      string
+	defaults map[string]string
+	template string
+	palette  string
+	session  string
+	project  string
 }
 
-func (k kickoff) empty() bool { return k.raw == "" && k.palette == "" }
-
-// kickoffBody reads the kickoff: --prompt, or ACFS's default_new_agent
-// palette prompt. It refuses before anything is created when the palette
-// prompt cannot be found or has a placeholder nothing fills.
-func kickoffBody(req Request) (kickoff, error) {
-	var k kickoff
+// kickoffOf reads the request's kickoff; none with NoKickoff. It refuses
+// before anything is created when the palette prompt cannot be found or
+// has a placeholder nothing fills.
+func kickoffOf(req Request) (kickoff, error) {
 	if req.NoKickoff {
+		return kickoff{}, nil
+	}
+	k := kickoff{raw: req.Prompt, defaults: req.DefaultPrompts, template: req.KickoffTemplate, session: req.Session,
+		project: req.ProjectRoot}
+	if k.template == "" {
 		return k, nil
 	}
-	k.raw = req.Prompt
-	if k.raw == "" {
-		t, err := templates.NewLoader(req.ProjectRoot).Load(defaultKickoff)
-		if err != nil {
-			return k, fmt.Errorf("the kickoff: %w (give --prompt)", err)
-		}
-		k.palette = t.Body
+	t, err := templates.NewLoader(req.ProjectRoot).Load(k.template)
+	if err != nil {
+		return k, fmt.Errorf("the kickoff: %w (give --prompt)", err)
 	}
+	k.palette = t.Body
 	check := &templates.Template{Name: "kickoff", Body: k.palette}
 	if _, err := check.ExecuteShared(templates.ExecutionContext{Session: req.Session, Project: req.ProjectRoot}); err != nil {
 		return k, fmt.Errorf("the kickoff: %w", err)
@@ -1136,40 +1153,21 @@ func kickoffBody(req Request) (kickoff, error) {
 	return k, nil
 }
 
-// AssignPrefix is the kickoff that spawn --assign sends ahead of each
-// agent's work prompt, in the same delivery (nhm-cvw): the spawn itself
-// sends no kickoff then, since a working agent refuses a second prompt.
-// It is --prompt as typed, else ACFS's default_new_agent palette prompt
-// with the session and project filled in; "" with NoKickoff. A palette
-// placeholder that names one agent refuses: one text goes to every agent.
-func AssignPrefix(req Request) (string, error) {
-	if req.NoKickoff {
-		return "", nil
-	}
-	if req.Prompt != "" {
-		return req.Prompt, nil
-	}
-	t, err := templates.NewLoader(req.ProjectRoot).Load(defaultKickoff)
-	if err != nil {
-		return "", fmt.Errorf("the kickoff: %w (give --prompt or --no-kickoff)", err)
-	}
-	out, err := t.Execute(templates.ExecutionContext{Session: req.Session, Project: req.ProjectRoot})
-	if err != nil {
-		return "", fmt.Errorf("--assign sends one kickoff to every agent: %w (give --prompt)", err)
-	}
-	return out, nil
-}
-
-// text is the kickoff for one agent; kickoffBody checked the shared
-// placeholders.
-func (k kickoff) text(req Request, t *Target) string {
+// text is the kickoff for one agent, as ntm's resolveSpawnPanePrompt
+// makes it (internal/cli/spawn.go:4088): its kind's default, then the
+// prompt; then the palette prompt, filled for the agent. "" when it has
+// none of them, and it then gets none.
+func (k kickoff) text(t *Target) string {
 	parts := []string{}
+	if d := k.defaults[t.Kind]; d != "" {
+		parts = append(parts, d)
+	}
 	if k.raw != "" {
 		parts = append(parts, k.raw)
 	}
 	if k.palette != "" {
 		tm := &templates.Template{Name: "kickoff", Body: k.palette}
-		out, err := tm.Execute(templates.ExecutionContext{Session: req.Session, Project: req.ProjectRoot,
+		out, err := tm.Execute(templates.ExecutionContext{Session: k.session, Project: k.project,
 			AgentName: t.MailName, HerdrName: t.HerdrName, Model: t.Model, AgentType: t.Kind, AgentPane: t.PaneID,
 			AgentNum: t.Index + 1})
 		if err != nil {
@@ -1178,4 +1176,15 @@ func (k kickoff) text(req Request, t *Target) string {
 		parts = append(parts, out)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// AssignPrefix is the kickoff that spawn --assign sends ahead of each
+// agent's work prompt, in the same delivery (nhm-cvw): the spawn itself
+// sends no kickoff then, since a working agent refuses a second prompt.
+// It is --prompt as typed; "" without it, or with NoKickoff.
+func AssignPrefix(req Request) (string, error) {
+	if req.NoKickoff {
+		return "", nil
+	}
+	return req.Prompt, nil
 }

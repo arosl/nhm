@@ -67,10 +67,16 @@ type Request struct {
 	// agent its own tab. The panes fill a grid of PerTab cells in reading
 	// order (grid, splitTarget): 6 is 2 rows of 3.
 	PerTab int
-	// Prompt is the kickoff; empty means ACFS's default_new_agent
-	// palette prompt, unless NoKickoff.
-	Prompt    string
-	NoKickoff bool
+	// Prompt is the kickoff, and DefaultPrompts are the [prompts]
+	// defaults by kind: as ntm's spawn, an agent gets its kind's default,
+	// then Prompt, and nothing when it has neither. NoKickoff sends none.
+	Prompt         string
+	DefaultPrompts map[string]string
+	// KickoffTemplate is a palette prompt by key that each agent gets
+	// after Prompt, with its own placeholders filled: the spawn wizard's
+	// "ACFS's default_new_agent prompt". ntm's spawn has none.
+	KickoffTemplate string
+	NoKickoff       bool
 	// Enrich is the kickoff's CM and CASS enrichment (plan-v8 2.13:
 	// kickoffs default to best-effort CM).
 	Enrich send.Enrichment
@@ -160,7 +166,7 @@ func (r *Request) Validate() error {
 	if err := ValidateStaggerDelay(r.StaggerDelay); err != nil {
 		return fmt.Errorf("--stagger-delay %w", err)
 	}
-	if r.NoWait && !r.NoKickoff {
+	if r.NoWait && !r.NoKickoff && (r.Prompt != "" || len(r.DefaultPrompts) > 0 || r.KickoffTemplate != "") {
 		return fmt.Errorf("a kickoff needs the agents ready: a spawn that does not wait sends none")
 	}
 	if r.ReadyTimeout <= 0 {

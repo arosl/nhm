@@ -45,8 +45,14 @@ func spawnRequestOf(r runner.SpawnRequest) (spawn.Request, error) {
 	if err != nil {
 		return spawn.Request{}, err
 	}
-	return spawn.Request{Session: r.Session, Add: r.Add, Agents: r.Agents, Label: r.Label, Group: r.Group,
-		Prompt: r.Prompt, NoKickoff: r.NoKickoff, Enrich: enrichment}, nil
+	req := spawn.Request{Session: r.Session, Add: r.Add, Agents: r.Agents, Label: r.Label, Group: r.Group,
+		Prompt: r.Prompt, NoKickoff: r.NoKickoff, Enrich: enrichment}
+	// The wizard's "ACFS's default_new_agent prompt": no prompt of the
+	// user's, and a kickoff (nhm spawn itself sends none then, as ntm's).
+	if !r.NoKickoff && r.Prompt == "" {
+		req.KickoffTemplate = "default_new_agent"
+	}
+	return req, nil
 }
 
 // runNewJob is nhm new.

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,10 +12,7 @@ func TestSpawnNoUser(t *testing.T) {
 	s, _, h := newSendInstance(t)
 	spawnHerdr(t, s, h)
 	spawnAgentMail(t, "GreenPike")
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	writeAll(t, filepath.Join(home, ".acfs/onboard/docs/ntm/command_palette.md"),
-		"## A\n### default_new_agent | Default\nRead AGENTS.md.\n")
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	code, out, errOut := run("spawn", "swarm", "--cc=1", "--no-user", "--project", t.TempDir(), "--allow-unguarded", "--dry-run", "--socket", s.SocketPath)
 	if code != 0 || !strings.Contains(out, "would start 1 agents in swarm (w1)") {

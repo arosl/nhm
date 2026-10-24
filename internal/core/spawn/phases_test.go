@@ -106,9 +106,58 @@ func TestSpawnNoWait(t *testing.T) {
 		t.Fatalf("answer = %+v", out)
 	}
 	r = req(Want{Kind: "claude", Count: 1})
-	r.NoWait = true
+	r.NoWait, r.Prompt = true, "hi"
 	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "a kickoff needs the agents ready") {
 		t.Fatalf("a kickoff without the wait = %v", err)
+	}
+	r.Prompt, r.DefaultPrompts = "", map[string]string{"claude": "hi"}
+	if err := r.Validate(); err == nil {
+		t.Fatal("a [prompts] default without the wait: no error")
+	}
+	// With no prompt there is no kickoff to wait for.
+	r.DefaultPrompts = nil
+	if err := r.Validate(); err != nil {
+		t.Fatalf("no prompt without the wait = %v", err)
+	}
+}
+
+// As ntm's spawn: an agent gets its kind's [prompts] default, then the
+// prompt; an agent with neither gets none (nhm-2p6.4.6).
+func TestSpawnPromptsDefault(t *testing.T) {
+	w := newWorld(t)
+	r := req(Want{Kind: "claude", Count: 1}, Want{Kind: "codex", Count: 1})
+	r.DefaultPrompts = map[string]string{"claude": "Read AGENTS.md."}
+	r.Prompt = "Fix the login bug."
+	res, err := Spawn(context.Background(), w.env, r)
+	if err != nil || len(w.sent) != 2 {
+		t.Fatalf("spawn = %v, %d kickoffs", err, len(w.sent))
+	}
+	if _, task, _ := strings.Cut(w.sent[0].Message, "\n\n"); task != "Read AGENTS.md.\n\nFix the login bug." {
+		t.Fatalf("claude's kickoff = %q", w.sent[0].Message)
+	}
+	if _, task, _ := strings.Cut(w.sent[1].Message, "\n\n"); task != "Fix the login bug." {
+		t.Fatalf("codex's kickoff = %q", w.sent[1].Message)
+	}
+	// Without the prompt, codex has nothing: it gets no kickoff, and the
+	// stagger plans claude's only.
+	w = newWorld(t)
+	r.Prompt = ""
+	if res, err = Spawn(context.Background(), w.env, r); err != nil || len(w.sent) != 1 || w.sent[0].Selector.Names[0] != "IcyKnoll" ||
+		res.Targets[1].KickoffOp != "" || len(res.Stagger.Schedule) != 1 {
+		t.Fatalf("default only = %v, %d kickoffs, %+v", err, len(w.sent), res.Targets)
+	}
+	// With neither, no agent gets one.
+	w = newWorld(t)
+	r.DefaultPrompts = nil
+	if res, err = Spawn(context.Background(), w.env, r); err != nil || len(w.sent) != 0 || res.Stagger != nil {
+		t.Fatalf("no prompt = %v, %d kickoffs", err, len(w.sent))
+	}
+	// The spawn wizard's palette prompt goes to every agent, by key.
+	w = newWorld(t)
+	r.KickoffTemplate = "default_new_agent"
+	if res, err = Spawn(context.Background(), w.env, r); err != nil || len(w.sent) != 2 || res.KickoffTemplate != "default_new_agent" ||
+		!strings.HasSuffix(w.sent[1].Message, "\n\nRead AGENTS.md.") {
+		t.Fatalf("palette = %v, %+v", err, w.sent)
 	}
 }
 

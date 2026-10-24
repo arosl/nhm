@@ -183,10 +183,7 @@ func gridWorld(t *testing.T, names ...string) (*splitTree, string, string) {
 	spawnHerdr(t, s, h)
 	st := newSplitTree(s)
 	spawnAgentMail(t, names...)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	writeAll(t, filepath.Join(home, ".acfs/onboard/docs/ntm/command_palette.md"),
-		"## A\n### default_new_agent | Default\nRead AGENTS.md.\n")
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir()) // no dcg: the argv cannot be screened
 	ownNhm(t, inst)
 	return st, s.SocketPath, t.TempDir()

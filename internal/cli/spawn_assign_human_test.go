@@ -239,16 +239,13 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 	s, inst, h := newSendInstance(t)
 	spawnHerdr(t, s, h)
 	spawnAgentMail(t, "GreenPike", "RedFox", "TanOwl", "GoldHill")
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	writeAll(t, filepath.Join(home, ".acfs/onboard/docs/ntm/command_palette.md"),
-		"## A\n### default_new_agent | Default\nRead AGENTS.md.\n")
+	t.Setenv("HOME", t.TempDir())
 	project := assignTools(t)
 	ownNhm(t, inst)
 
 	// The stub cannot split a pane: the second agent of a shared tab fails.
 	code, out, errOut := run("spawn", "swarm", "--cc=2", "--project", project, "--allow-unguarded", "--assign", "--yes",
-		"--init-prompt", "Then check your mail.", "--socket", s.SocketPath)
+		"--prompt", "Read AGENTS.md.", "--init-prompt", "Then check your mail.", "--socket", s.SocketPath)
 	if code != exitError || !strings.Contains(errOut, "assignment failed: ready wait failed: 1 of 2 agents ready") ||
 		!strings.Contains(out, "GreenPike (claude, default model) slot 2.1 pane w1:p11 kickoff submitted") {
 		t.Fatalf("partial spawn = %d\n%s\n%s", code, out, errOut)
@@ -258,7 +255,7 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 	}
 
 	args := []string{"spawn", "swarm", "--cc=2", "--per-tab=1", "--project", project, "--allow-unguarded", "--assign", "--yes",
-		"--init-prompt", "Then check your mail.", "--op-id", "sp-a1", "--socket", s.SocketPath}
+		"--prompt", "Read AGENTS.md.", "--init-prompt", "Then check your mail.", "--op-id", "sp-a1", "--socket", s.SocketPath}
 	code, out, errOut = run(args...)
 	if code != 0 {
 		t.Fatalf("spawn --assign = %d\n%s\n%s", code, out, errOut)
