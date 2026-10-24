@@ -77,6 +77,28 @@ type Exposure struct {
 	Retrieval         Retrieval
 }
 
+// WithoutText is e without the text that a private session keeps out of
+// the store (core/privacy): the queries, made of the prompt, and the
+// items' labels. The items' keys stay, so a later send still knows what
+// the agent was given, and the feedback still finds the rules.
+func (e Exposure) WithoutText() Exposure {
+	e.Retrieval.CM.Query, e.Retrieval.CASS.Query = "", ""
+	e.Plan.CM, e.Plan.CASS = unlabeled(e.Plan.CM), unlabeled(e.Plan.CASS)
+	return e
+}
+
+func unlabeled(items []Item) []Item {
+	if items == nil {
+		return nil
+	}
+	out := make([]Item, len(items))
+	for i, it := range items {
+		it.Label = ""
+		out[i] = it
+	}
+	return out
+}
+
 // Record writes an exposure: one row per enabled source, even when every
 // item was suppressed as already present.
 func Record(ctx context.Context, db *store.DB, e Exposure, now time.Time) error {

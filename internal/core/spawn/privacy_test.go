@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/arosl/nhm/internal/core/privacy"
@@ -85,5 +86,40 @@ func TestSpawnRecordsPrivacy(t *testing.T) {
 	}
 	if fp := fingerprint(r); fp["allow_persist"] != true {
 		t.Fatalf("fingerprint with = %v", fp)
+	}
+}
+
+// A private session's spawn keeps its prompts out of the store, as their
+// digests in the operation's request; its fingerprint is the whole
+// request's, so a rerun of the id is a replay. Another session's spawn
+// keeps them as they are (nhm-2p6.4.16).
+func TestPrivateSpawnStoresPromptDigests(t *testing.T) {
+	prev := privacy.GetDefaultManager()
+	privacy.SetDefaultManager(privacy.New(privacy.DefaultConfig()))
+	t.Cleanup(func() { privacy.SetDefaultManager(prev) })
+	ctx := context.Background()
+	w := newWorld(t)
+	r := req(Want{Kind: "claude", Count: 1})
+	r.OperationID, r.Prompt, r.Privacy = "op-priv", "Fix the secret bug.", true
+	r.DefaultPrompts = map[string]string{"claude": "Read the private notes."}
+	if _, err := Spawn(ctx, w.env, r); err != nil {
+		t.Fatal(err)
+	}
+	op, err := w.db.Operation(ctx, "op-priv")
+	if err != nil || strings.Contains(op.RequestJSON, "secret") || strings.Contains(op.RequestJSON, "private notes") ||
+		!strings.Contains(op.RequestJSON, `"prompt":"sha256:`) || !strings.Contains(op.RequestJSON, `"default_prompts":"sha256:`) {
+		t.Fatalf("stored request = %s %v", op.RequestJSON, err)
+	}
+	if again, err := Spawn(ctx, w.env, r); err != nil || !again.Replayed {
+		t.Fatalf("rerun = %+v %v", again, err)
+	}
+	w = newWorld(t)
+	r.OperationID, r.Privacy = "op-open", false
+	r.Session = "open"
+	if _, err := Spawn(ctx, w.env, r); err != nil {
+		t.Fatal(err)
+	}
+	if op, err := w.db.Operation(ctx, "op-open"); err != nil || !strings.Contains(op.RequestJSON, "Fix the secret bug.") {
+		t.Fatalf("an open session's request = %s %v", op.RequestJSON, err)
 	}
 }

@@ -43,6 +43,10 @@ type ClaimRequest struct {
 	Verb    string
 	Scope   any
 	Request any
+	// Stored, when set, is the request as request_json keeps it, in place
+	// of Request: a private session's prompts as their digests
+	// (core/privacy). The fingerprint is always Request's.
+	Stored any
 }
 
 // Claim is the result of ClaimOperation. When Existing is true, the caller
@@ -117,13 +121,19 @@ func (db *DB) ClaimOperation(ctx context.Context, req ClaimRequest, now time.Tim
 		return Claim{}, fmt.Errorf("store: claim: request: %w", err)
 	}
 	fp := Fingerprint(req.Verb, requestJSON)
+	storedJSON := requestJSON
+	if req.Stored != nil {
+		if storedJSON, err = json.Marshal(req.Stored); err != nil {
+			return Claim{}, fmt.Errorf("store: claim: stored request: %w", err)
+		}
+	}
 	ts := FormatTime(now)
 
 	res, err := db.sql.ExecContext(ctx, `INSERT INTO operations
 		(operation_id, verb, fingerprint, scope_json, request_json, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (operation_id) DO NOTHING`,
-		id, req.Verb, fp, string(scopeJSON), string(requestJSON), OperationClaimed, ts, ts)
+		id, req.Verb, fp, string(scopeJSON), string(storedJSON), OperationClaimed, ts, ts)
 	if err != nil {
 		return Claim{}, fmt.Errorf("store: claim %s: %w", id, err)
 	}

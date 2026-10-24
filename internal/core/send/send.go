@@ -447,7 +447,11 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 	// status later says whether the target got it.
 	for i := range ex {
 		ex[i].OperationID = res.OperationID
-		if err := enrich.Record(ctx, env.DB, ex[i], now); err != nil {
+		e := ex[i]
+		if t := e.TargetIndex; t >= 0 && t < len(targets) && !historyAllowed(targets[t:t+1]) {
+			e = e.WithoutText()
+		}
+		if err := enrich.Record(ctx, env.DB, e, now); err != nil {
 			return res, err
 		}
 	}

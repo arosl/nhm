@@ -54,6 +54,20 @@ func TestCanPersist(t *testing.T) {
 	}
 }
 
+// WouldBlock answers as CanPersist will once the settings are registered,
+// under the manager's config (nhm-2p6.4.16).
+func TestWouldBlock(t *testing.T) {
+	m := New(DefaultConfig())
+	if m.WouldBlock(false, false, OpPromptHistory) || !m.WouldBlock(true, false, OpPromptHistory) || m.WouldBlock(true, true, OpPromptHistory) {
+		t.Fatal("defaults")
+	}
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	if !New(cfg).WouldBlock(false, false, OpArchive) {
+		t.Fatal("the global switch")
+	}
+}
+
 // Record stores a session's settings in the instance's store, where
 // another process's manager finds them; a record with neither setting is
 // removed, so a new workspace never takes an old one of its id.

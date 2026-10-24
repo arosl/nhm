@@ -3,10 +3,13 @@ package spawn
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -282,9 +285,14 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 
 	now := env.now()
+	fp := fingerprint(req)
+	var kept any
+	if privateSpawn(req, res.WorkspaceID) {
+		kept = storedFingerprint(fp)
+	}
 	claim, err := env.DB.ClaimOperation(ctx, store.ClaimRequest{ID: req.OperationID, Verb: Verb,
 		Scope:   map[string]any{"scope": req.Scope, "session": req.Session, "working_dir": req.ProjectRoot},
-		Request: fingerprint(req)}, now)
+		Request: fp, Stored: kept}, now)
 	if err != nil {
 		return res, err
 	}
@@ -1056,6 +1064,35 @@ func fingerprint(req Request) map[string]any {
 		fp["allow_persist"] = true
 	}
 	return fp
+}
+
+// privateSpawn reports whether the spawn's session keeps its prompts out
+// of the store (core/privacy, OpPromptHistory): by the spawn's own
+// --privacy and --allow-persist, which a new workspace and any given flag
+// record, else by an existing workspace's record.
+func privateSpawn(req Request, ws string) bool {
+	m := privacy.GetDefaultManager()
+	if ws == "" || req.Privacy || req.AllowPersist {
+		return m.WouldBlock(req.Privacy, req.AllowPersist, privacy.OpPromptHistory)
+	}
+	return m.CanPersist(ws, privacy.OpPromptHistory) != nil
+}
+
+// storedFingerprint is the fingerprint as a private session's operation
+// keeps it: the prompts as their digests. The operation's fingerprint
+// hash still covers the whole request, so a rerun compares as before.
+func storedFingerprint(fp map[string]any) map[string]any {
+	out := maps.Clone(fp)
+	for _, k := range []string{"prompt", "default_prompts", "assign_options"} {
+		v, ok := out[k]
+		if !ok || v == "" {
+			continue
+		}
+		data, _ := json.Marshal(v)
+		sum := sha256.Sum256(data)
+		out[k] = "sha256:" + hex.EncodeToString(sum[:])
+	}
+	return out
 }
 
 // recordPrivacy records the session's --privacy and --allow-persist for

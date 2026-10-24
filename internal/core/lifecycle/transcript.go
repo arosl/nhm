@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/privacy"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
@@ -109,6 +110,12 @@ func Preserve(ctx context.Context, db *store.DB, instanceDir string, b bindings.
 		MailName: b.MailName, BindingID: b.ID, Generation: b.Generation, Reason: reason, CapturedAt: now.UTC()}
 	if b.NativeSession != nil {
 		p.NativeSession = b.NativeSession.Value
+	}
+	// ntm's privacy mode: a private session's conversation is not copied,
+	// as ntm's archives are not made, unless --allow-persist
+	// (core/privacy, OpArchive).
+	if err := privacy.GetDefaultManager().CanPersist(b.WorkspaceID, privacy.OpArchive); err != nil {
+		return p, err
 	}
 	dir := filepath.Join(instanceDir, "transcripts", b.ID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

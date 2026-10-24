@@ -62,6 +62,15 @@ func Recorded(ctx context.Context, db *store.DB, ws string) (state SessionState,
 	return state, ok, nil
 }
 
+// WouldBlock reports whether op would be blocked for a session with these
+// settings, as CanPersist reports it once they are registered: for a
+// spawn whose session is not recorded yet.
+func (m *Manager) WouldBlock(privacyMode, allowPersist bool, op PersistOperation) bool {
+	n := New(m.globalConfig)
+	n.RegisterSession("session", privacyMode, allowPersist)
+	return n.CanPersist("session", op) != nil
+}
+
 // StoreLookup is the Manager's session lookup over db: the session is a
 // workspace id. A store that cannot be read records nothing, as ntm's
 // lookup treats a tmux that cannot be asked.

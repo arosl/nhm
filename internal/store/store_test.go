@@ -307,6 +307,18 @@ func TestClaimOperation(t *testing.T) {
 	if err := db.SetOperationStatus(ctx, "op-missing", "x", false, t0); err == nil {
 		t.Fatal("status of a missing operation was set")
 	}
+	// Stored is what request_json keeps; the fingerprint is Request's, so
+	// the same request with its stored form claims the same operation
+	// (nhm-2p6.4.16).
+	kept := ClaimRequest{ID: "op-2", Verb: "spawn", Request: map[string]any{"prompt": "secret"}, Stored: map[string]any{"prompt": "sha256:x"}}
+	claim, err := db.ClaimOperation(ctx, kept, t0)
+	if err != nil || claim.Existing || claim.Operation.RequestJSON != `{"prompt":"sha256:x"}` ||
+		claim.Operation.Fingerprint != Fingerprint("spawn", []byte(`{"prompt":"secret"}`)) {
+		t.Fatalf("stored claim = %+v, %v", claim.Operation, err)
+	}
+	if again, err := db.ClaimOperation(ctx, kept, t0); err != nil || !again.Existing {
+		t.Fatalf("stored claim again = %+v, %v", again, err)
+	}
 }
 
 // Two processes (here: two connections) racing for one id: exactly one

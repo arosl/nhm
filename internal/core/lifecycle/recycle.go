@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/privacy"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/templates"
@@ -258,10 +259,13 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	}
 	// Providers write the last turn on exit: the final copy, indexed.
 	if original != "" {
-		if pr, err := Preserve(ctx, env.DB, env.InstanceDir, b, original, "recycle-exit", env.now()); err == nil {
+		switch pr, err := Preserve(ctx, env.DB, env.InstanceDir, b, original, "recycle-exit", env.now()); {
+		case err == nil:
 			res.Transcript = &pr
 			index(ctx, env, b, original, &res.Warnings)
-		} else {
+		case privacy.IsPrivacyError(err):
+			// The first copy was refused too, and said so.
+		default:
 			res.Warnings = append(res.Warnings, "the final transcript copy: "+err.Error()+"; the copy before the exit stays")
 		}
 	}
