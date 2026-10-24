@@ -6,11 +6,14 @@
 // AgentMailSpawnStatus; internal/cli/add.go at the same commit:
 // agentLifecycleFailureResponse and newAgentLifecycleFailureResponse;
 // internal/cli/create.go at the same commit: incrementAgentCounts;
-// internal/output/progress.go at the same commit: Steps; and
+// internal/output/progress.go at the same commit: Steps;
 // internal/output/success.go at the same commit: Suggestion,
-// PrintSuccessFooter, SpawnSuggestions and AddSuggestions; see LICENSE in
+// PrintSuccessFooter, SpawnSuggestions and AddSuggestions; and
+// internal/cli/spawn.go at the same commit: the agent-name line of
+// sendInitPromptToReadyAgentsWith, as agentNamePrompt; see LICENSE in
 // this directory and PROVENANCE.md. Local changes (nhm-2p6.4.8,
-// nhm-2p6.4.9): this header; package and imports; unexported names;
+// nhm-2p6.4.9, nhm-2p6.4.11): this header; package and imports;
+// unexported names;
 // SpawnResponse, AddResponse and the failure response carry nhm's own
 // facts under "_nhm"; AddResponse holds the admission that ntm's add
 // writes beside it (add.go 1193); no seat skips, persona prompt source,
@@ -310,4 +313,13 @@ func spawnSuggestions(session string) []suggestion {
 		{Command: fmt.Sprintf("nhm dashboard %s", session), Description: "Live status overview"},
 		{Command: "nhm palette", Description: "Quick command launcher"},
 	}
+}
+
+// agentNamePrompt is the init prompt with --with-agent-name: the agent's
+// name ahead of prompt (ntm#138).
+func agentNamePrompt(name, prompt string) string {
+	return fmt.Sprintf(
+		"You are agent `%s`. Use this name when registering with Agent Mail or referring to yourself.\n\n%s",
+		name, prompt,
+	)
 }

@@ -227,6 +227,9 @@ type humanAssign struct {
 	strategy   string
 	limit      int
 	initPrompt string
+	// withAgentName is ntm's --with-agent-name: each agent's own name
+	// ahead of --init-prompt.
+	withAgentName bool
 	// agentType is --assign-agent or an --assign-*-only alias, as ntm's
 	// long name; "" assigns to every agent.
 	agentType      string
@@ -259,7 +262,8 @@ type spawnAssignResult struct {
 // newHumanAssign takes the kickoff out of req into the assignment: the
 // spawn then sends none.
 func newHumanAssign(f *spawnFlags, req *spawn.Request) *humanAssign {
-	a := &humanAssign{strategy: f.strategy, limit: f.limit, initPrompt: f.initPrompt, verbose: f.assignVerbose, quiet: f.assignQuiet,
+	a := &humanAssign{strategy: f.strategy, limit: f.limit, initPrompt: f.initPrompt, withAgentName: f.withAgentName,
+		verbose: f.assignVerbose, quiet: f.assignQuiet,
 		timeout: f.assignTimeout, reviewer: req.Role == spawn.RoleReviewer,
 		agentType: spawnassign.ResolveSpawnAssignAgentType(f.assignAgent, f.assignCCOnly, f.assignCodOnly, f.assignGmiOnly, f.assignAgyOnly),
 		context:   spawnassign.PromptContextOptions{WithCASS: f.withCASS, WithMemory: f.withMemory}, kickoff: *req}
@@ -294,19 +298,40 @@ func (a *humanAssign) preflight(ctx context.Context, ie *instanceEnv, project st
 
 // prefix is what an agent gets ahead of its work, or as its kickoff: the
 // kickoff, then --init-prompt.
-func (a *humanAssign) prefix(kickoff string) string {
-	if strings.TrimSpace(a.initPrompt) == "" {
+func (a *humanAssign) prefix(kickoff string) string { return a.prefixFor(kickoff, "") }
+
+// prefixFor is prefix for the agent named name. With --with-agent-name,
+// ntm's "You are agent" line goes ahead of --init-prompt
+// (agentNamePrompt); ntm adds it only to an init prompt, and only for an
+// agent whose name it knows.
+func (a *humanAssign) prefixFor(kickoff, name string) string {
+	text := a.initPrompt
+	if strings.TrimSpace(text) == "" {
 		return kickoff
 	}
-	return strings.TrimSpace(strings.Join([]string{kickoff, a.initPrompt}, "\n\n"))
+	if a.withAgentName && name != "" {
+		text = agentNamePrompt(name, text)
+	}
+	return strings.TrimSpace(strings.Join([]string{kickoff, text}, "\n\n"))
+}
+
+// namesAgents reports whether each agent's prefix holds its own name.
+func (a *humanAssign) namesAgents() bool {
+	return a.withAgentName && strings.TrimSpace(a.initPrompt) != ""
 }
 
 // options are the choices for the spawn's fingerprint: a rerun of the
 // operation with other choices is refused.
 func (a *humanAssign) options() string {
-	b, _ := json.Marshal(map[string]any{"strategy": a.strategy, "limit": a.limit, "init_prompt": a.initPrompt,
+	opts := map[string]any{"strategy": a.strategy, "limit": a.limit, "init_prompt": a.initPrompt,
 		"agent_type": a.agentType, "prompt": a.kickoff.Prompt, "no_kickoff": a.kickoff.NoKickoff,
-		"with_cass": a.context.WithCASS, "with_memory": a.context.WithMemory})
+		"with_cass": a.context.WithCASS, "with_memory": a.context.WithMemory}
+	// Only when set, so an operation recorded before the flag keeps its
+	// fingerprint.
+	if a.withAgentName {
+		opts["with_agent_name"] = true
+	}
+	b, _ := json.Marshal(opts)
 	return string(b)
 }
 
@@ -515,15 +540,21 @@ func kickoffSkips(rows []robot.SpawnAssignment, get func(beadID string) *assignm
 	return skip
 }
 
-// kickoffs sends the kickoff, prefix, to each ready agent of res that is
-// not in kickoffSkips of rows (nil: every ready agent), under the owner
-// lock as every send runs, in any state of the agent. With only, a
-// replay's untouched agents (replayUntouched, nhm-vcf), it sends to those
-// alone, and through the delivery gate (spawn.KickoffGated). It returns
-// how many were submitted.
+// kickoffs sends the kickoff to each ready agent of res that is not in
+// kickoffSkips of rows (nil: every ready agent), under the owner lock as
+// every send runs, in any state of the agent: with withInit, each agent's
+// prefixFor, else kickoff alone. With only, a replay's untouched agents
+// (replayUntouched, nhm-vcf), it sends to those alone, and through the
+// delivery gate (spawn.KickoffGated). It returns how many were submitted.
 func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.Request, res *spawn.Result, rows []robot.SpawnAssignment,
-	prefix string, only []int) (int, error) {
-	if strings.TrimSpace(prefix) == "" {
+	kickoff string, withInit bool, only []int) (int, error) {
+	text := func(name string) string {
+		if withInit {
+			return a.prefixFor(kickoff, name)
+		}
+		return kickoff
+	}
+	if strings.TrimSpace(text("")) == "" {
 		return 0, nil
 	}
 	var get func(string) *assignment.Assignment
@@ -554,9 +585,9 @@ func (a *humanAssign) kickoffs(ctx context.Context, ie *instanceEnv, req spawn.R
 		for _, i := range targets {
 			t := &res.Targets[i]
 			if only != nil {
-				spawn.KickoffGated(ctx, env, req, res, t, prefix)
+				spawn.KickoffGated(ctx, env, req, res, t, text(t.MailName))
 			} else {
-				spawn.Kickoff(ctx, env, req, res, t, prefix)
+				spawn.Kickoff(ctx, env, req, res, t, text(t.MailName))
 			}
 			if t.KickoffStatus == send.StatusSubmitted || t.KickoffStatus == send.StatusPossiblySubmitted {
 				sent++

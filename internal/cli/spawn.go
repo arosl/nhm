@@ -43,7 +43,7 @@ const spawnLockWait = 10 * time.Second
 const spawnUsage = `Usage: nhm spawn <session> [--cc|--cod|--grok|--omp|--pi=N[:MODEL[:EFFORT]]]… [--oc=N[:MODEL]]… [--agy=N]…
                  [--agent KIND=N[:MODEL[:EFFORT]]]… [-l|--label L] [--tab-label L] [--group G] [--per-tab N]
                  [--prompt T | --prompt-file F | --no-kickoff] [--no-user]
-                 [--assign [--strategy S] [--limit N] [--init-prompt T] [--assign-agent TYPE]
+                 [--assign [--strategy S] [--limit N] [--init-prompt T [--with-agent-name]] [--assign-agent TYPE]
                   [--assign-cc-only|--assign-cod-only|--assign-gmi-only|--assign-agy-only]
                   [--assign-verbose|--assign-quiet] [--assign-timeout D] [--yes]]
                  [--stagger[=D]] [--stagger-mode none|fixed|smart] [--stagger-delay D] [--ready-timeout D]
@@ -82,14 +82,16 @@ bead: a bead the strategy plans for an agent that already has one fails,
 as in ntm. An agent with a bead gets the kickoff, --init-prompt and the
 bead's work prompt in one delivery, since a working agent takes no second
 prompt; every other agent gets the kickoff and --init-prompt after the
-assignment. If an agent does not start, the others get the kickoff alone
-and nothing is assigned. A planned bead that is not claimed and sent makes
-the exit 1; a delivery whose outcome is unknown is never sent again. A
-rerun of the same --op-id starts nothing, and refuses while the first run
-still runs. If the first run reached none of its agents (it ended between
-the spawn and the assignment), the rerun assigns as a first run does.
-Otherwise each agent that no prompt or bead reached, and that is still
-ready for a prompt, gets its kickoff alone; no bead is assigned again.
+assignment. --with-agent-name puts "You are agent NAME" (the agent's
+Agent Mail name) ahead of each agent's --init-prompt, as ntm's does. If
+an agent does not start, the others get the kickoff alone and nothing is
+assigned. A planned bead that is not claimed and sent makes the exit 1; a
+delivery whose outcome is unknown is never sent again. A rerun of the
+same --op-id starts nothing, and refuses while the first run still runs.
+If the first run reached none of its agents (it ended between the spawn
+and the assignment), the rerun assigns as a first run does. Otherwise
+each agent that no prompt or bead reached, and that is still ready for a
+prompt, gets its kickoff alone; no bead is assigned again.
 
 Agents of one project share a tab, a pane each, up to --per-tab (6): a new
 agent joins a tab of its project that has room, or opens a tab. A tab with
@@ -183,6 +185,7 @@ type spawnFlags struct {
 	assignAgent             string
 	assignVerbose           bool
 	assignQuiet             bool
+	withAgentName           bool
 	assignCCOnly            bool
 	assignCodOnly           bool
 	assignGmiOnly           bool
@@ -239,6 +242,7 @@ func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
 	fs.StringVar(&f.strategy, "strategy", "balanced", "with --assign: balanced, speed, quality, dependency or round-robin")
 	fs.IntVar(&f.limit, "limit", 0, "with --assign: the most beads to assign (0: no limit)")
 	fs.StringVar(&f.initPrompt, "init-prompt", "", "with --assign: a prompt for the ready agents, ahead of each one's work")
+	fs.BoolVar(&f.withAgentName, "with-agent-name", false, "with --init-prompt: put a \"You are agent NAME\" line ahead of it for each agent")
 	fs.BoolVar(&f.assignVerbose, "assign-verbose", false, "with --assign: the scoring and the beads left out")
 	fs.BoolVar(&f.assignQuiet, "assign-quiet", false, "with --assign: no phase lines")
 	fs.DurationVar(&f.assignTimeout, "assign-timeout", 30*time.Second, "with --assign: the limit of each external call (bv, br)")
@@ -774,7 +778,7 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		if assign != nil && !req.DryRun {
 			// The spawn sent no kickoff for --assign: an agent that started
 			// before the error (the operation's last write) gets it now.
-			if _, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, nil); kerr != nil {
+			if _, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, false, nil); kerr != nil {
 				err = fmt.Errorf("%w; kickoff: %v", err, kerr)
 			}
 		}
@@ -831,11 +835,7 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		// A target that is not ready is never untouched: a partial spawn
 		// takes this branch too, and gets the kickoff alone, as at first.
 		if len(untouched) < len(res.Targets) {
-			text := kickoff
-			if res.Ready() {
-				text = assign.prefix(kickoff)
-			}
-			kicked, kerr := assign.kickoffs(ctx, ie, req, &res, nil, text, untouched)
+			kicked, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, res.Ready(), untouched)
 			if kerr != nil {
 				env.Warnings = append(env.Warnings, "kickoff of the agents the first run did not reach: "+kerr.Error())
 			}
@@ -851,7 +851,7 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 		// ntm stops when an agent is not ready, before the init prompt:
 		// the agents that are up get the kickoff the spawn would have
 		// sent, and nothing is assigned.
-		_, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, nil)
+		_, kerr := assign.kickoffs(ctx, ie, req, &res, nil, kickoff, false, nil)
 		env.Result = spawnAssignResult{Result: res, AssignStrategy: assign.strategy, Assignments: []robot.SpawnAssignment{},
 			Skipped: []spawnassign.HumanSkip{}}
 		show = func(w io.Writer) {
@@ -872,10 +872,16 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	prefix := assign.prefix(kickoff)
 	var sel spawnassign.HumanSelection
 	hooks := assignHooks{selectWork: assign.selectWork(ctx, ie, res.Session, scope.ProjectRoot, &sel)}
+	if assign.namesAgents() {
+		// --with-agent-name: each agent's prefix holds its own name, so
+		// the hook gives it in place of the shared one.
+		hooks.preamble = func(o spawnassign.Occupant) string { return assign.prefixFor(kickoff, o.MailName) }
+		prefix = ""
+	}
 	out := spawn.SpawnOutput(res, nil, "json", time.Now())
 	assignPhase(ctx, ie, res, scope, plan, prefix, hooks, &out)
 	outcome := newHumanOutcome(&out, sel)
-	kicked, kerr := assign.kickoffs(ctx, ie, req, &res, out.Assignments, prefix, untouched)
+	kicked, kerr := assign.kickoffs(ctx, ie, req, &res, out.Assignments, kickoff, true, untouched)
 	if kerr != nil {
 		env.Warnings = append(env.Warnings, "kickoff of the agents without a bead: "+kerr.Error())
 	}

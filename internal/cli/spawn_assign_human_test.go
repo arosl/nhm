@@ -14,6 +14,7 @@ import (
 	"github.com/arosl/nhm/internal/core/assignment"
 	"github.com/arosl/nhm/internal/core/spawn"
 	"github.com/arosl/nhm/internal/core/spawnassign"
+	"github.com/arosl/nhm/internal/integrations/agentmail"
 	"github.com/arosl/nhm/internal/integrations/bv"
 	"github.com/arosl/nhm/internal/robot"
 	"github.com/arosl/nhm/internal/store"
@@ -92,11 +93,11 @@ func TestKickoffsNeedAStartedAgent(t *testing.T) {
 	ie := &instanceEnv{inst: inst, db: db}
 	a := &humanAssign{}
 	res := &spawn.Result{Targets: []spawn.Target{{Slot: "2.1", Status: spawn.StatusFailed}}}
-	if n, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md.", nil); n != 0 || err != nil {
+	if n, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md.", false, nil); n != 0 || err != nil {
 		t.Fatalf("no agent started: %d, %v", n, err)
 	}
 	res.Targets[0].Ready = true
-	if _, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md.", nil); err == nil {
+	if _, err := a.kickoffs(context.Background(), ie, spawn.Request{}, res, nil, "Read AGENTS.md.", false, nil); err == nil {
 		t.Fatal("a started agent under the Bash: no owner check")
 	}
 }
@@ -201,10 +202,11 @@ esac
 // spawn --assign end to end (nhm-cvw). When an agent fails to start, the
 // agents that are up get the kickoff alone and nothing is assigned, as ntm
 // stops at its ready wait. With two agents up and one ready bead, one
-// agent gets its identity, the kickoff, --init-prompt and ntm's work
-// prompt in one delivery; the other gets the identity, the kickoff and
-// --init-prompt; the text is ntm's. A rerun of the operation assigns
-// nothing; other choices under its id are refused.
+// agent gets the kickoff, --init-prompt and ntm's work prompt in one
+// delivery; the other gets the kickoff and --init-prompt; no identity
+// preamble goes ahead of either (nhm-2p6.4.6); the text is ntm's. A rerun
+// of the operation assigns nothing; other choices under its id are
+// refused.
 func TestSpawnAssignEndToEnd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake tools use a POSIX shell")
@@ -226,7 +228,7 @@ func TestSpawnAssignEndToEnd(t *testing.T) {
 		!strings.Contains(out, "  Waiting for agents to become ready... [FAIL]\n") {
 		t.Fatalf("partial spawn = %d\n%s\n%s", code, out, errOut)
 	}
-	// The prompt goes alone, with no identity preamble (nhm-2p6.4.6).
+	// The kickoff goes alone, with no identity preamble (nhm-2p6.4.6).
 	if sent := h.sent(); len(sent) != 1 || sent[0] != "w1:p11=Read AGENTS.md." {
 		t.Fatalf("partial spawn prompts = %q", sent)
 	}
@@ -360,5 +362,77 @@ func TestHumanPrint(t *testing.T) {
 	(&humanAssign{strategy: "speed", quiet: true, verbose: true}).print(&b, &e, 2, 0, done, sel)
 	if !strings.Contains(e.String(), "[DEP] Skipping nhm-8") || strings.Contains(b.String(), "Executing") {
 		t.Fatalf("quiet and verbose: stdout %q stderr %q", b.String(), e.String())
+	}
+}
+
+// ntm's --with-agent-name puts the agent's own "You are agent" line
+// ahead of --init-prompt, after the kickoff; only with an init prompt and
+// a name. The choice enters the fingerprint only when set (nhm-2p6.4.11).
+func TestPrefixForWithAgentName(t *testing.T) {
+	a := &humanAssign{initPrompt: "Then check your mail."}
+	if got := a.prefixFor("Read AGENTS.md.", "IcyKnoll"); got != "Read AGENTS.md.\n\nThen check your mail." || a.namesAgents() ||
+		strings.Contains(a.options(), "with_agent_name") {
+		t.Fatalf("without the flag = %q", got)
+	}
+	a.withAgentName = true
+	line := "You are agent `IcyKnoll`. Use this name when registering with Agent Mail or referring to yourself.\n\nThen check your mail."
+	if got := a.prefixFor("Read AGENTS.md.", "IcyKnoll"); got != "Read AGENTS.md.\n\n"+line || !a.namesAgents() ||
+		!strings.Contains(a.options(), `"with_agent_name":true`) {
+		t.Fatalf("with the flag = %q", got)
+	}
+	if got := a.prefixFor("", "IcyKnoll"); got != line {
+		t.Fatalf("no kickoff = %q", got)
+	}
+	if got := a.prefix("Read AGENTS.md."); got != "Read AGENTS.md.\n\nThen check your mail." {
+		t.Fatalf("no name = %q", got)
+	}
+	a.initPrompt = ""
+	if got := a.prefixFor("Read AGENTS.md.", "IcyKnoll"); got != "Read AGENTS.md." || a.namesAgents() {
+		t.Fatalf("no init prompt = %q", got)
+	}
+}
+
+// spawn --assign --with-agent-name: the agent with the bead and the one
+// without each get their own name, the one in Agent Mail's identity file
+// for their pane (nhm-2p6.4.11).
+func TestSpawnAssignWithAgentName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake tools use a POSIX shell")
+	}
+	s, inst, h := newSendInstance(t)
+	spawnHerdr(t, s, h)
+	spawnAgentMail(t, "GreenPike", "RedFox")
+	t.Setenv("HOME", t.TempDir())
+	project := assignTools(t)
+	ownNhm(t, inst)
+	code, out, errOut := run("spawn", "swarm", "--cc=2", "--per-tab=1", "--project", project, "--allow-unguarded", "--assign", "--yes",
+		"--prompt", "Read AGENTS.md.", "--init-prompt", "Then check your mail.", "--with-agent-name", "--socket", s.SocketPath)
+	if code != 0 {
+		t.Fatalf("spawn --assign --with-agent-name = %d\n%s\n%s", code, out, errOut)
+	}
+	work := "\n\nWork on bead nhm-1: Fix the thing. Check dependencies first with `br dep tree nhm-1`."
+	sent := h.sent()
+	var worked, kicked int
+	names := map[string]bool{}
+	for _, p := range sent {
+		pane, msg, _ := strings.Cut(p, "=")
+		rec, found, err := agentmail.ReadIdentity("", project, pane)
+		if err != nil || !found {
+			t.Fatalf("identity file of %s = %+v %v %v", pane, rec, found, err)
+		}
+		names[rec.Name] = true
+		prefix := "Read AGENTS.md.\n\nYou are agent `" + rec.Name +
+			"`. Use this name when registering with Agent Mail or referring to yourself.\n\nThen check your mail."
+		switch msg {
+		case prefix + work:
+			worked++
+		case prefix:
+			kicked++
+		default:
+			t.Fatalf("%s's prompt = %q", rec.Name, msg)
+		}
+	}
+	if worked != 1 || kicked != 1 || !names["GreenPike"] || !names["RedFox"] {
+		t.Fatalf("worked %d, kicked %d: %q", worked, kicked, sent)
 	}
 }
