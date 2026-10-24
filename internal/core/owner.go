@@ -20,7 +20,7 @@ import (
 // instance. owner.toml in the instance directory names it:
 //
 //	owner = "nhm"        # or "acfs-bash"
-//	generation = 3       # takeover and handback increment it
+//	generation = 3       # each switch increments it
 //	updated_at = 2026-10-12T04:00:00Z
 //
 // A missing file means acfs-bash, generation 0, during the migration.
@@ -32,10 +32,10 @@ import (
 //
 //	exec {fd}>"$dir/owner.lock"; flock -s -w 10 "$fd"   # Bash
 //
-// A takeover or handback takes it exclusive, so it waits for those holders
-// and no mutator starts while it switches. owner.toml is replaced by an
-// atomic rename; the lock is on the separate file because a rename would
-// leave a lock on the old inode.
+// A switch (nhm admin takeover) takes it exclusive, so it waits for those
+// holders and no mutator starts while it switches. owner.toml is replaced
+// by an atomic rename; the lock is on the separate file because a rename
+// would leave a lock on the old inode.
 
 // Owners.
 const (
@@ -108,10 +108,11 @@ func RequireOwner(o Owner, want string) error {
 }
 
 // SwitchOwner moves the instance to a new owner under the exclusive lock:
-// takeover (to nhm) or handback (to acfs-bash). prepare runs first, under
-// the lock, with the current owner; it imports or exports the state and
-// validates it. The switch happens only when prepare succeeds. It refuses
-// a corrupt owner.toml and a switch to the current owner.
+// takeover (to nhm). No verb switches back to acfs-bash since ACFS removed
+// its Bash (nhm-te0). prepare runs first, under the lock, with the current
+// owner; it imports the state and validates it. The switch happens only
+// when prepare succeeds. It refuses a corrupt owner.toml and a switch to
+// the current owner.
 func SwitchOwner(ctx context.Context, instanceDir, to string, now time.Time, prepare func(current Owner) error) (Owner, error) {
 	if to != OwnerBash && to != OwnerNhm {
 		return Owner{}, fmt.Errorf("core: unknown owner %q", to)
@@ -144,10 +145,10 @@ func SwitchOwner(ctx context.Context, instanceDir, to string, now time.Time, pre
 	return next, nil
 }
 
-// OwnerIntentFile is the writer-intent marker beside owner.lock. A
-// takeover or handback that waits for the exclusive lock keeps it fresh;
-// a shared taker (nhm's mutators and hooks, and ACFS's Bash) does not
-// take the lock while it is fresh. So a stream of overlapping shared
+// OwnerIntentFile is the writer-intent marker beside owner.lock. A switch
+// that waits for the exclusive lock keeps it fresh; a shared taker (nhm's
+// mutators and hooks, and ACFS's Bash) does not take the lock while it is
+// fresh. So a stream of overlapping shared
 // holders cannot starve the switch: once the marker is up, they drain.
 // A marker older than IntentMaxAge is a dead switch's, and is ignored.
 const OwnerIntentFile = "owner.lock.intent"

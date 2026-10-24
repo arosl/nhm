@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,40 +19,8 @@ import (
 	"github.com/arosl/nhm/internal/store"
 )
 
-type fakeBash struct {
-	export   []byte
-	imported State
-	tokens   map[string]string // name -> token, read at import time
-	fail     error
-}
-
-func (f *fakeBash) Export(context.Context) ([]byte, error) { return f.export, nil }
-
-func (f *fakeBash) Import(_ context.Context, file string) error {
-	if f.fail != nil {
-		return f.fail
-	}
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	if f.imported, err = ParseState(data); err != nil {
-		return err
-	}
-	f.tokens = map[string]string{}
-	for _, t := range f.imported.Tokens {
-		tok, err := readToken(t.File)
-		if err != nil {
-			return err
-		}
-		f.tokens[t.Name] = tok
-	}
-	return nil
-}
-
 type fakeEvents struct {
 	events map[string][]Event // agent -> events
-	tail   int64
 }
 
 func (f fakeEvents) After(_ context.Context, _, agent string, cursor int64) ([]Event, error) {
@@ -62,8 +32,6 @@ func (f fakeEvents) After(_ context.Context, _, agent string, cursor int64) ([]E
 	}
 	return out, nil
 }
-
-func (f fakeEvents) Tail(context.Context, string, string) (int64, error) { return f.tail, nil }
 
 type fakeMail struct {
 	unread map[string][]int64
@@ -115,10 +83,8 @@ func (m fakeMail) Call(_ context.Context, tool string, args, out any) error {
 
 type world struct {
 	env    Env
-	bash   *fakeBash
 	events fakeEvents
 	keep   []string
-	dir    string
 	b      bindings.Binding
 }
 
@@ -133,8 +99,8 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	w := &world{bash: &fakeBash{}, events: fakeEvents{events: map[string][]Event{}, tail: 99}, keep: []string{"GreenCastle"}, dir: t.TempDir()}
-	w.env = Env{DB: db, Bindings: bindings.NewStore(db), InstanceDir: inst.Dir, Bash: w.bash,
+	w := &world{events: fakeEvents{events: map[string][]Event{}}, keep: []string{"GreenCastle"}}
+	w.env = Env{DB: db, Bindings: bindings.NewStore(db), InstanceDir: inst.Dir, AcfsHome: t.TempDir(),
 		Mail: fakeMail{unread: map[string][]int64{"IcyKnoll": {5, 12}}, down: map[string]bool{},
 			tokens: map[string]string{"IcyKnoll": "tok-icy"}, retired: map[string]bool{}},
 		ImportBindings: func(context.Context, bool, *herdr.SessionSnapshot) (bindings.ImportReport, error) {
@@ -156,30 +122,30 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
-// export is the Bash's state: IcyKnoll's token and wake state, and a
-// token whose project nobody records.
-func (w *world) export(t *testing.T, keep ...string) {
+// bashFile writes one file of the Bash's state, under state/ of the ACFS
+// home.
+func (w *world) bashFile(t *testing.T, rel, content string) string {
 	t.Helper()
-	icy := filepath.Join(w.dir, "IcyKnoll")
-	ghost := filepath.Join(w.dir, "GhostOwl")
-	for f, tok := range map[string]string{icy: "tok-icy\n", ghost: "tok-ghost\n"} {
-		if err := os.WriteFile(f, []byte(tok), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	path := filepath.Join(w.env.AcfsHome, "state", rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	p := "/p"
-	cursor, last := int64(10), int64(1760000000)
-	st := State{Format: StateFormat, Version: StateVersion, ExportedAt: "2026-10-12T07:00:00Z",
-		Tokens: []TokenRef{{ProjectKey: &p, ProjectHash: ProjectHash(p), Name: "IcyKnoll", File: icy},
-			{ProjectHash: "0123456789abcdef", Name: "GhostOwl", File: ghost}},
-		Wake: []WakeEntry{{ProjectKey: &p, ProjectHash: ProjectHash(p), Name: "IcyKnoll",
-			State: WakeState{Cursor: &cursor, LastWake: &last, Overdue: []int64{}}}},
-		Keep: keep}
-	if st.Keep == nil {
-		st.Keep = []string{}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	data, _ := json.Marshal(st)
-	w.bash.export = data
+	return path
+}
+
+// export is the Bash's state, as its files: IcyKnoll's token and wake
+// state, and a token whose project nobody records.
+func (w *world) export(t *testing.T) {
+	t.Helper()
+	h := ProjectHash("/p")
+	w.bashFile(t, "tokens/"+h+"/.project", "/p\n")
+	w.bashFile(t, "tokens/"+h+"/IcyKnoll", "tok-icy\n")
+	w.bashFile(t, "tokens/0123456789abcdef/GhostOwl", "tok-ghost\n")
+	w.bashFile(t, "wake/"+h+"/project", "/p\n")
+	w.bashFile(t, "wake/"+h+"/IcyKnoll.json", `{"cursor": 10, "last_wake": 1760000000, "overdue": []}`)
 	// Message 5 reached IcyKnoll before the Bash's cursor, 12 after it.
 	w.events.events["IcyKnoll"] = []Event{{Cursor: 8, MessageID: 5, Kind: "to"}, {Cursor: 15, MessageID: 12, Kind: "cc"}}
 }
@@ -194,15 +160,20 @@ func wakeRow(t *testing.T, w *world, id string) (announced bool, ok bool) {
 	return at != nil, true
 }
 
-func TestTakeoverAndHandback(t *testing.T) {
+// nhm-te0: the takeover reads the Bash's files itself; no acfs command
+// runs (Env has none).
+func TestTakeover(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	w.export(t, "greencastle")
+	w.export(t)
 
 	// A dry run checks everything and writes nothing.
 	rep, err := Takeover(ctx, w.env, true)
 	if err != nil || rep.Owner.Owner != core.OwnerBash || len(rep.Tokens) != 2 || rep.Wake[0].Handled != 1 || rep.Wake[0].New != 1 {
 		t.Fatalf("dry run = %+v %v", rep, err)
+	}
+	if strings.Join(rep.Keep, ",") != "GreenCastle" {
+		t.Fatalf("keep = %v, want nhm's keep list", rep.Keep)
 	}
 	if _, err := store.ReadSecret(w.env.InstanceDir, w.b.ID); err == nil {
 		t.Fatal("the dry run kept a token")
@@ -236,32 +207,95 @@ func TestTakeoverAndHandback(t *testing.T) {
 	if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerNhm {
 		t.Fatalf("owner.toml = %+v", o)
 	}
-	if _, err := Takeover(ctx, w.env, false); !errors.Is(err, ErrRefused) {
+	// A second switch to nhm is a refusal, like the dry run's.
+	if _, err := Takeover(ctx, w.env, false); !errors.Is(err, ErrRefused) || !errors.Is(err, core.ErrAlreadyOwner) {
 		t.Fatalf("a second takeover = %v", err)
 	}
+	if _, err := Takeover(ctx, w.env, true); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "nhm owns the instance already") {
+		t.Fatalf("a dry run when nhm owns = %v", err)
+	}
+	// It deletes nothing of the Bash's.
+	if _, err := os.Stat(filepath.Join(w.env.AcfsHome, "state", "tokens", ProjectHash("/p"), "IcyKnoll")); err != nil {
+		t.Fatalf("the Bash's token file: %v", err)
+	}
+}
 
-	// Handback: message 12 is pending in nhm, so the Bash's cursor sits
-	// just before its delivery event.
-	if _, err := w.env.DB.SQL().Exec(`INSERT INTO wake (binding_id, message_id, first_seen_at) VALUES (?, '12', 'x')`, w.b.ID); err != nil {
+// nhm-te0: ReadState reads the files `acfs agents export` read, as it
+// read them.
+func TestReadState(t *testing.T) {
+	w := newWorld(t)
+	if st, notes, err := ReadState(w.env.AcfsHome); err != nil || len(st.Tokens) != 0 || len(st.Wake) != 0 || len(notes) != 0 {
+		t.Fatalf("no state directory = %+v %v %v, want nothing kept", st, notes, err)
+	}
+	if _, _, err := ReadState(""); err == nil {
+		t.Fatal("no ACFS home: read the current directory")
+	}
+
+	w.export(t)
+	h, wh := ProjectHash("/p"), ProjectHash("/w")
+	// A token directory without .project takes the wake directory's
+	// project; with neither, the token has only its hash.
+	w.bashFile(t, "tokens/"+wh+"/RedFox", "tok-red\n")
+	w.bashFile(t, "wake/"+wh+"/project", "/w\n")
+	// What the Bash would not have written is not its: hidden files, names
+	// it never gives, other files in a wake directory, a directory in a
+	// token directory.
+	w.bashFile(t, "tokens/"+h+"/.hidden", "x\n")
+	w.bashFile(t, "tokens/"+h+"/Not-A-Name", "x\n")
+	w.bashFile(t, "tokens/"+h+"/sub/BlueLake", "x\n")
+	w.bashFile(t, "tokens/.old/BlueLake", "x\n")
+	w.bashFile(t, "wake/"+h+"/notes.txt", "x\n")
+	// A wake file that is not a wake state is left out, with a note.
+	w.bashFile(t, "wake/"+wh+"/RedFox.json", `{"cursor": 1, "last_wake": 2}`)
+	w.bashFile(t, "wake/"+wh+"/OldFox.json", `{"cursor": 1.5, "last_wake": 2, "overdue": []}`)
+
+	st, notes, err := ReadState(w.env.AcfsHome)
+	if err != nil {
 		t.Fatal(err)
 	}
-	var refreshed []string
-	w.env.RefreshWake = func(_ context.Context, b bindings.Binding) error {
-		refreshed = append(refreshed, b.MailName)
-		return nil
+	var tokens []string
+	for _, tr := range st.Tokens {
+		tokens = append(tokens, fmt.Sprintf("%s %s %s %s", tr.Name, projectOf(tr.ProjectKey), tr.ProjectHash, filepath.Base(tr.File)))
 	}
-	rep, err = Handback(ctx, w.env, false)
-	if err != nil || rep.Owner.Owner != core.OwnerBash || rep.Owner.Generation != 2 || len(refreshed) != 1 {
-		t.Fatalf("handback = %+v %v, refreshed %v", rep, err, refreshed)
+	want := []string{"GhostOwl  0123456789abcdef GhostOwl", "IcyKnoll /p " + h + " IcyKnoll", "RedFox /w " + wh + " RedFox"}
+	sort.Strings(tokens)
+	if strings.Join(tokens, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("tokens =\n%s\nwant\n%s", strings.Join(tokens, "\n"), strings.Join(want, "\n"))
 	}
-	im := w.bash.imported
-	if len(im.Wake) != 1 || *im.Wake[0].State.Cursor != 14 || w.bash.tokens["IcyKnoll"] != "tok-icy" ||
-		len(im.Keep) != 1 || im.Keep[0] != "GreenCastle" {
-		t.Fatalf("the Bash got %+v, tokens %v", im, w.bash.tokens)
+	if len(st.Wake) != 1 || st.Wake[0].Name != "IcyKnoll" || projectOf(st.Wake[0].ProjectKey) != "/p" || st.Wake[0].ProjectHash != h ||
+		*st.Wake[0].State.Cursor != 10 || *st.Wake[0].State.LastWake != 1760000000 {
+		t.Fatalf("wake = %+v", st.Wake)
 	}
-	// The token files went with the import.
-	if left, _ := filepath.Glob(filepath.Join(w.env.InstanceDir, ".handback.*")); len(left) != 0 {
-		t.Fatalf("left behind: %v", left)
+	if len(notes) != 2 || !strings.Contains(strings.Join(notes, "\n"), "RedFox.json is not a wake state; left out") ||
+		!strings.Contains(strings.Join(notes, "\n"), "OldFox.json is not a wake state") {
+		t.Fatalf("notes = %q", notes)
+	}
+
+	// The takeover reports the notes, and goes on.
+	w.env.Exclude = []string{"GhostOwl", "RedFox"}
+	rep, err := Takeover(context.Background(), w.env, true)
+	if err != nil || !strings.Contains(strings.Join(rep.Notes, "\n"), "RedFox.json is not a wake state") {
+		t.Fatalf("takeover notes = %q", rep.Notes)
+	}
+
+	// A state directory that cannot be read fails: no token is missed.
+	tokensDir := filepath.Join(w.env.AcfsHome, "state", "tokens")
+	if err := os.Chmod(tokensDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(tokensDir, 0o700) })
+	if _, err := os.ReadDir(tokensDir); err == nil {
+		t.Skip("the directory stays readable (running as root)")
+	}
+	if _, _, err := ReadState(w.env.AcfsHome); err == nil {
+		t.Fatal("an unreadable tokens directory read as no tokens")
+	}
+	if _, err := Takeover(context.Background(), w.env, false); err == nil || errors.Is(err, ErrRefused) ||
+		!strings.Contains(err.Error(), "the Bash's state cannot be read") {
+		t.Fatalf("takeover = %v (a failure, not a refusal)", err)
+	}
+	if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerBash {
+		t.Fatalf("owner = %+v", o)
 	}
 }
 
@@ -334,44 +368,11 @@ func TestTakeoverChecksEachTokenWithAgentMail(t *testing.T) {
 	}
 }
 
-// movingEvents is fakeEvents whose tail moves when mail is delivered.
-type movingEvents struct {
-	fakeEvents
-	tail *int64
-}
-
-func (m movingEvents) Tail(context.Context, string, string) (int64, error) { return *m.tail, nil }
-
-// acfs-9hkh.77 F1: mail delivered while handback brings the wake rows up
-// to date stays after the Bash's cursor: the tail is read first.
-func TestHandbackReadsTheTailFirst(t *testing.T) {
-	w := newWorld(t)
-	ctx := context.Background()
-	w.export(t, "greencastle")
-	if _, err := Takeover(ctx, w.env, false); err != nil {
-		t.Fatal(err)
-	}
-	tail := int64(20)
-	w.env.Events = movingEvents{fakeEvents: w.events, tail: &tail}
-	// The inbox read happens before message 30 arrives (cursor 25), so it
-	// records no row for it; then the message is delivered.
-	w.env.RefreshWake = func(context.Context, bindings.Binding) error {
-		tail = 25
-		return nil
-	}
-	if _, err := Handback(ctx, w.env, false); err != nil {
-		t.Fatal(err)
-	}
-	if c := *w.bash.imported.Wake[0].State.Cursor; c != 20 {
-		t.Fatalf("the Bash's cursor = %d, want 20 (before message 30)", c)
-	}
-}
-
 // acfs-9hkh.77 F2: unread mail with no delivery event is new, not handled.
 func TestTakeoverTreatsEventlessMailAsNew(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	w.export(t, "greencastle")
+	w.export(t)
 	w.env.Mail.(fakeMail).unread["IcyKnoll"] = []int64{5, 12, 40}
 	rep, err := Takeover(ctx, w.env, false)
 	if err != nil || rep.Wake[0].Handled != 1 || rep.Wake[0].New != 2 {
@@ -385,52 +386,6 @@ func TestTakeoverTreatsEventlessMailAsNew(t *testing.T) {
 	}
 }
 
-// acfs-9hkh.77 F3, F4: a stale token directory is swept; a switch to the
-// current owner is a refusal, like the dry run's.
-func TestHandbackSweepsAndSecondSwitchRefuses(t *testing.T) {
-	w := newWorld(t)
-	ctx := context.Background()
-	w.export(t, "greencastle")
-	if _, err := Takeover(ctx, w.env, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Takeover(ctx, w.env, false); !errors.Is(err, ErrRefused) || !errors.Is(err, core.ErrAlreadyOwner) {
-		t.Fatalf("takeover --yes when nhm owns = %v", err)
-	}
-	stale := filepath.Join(w.env.InstanceDir, ".handback.stale")
-	fresh := filepath.Join(w.env.InstanceDir, ".handback.live")
-	for _, d := range []string{stale, fresh} {
-		if err := os.Mkdir(d, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(d, "token-x"), []byte("tok\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	old := w.env.now().Add(-time.Hour)
-	if err := os.Chtimes(stale, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(fresh, w.env.now(), w.env.now()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Handback(ctx, w.env, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("the stale directory is still there: %v", err)
-	}
-	if _, err := os.Stat(fresh); err != nil {
-		t.Fatalf("a live handback's directory was removed: %v", err)
-	}
-	if _, err := Handback(ctx, w.env, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Handback(ctx, w.env, false); !errors.Is(err, ErrRefused) || !errors.Is(err, core.ErrAlreadyOwner) {
-		t.Fatalf("handback --yes when the Bash owns = %v", err)
-	}
-}
-
 func TestTakeoverRefusals(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -438,17 +393,10 @@ func TestTakeoverRefusals(t *testing.T) {
 		setup func(t *testing.T, w *world)
 		want  string
 	}{
-		{"keep list not covered", func(t *testing.T, w *world) { w.export(t, "RedStone") }, "keep list lacks RedStone"},
 		{"token unreadable", func(t *testing.T, w *world) {
 			w.export(t)
-			if err := os.WriteFile(filepath.Join(w.dir, "IcyKnoll"), nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			w.bashFile(t, "tokens/"+ProjectHash("/p")+"/IcyKnoll", "")
 		}, "cannot be read"},
-		{"not the Bash's format", func(t *testing.T, w *world) { w.bash.export = []byte(`{"format":"x","version":1}`) }, "not acfs-agents-state"},
-		{"a bad entry", func(t *testing.T, w *world) {
-			w.bash.export = []byte(`{"format":"acfs-agents-state","version":1,"tokens":[{"name":"x y","file":"f"}],"wake":[],"keep":[]}`)
-		}, "tokens[0]"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newWorld(t)
@@ -651,19 +599,10 @@ func TestTakeoverExcludeIsScopedAndRefusesBeforeWriting(t *testing.T) {
 	// Two GhostOwls, in /a and /b, neither bound.
 	twoProjects := func(t *testing.T, w *world) {
 		t.Helper()
-		var toks []TokenRef
 		for _, p := range []string{"/a", "/b"} {
-			p := p
-			f := filepath.Join(w.dir, "GhostOwl"+strings.TrimPrefix(p, "/"))
-			if err := os.WriteFile(f, []byte("tok\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			toks = append(toks, TokenRef{ProjectKey: &p, ProjectHash: ProjectHash(p), Name: "GhostOwl", File: f})
+			w.bashFile(t, "tokens/"+ProjectHash(p)+"/.project", p+"\n")
+			w.bashFile(t, "tokens/"+ProjectHash(p)+"/GhostOwl", "tok\n")
 		}
-		st := State{Format: StateFormat, Version: StateVersion, ExportedAt: "2026-10-12T07:00:00Z",
-			Tokens: toks, Wake: []WakeEntry{}, Keep: []string{}}
-		data, _ := json.Marshal(st)
-		w.bash.export = data
 	}
 	for _, c := range []struct {
 		exclude  []string
@@ -722,65 +661,14 @@ func TestTakeoverWritesNothingOnFailure(t *testing.T) {
 	}
 	w.env.Mail.(fakeMail).down["IcyKnoll"] = false
 	rep, err := Takeover(ctx, w.env, false)
-	if err != nil || rep.Tokens[0].Action != ActionReplaced {
+	actions := map[string]string{}
+	for _, it := range rep.Tokens {
+		actions[it.Name] = it.Action
+	}
+	if err != nil || actions["IcyKnoll"] != ActionReplaced {
 		t.Fatalf("retry = %+v %v", rep.Tokens, err)
 	}
 	if tok, _ := store.ReadSecret(w.env.InstanceDir, w.b.ID); tok != "tok-icy" {
 		t.Fatalf("token = %q", tok)
-	}
-}
-
-func TestHandbackRefusals(t *testing.T) {
-	ctx := context.Background()
-	for _, c := range []struct {
-		name string
-		row  string
-		want string
-	}{
-		{"pending without an event", `INSERT INTO wake (binding_id, message_id, first_seen_at) VALUES (?, '77', 'x')`, "no delivery event"},
-		{"nudge in flight", `INSERT INTO wake (binding_id, message_id, first_seen_at, last_outcome) VALUES (?, '6', 'x', 'attempt_started')`, "in flight"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			w := newWorld(t)
-			w.export(t)
-			if _, err := Takeover(ctx, w.env, false); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := w.env.DB.SQL().Exec(c.row, w.b.ID); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := Handback(ctx, w.env, false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("= %v", err)
-			}
-			if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerNhm {
-				t.Fatalf("owner = %+v", o)
-			}
-		})
-	}
-	// The Bash refusing the state keeps nhm the owner.
-	w := newWorld(t)
-	w.export(t)
-	if _, err := Takeover(ctx, w.env, false); err != nil {
-		t.Fatal(err)
-	}
-	w.bash.fail = errors.New("agents.toml does not keep GreenCastle")
-	if _, err := Handback(ctx, w.env, false); err == nil || !strings.Contains(err.Error(), "refused the state") {
-		t.Fatalf("= %v", err)
-	}
-	if o, _ := core.ReadOwner(w.env.InstanceDir); o.Owner != core.OwnerNhm {
-		t.Fatalf("owner = %+v", o)
-	}
-	// A token nhm cannot read would be lost: refused.
-	w.bash.fail = nil
-	secret := filepath.Join(w.env.InstanceDir, "secrets", w.b.ID)
-	if err := os.Chmod(secret, 0); err != nil {
-		t.Skipf("cannot make the token unreadable: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(secret, 0o600) })
-	if _, err := store.ReadSecret(w.env.InstanceDir, w.b.ID); err == nil {
-		t.Skip("the token stays readable (running as root)")
-	}
-	if _, err := Handback(ctx, w.env, false); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "would lose it") {
-		t.Fatalf("unreadable token = %v", err)
 	}
 }

@@ -46,7 +46,7 @@ func TestEveryLeafHelpPrintsUsageAndRunsNothing(t *testing.T) {
 		{"ensemble", "stop"}, {"ensemble", "runs"}, {"ui", "palette"}, {"ui", "board-popup"},
 		{"admin", "instance", "enroll"}, {"admin", "recover", "reconcile"}, {"admin", "recover", "inspect"},
 		{"admin", "recover", "resume"}, {"admin", "restore"}, {"admin", "export"}, {"admin", "import"},
-		{"admin", "takeover"}, {"admin", "handback"}}
+		{"admin", "takeover"}}
 	_, help, _ := run("help")
 	for _, m := range regexp.MustCompile(`(?m)^  nhm ([a-z]+)`).FindAllStringSubmatch(help, -1) {
 		if m[1] != "help" {

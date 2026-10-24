@@ -2,7 +2,6 @@ package owner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -23,25 +22,13 @@ func serverDownImport(context.Context, bool, *herdr.SessionSnapshot) (bindings.I
 		Err: &net.OpError{Op: "dial", Net: "unix", Err: &os.SyscallError{Syscall: "connect", Err: syscall.ENOENT}}})
 }
 
-// emptyExport is a fresh install's Bash: no token, no wake state.
-func (w *world) emptyExport(t *testing.T) {
-	t.Helper()
-	data, err := json.Marshal(State{Format: StateFormat, Version: StateVersion, ExportedAt: "2026-10-13T20:00:00Z",
-		Tokens: []TokenRef{}, Wake: []WakeEntry{}, Keep: []string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.bash.export = data
-}
-
 // nhm-swm (ACFS acfs-9hkh.93): a fresh install has no herdr server, and
-// its Bash keeps nothing. The takeover goes on: the dry run passes and
-// changes nothing, and the real one makes nhm the owner with nothing
-// imported.
+// no Bash state (nhm-te0: ACFS has no Bash at all, so no state directory
+// either). The takeover goes on: the dry run passes and changes nothing,
+// and the real one makes nhm the owner with nothing imported.
 func TestTakeoverWithNoServerAndNothingToImport(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	w.emptyExport(t)
 	w.env.ImportBindings = serverDownImport
 	w.env.Exclude = nil // a fresh install names no agent to leave behind
 
@@ -89,7 +76,7 @@ func TestTakeoverWithNoServerRefusesTheBashsAgents(t *testing.T) {
 	ctx := context.Background()
 	for _, dry := range []bool{true, false} {
 		w := newWorld(t)
-		w.export(t, "greencastle")
+		w.export(t)
 		w.env.ImportBindings = serverDownImport
 		_, err := Takeover(ctx, w.env, dry)
 		if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "start herdr") {
@@ -105,7 +92,6 @@ func TestTakeoverWithNoServerRefusesTheBashsAgents(t *testing.T) {
 // takeover: only a server that is not running counts as "no pane".
 func TestTakeoverOtherHerdrFailuresStillFail(t *testing.T) {
 	w := newWorld(t)
-	w.emptyExport(t)
 	w.env.ImportBindings = func(context.Context, bool, *herdr.SessionSnapshot) (bindings.ImportReport, error) {
 		return bindings.ImportReport{}, fmt.Errorf("bindings: import: %w", &herdr.TransportError{Method: "session.snapshot",
 			Err: errors.New("decode reply: unexpected EOF")})

@@ -85,7 +85,7 @@ func adminUsage(args []string) string {
 		return adminLifecycleUsage + "\n" + recoverUsage
 	case len(args) >= 1 && (args[0] == "restore" || args[0] == "export" || args[0] == "import"):
 		return adminLifecycleUsage
-	case len(args) >= 1 && (args[0] == "takeover" || args[0] == "handback"):
+	case len(args) >= 1 && args[0] == "takeover":
 		return takeoverUsage
 	}
 	return strings.Join([]string{enrollUsage, recoverUsage, adminLifecycleUsage, takeoverUsage}, "\n")

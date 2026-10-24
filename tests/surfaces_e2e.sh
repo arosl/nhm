@@ -49,8 +49,8 @@ surfaces_stop() {
 trap surfaces_stop EXIT
 herdr_private_start
 
-# nhm owns the server. The takeover needs ACFS's Bash and Agent Mail, which
-# the test has not: it writes the owner record that a takeover leaves.
+# nhm owns the server. The test writes the owner record that a takeover
+# leaves, instead of running one.
 nhm admin instance enroll >/dev/null
 inst="$(dirname "$(find "$XDG_STATE_HOME/nhm" -name owner.lock | head -1)")"
 printf 'owner = "nhm"\ngeneration = 1\nupdated_at = 2026-10-13T00:00:00Z\n' >"$inst/owner.toml"

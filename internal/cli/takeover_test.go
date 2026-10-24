@@ -11,9 +11,32 @@ import (
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 )
 
-// TestTakeoverHandbackVerbs drives both verbs against a fake acfs
-// command, on a server with no agents: no Agent Mail call is made.
-func TestTakeoverHandbackVerbs(t *testing.T) {
+// fakeAcfs puts an old ACFS's acfs command first on PATH: its `agents
+// export` says the Bash keeps nothing, and every call leaves a mark. nhm
+// must never run it (nhm-te0), and never take its word over the Bash's
+// files.
+func fakeAcfs(t *testing.T, dir string) (called string) {
+	t.Helper()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	called = filepath.Join(dir, "acfs-called")
+	script := "#!/bin/sh\n" +
+		"echo \"$*\" >>'" + called + "'\n" +
+		"echo '{\"format\":\"acfs-agents-state\",\"version\":1,\"exported_at\":\"x\",\"tokens\":[],\"wake\":[],\"keep\":[]}'\n"
+	if err := os.WriteFile(filepath.Join(bin, "acfs"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ACFS_BIN", filepath.Join(bin, "acfs"))
+	return called
+}
+
+// TestTakeoverVerb drives the verb on a server with no agents and no Bash
+// state (a fresh install): no Agent Mail call is made, and no acfs
+// command runs. handback is gone (nhm-te0).
+func TestTakeoverVerb(t *testing.T) {
 	s, inst := cliInstance(t)
 	s.Handle("session.snapshot", func(herdrtest.Request) (any, *herdrtest.Error) {
 		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
@@ -23,18 +46,8 @@ func TestTakeoverHandbackVerbs(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
-	imported := filepath.Join(dir, "imported.json")
-	acfs := filepath.Join(dir, "acfs")
-	script := "#!/bin/sh\n" +
-		"case \"$2\" in\n" +
-		"export) echo '{\"format\":\"acfs-agents-state\",\"version\":1,\"exported_at\":\"x\",\"tokens\":[],\"wake\":[],\"keep\":[]}' ;;\n" +
-		"import) cp \"$3\" " + imported + " ;;\n" +
-		"*) exit 2 ;;\n" +
-		"esac\n"
-	if err := os.WriteFile(acfs, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ACFS_BIN", acfs)
+	t.Setenv("ACFS_HOME", "")
+	called := fakeAcfs(t, dir)
 	sock := s.SocketPath
 
 	if code, _, _ := run("admin", "takeover", "--socket", sock); code != 2 {
@@ -54,19 +67,22 @@ func TestTakeoverHandbackVerbs(t *testing.T) {
 	if code, _, errOut = run("admin", "takeover", "--yes", "--socket", sock); code != 2 || !strings.Contains(errOut, "already nhm") {
 		t.Fatalf("a second takeover = %d %s", code, errOut)
 	}
-	code, out, errOut = run("admin", "handback", "--yes", "--socket", sock, "--json")
-	if code != 0 || decodeEnvelope(t, out)["result"].(map[string]any)["owner"].(map[string]any)["owner"] != core.OwnerBash {
-		t.Fatalf("handback = %d %s %s", code, out, errOut)
+	if code, _, _ = run("admin", "handback", "--yes", "--socket", sock); code != 2 {
+		t.Fatalf("handback = %d, want the unknown admin verb's 2", code)
 	}
-	if data, err := os.ReadFile(imported); err != nil || !strings.Contains(string(data), `"acfs-agents-state"`) {
-		t.Fatalf("the Bash got %q %v", data, err)
+	if o, _ := core.ReadOwner(inst.Dir); o.Owner != core.OwnerNhm || o.Generation != 1 {
+		t.Fatalf("owner = %+v", o)
+	}
+	if data, err := os.ReadFile(called); !os.IsNotExist(err) {
+		t.Fatalf("nhm ran acfs: %q %v", data, err)
 	}
 }
 
 // TestTakeoverExcludeVerb (acfs-9hkh.80): a token no binding takes refuses
 // the takeover with exit 2, in the dry run and with --yes, and the owner
 // stays the Bash; --exclude names it, and the takeover passes and lists
-// it. handback takes no --exclude.
+// it. nhm-te0: the token is a file in ~/.acfs/state, which the takeover
+// reads itself, over an acfs whose export says the Bash keeps nothing.
 func TestTakeoverExcludeVerb(t *testing.T) {
 	s, inst := cliInstance(t)
 	s.Handle("session.snapshot", func(herdrtest.Request) (any, *herdrtest.Error) {
@@ -77,22 +93,17 @@ func TestTakeoverExcludeVerb(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
-	token := filepath.Join(dir, "RainyBasin")
-	if err := os.WriteFile(token, []byte("tok-rainy\n"), 0o600); err != nil {
+	t.Setenv("ACFS_HOME", "")
+	tokens := filepath.Join(dir, ".acfs", "state", "tokens", "0123456789abcdef")
+	if err := os.MkdirAll(tokens, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	acfs := filepath.Join(dir, "acfs")
-	script := "#!/bin/sh\n" +
-		"case \"$2\" in\n" +
-		"export) echo '{\"format\":\"acfs-agents-state\",\"version\":1,\"exported_at\":\"x\",\"tokens\":[" +
-		"{\"project_key\":\"" + dir + "/work\",\"project_hash\":\"0123456789abcdef\",\"name\":\"RainyBasin\",\"file\":\"" + token + "\"}]," +
-		"\"wake\":[],\"keep\":[]}' ;;\n" +
-		"*) exit 2 ;;\n" +
-		"esac\n"
-	if err := os.WriteFile(acfs, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
+	for name, content := range map[string]string{".project": dir + "/work\n", "RainyBasin": "tok-rainy\n"} {
+		if err := os.WriteFile(filepath.Join(tokens, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Setenv("ACFS_BIN", acfs)
+	called := fakeAcfs(t, dir)
 	sock := s.SocketPath
 
 	for _, mode := range []string{"--dry-run", "--yes"} {
@@ -115,8 +126,11 @@ func TestTakeoverExcludeVerb(t *testing.T) {
 	if o, _ := core.ReadOwner(inst.Dir); o.Owner != core.OwnerNhm {
 		t.Fatalf("owner = %+v", o)
 	}
-	if code, _, errOut = run("admin", "handback", "--dry-run", "--exclude", "x", "--socket", sock); code != 2 || !strings.Contains(errOut, "takeover flag") {
-		t.Fatalf("handback --exclude = %d %s", code, errOut)
+	if _, err := os.Stat(filepath.Join(tokens, "RainyBasin")); err != nil {
+		t.Fatalf("the takeover touched the Bash's token: %v", err)
+	}
+	if data, err := os.ReadFile(called); !os.IsNotExist(err) {
+		t.Fatalf("nhm ran acfs: %q %v", data, err)
 	}
 }
 

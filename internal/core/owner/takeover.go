@@ -23,35 +23,33 @@ type Mail interface {
 	Call(ctx context.Context, tool string, args, out any) error
 }
 
-// Env is what takeover and handback run against.
+// Env is what takeover runs against.
 type Env struct {
 	DB          *store.DB
 	Bindings    *bindings.Store
 	InstanceDir string
-	Bash        Bash
-	Events      Events
-	Mail        Mail
+	// AcfsHome is where ACFS's Bash kept its state (ReadState), as the
+	// import reads its token files (bindings.DefaultAcfsHome).
+	AcfsHome string
+	Events   Events
+	Mail     Mail
 	// ImportBindings reads the agents the Bash spawned into bindings
 	// (bindings.ImportOnly), or with dry says what it would import. snap,
 	// when set, is the herdr state to decide on instead of a fresh read
 	// (ImportRequest.Snapshot).
 	ImportBindings func(ctx context.Context, dry bool, snap *herdr.SessionSnapshot) (bindings.ImportReport, error)
 	// Keep is nhm's keep list (the [reap] keep of its config and ACFS's
-	// agents.toml).
+	// agents.toml, the file the Bash read its own keep list from).
 	Keep func() ([]string, error)
-	// RefreshWake brings a binding's wake rows up to date before a
-	// handback: stale attempts settled, read mail marked read (wake's
-	// ResolveStale and ReadInbox). nil skips it.
-	RefreshWake func(ctx context.Context, b bindings.Binding) error
-	Now         func() time.Time
+	Now  func() time.Time
 	// Exclude names the agents a takeover may leave behind (takeover
 	// --exclude): an Agent Mail name, a herdr name or a pane id, any case.
 	// Every other agent nhm cannot import refuses the takeover.
 	Exclude []string
 }
 
-// ErrRefused marks a takeover or handback that a rule refused; the owner
-// stays as it was. Any other error is a failure to read or write.
+// ErrRefused marks a takeover that a rule refused; the owner stays as it
+// was. Any other error is a failure to read or write.
 var ErrRefused = errors.New("refused")
 
 func refused(format string, args ...any) error {
@@ -78,15 +76,13 @@ const (
 	ActionImported  = "imported"
 	ActionNoBinding = "no_binding"
 	ActionWould     = "would_import"
-	ActionExported  = "exported"
 	// OutcomeImported is wake.last_outcome of mail the Bash woke for.
 	OutcomeImported = "imported"
 	inboxLimit      = 1000
 	attemptStarted  = "attempt_started"
-	wakeOutcomeRead = "read"
 )
 
-// Item is what a takeover or handback did with one token or wake state.
+// Item is what a takeover did with one token or wake state.
 type Item struct {
 	Name       string `json:"mail_name"`
 	ProjectKey string `json:"mail_project_key,omitempty"`
@@ -99,14 +95,15 @@ type Item struct {
 	New     int `json:"new,omitempty"`
 }
 
-// Report is a takeover's or a handback's result.
+// Report is a takeover's result.
 type Report struct {
 	DryRun   bool                   `json:"dry_run"`
 	Owner    core.Owner             `json:"owner"`
 	Bindings *bindings.ImportReport `json:"bindings,omitempty"`
 	Tokens   []Item                 `json:"tokens"`
 	Wake     []Item                 `json:"wake"`
-	Keep     []string               `json:"keep"`
+	// Keep is nhm's keep list, which covers the Bash's.
+	Keep []string `json:"keep"`
 	// Excluded lists the agents the takeover left behind because
 	// --exclude named them.
 	Excluded []string `json:"excluded"`
@@ -118,16 +115,19 @@ func newReport(dry bool) Report {
 }
 
 // Takeover makes nhm the owner (plan-v8 section 5 step 6). Under the
-// exclusive owner lock, so the Bash's mutators wait and then refuse, it
-// imports the Bash's state: the agents it spawned (the oo26 bindings), the
-// registration tokens, the wake state (the mail the Bash already woke an
-// agent for is announced, so nhm does not nudge for it again) and the
-// keep list, which nhm's keep list must cover. It reads and checks every
-// entry before it writes any token or wake row: an entry that cannot be
-// imported refuses the takeover with nothing of them written, and the
-// owner stays the Bash. Only the bindings of the agents the Bash spawned
-// are written first, as `admin recover reconcile` would write them. A dry
-// run reads and checks everything and writes nothing.
+// exclusive owner lock, so an old Bash's mutators wait and then refuse,
+// it imports what the Bash kept under env.AcfsHome (ReadState; ACFS's
+// `acfs agents export` is gone): the agents it spawned (the oo26
+// bindings), the registration tokens and the wake state (the mail the
+// Bash already woke an agent for is announced, so nhm does not nudge for
+// it again). The Bash read its keep list from agents.toml, which nhm's
+// keep list reads too. It reads and checks every entry before it writes
+// any token or wake row: an entry that cannot be imported refuses the
+// takeover with nothing of them written, and the owner stays the Bash.
+// Only the bindings of the agents the Bash spawned are written first, as
+// `admin recover reconcile` would write them. A dry run reads and checks
+// everything and writes nothing. With no Bash state (a fresh install) it
+// imports nothing, and only the owner changes.
 func Takeover(ctx context.Context, env Env, dry bool) (Report, error) {
 	rep := newReport(dry)
 	if dry {
@@ -230,23 +230,16 @@ func samePlan(check, real *bindings.ImportReport) error {
 }
 
 func planTakeover(ctx context.Context, env Env, rep *Report, snap *herdr.SessionSnapshot) (*takeoverPlan, error) {
-	data, err := env.Bash.Export(ctx)
+	st, notes, err := ReadState(env.AcfsHome)
 	if err != nil {
-		return nil, fmt.Errorf("the Bash's state cannot be exported: %w", err)
+		return nil, fmt.Errorf("the Bash's state cannot be read: %w", err)
 	}
-	st, err := ParseState(data)
-	if err != nil {
-		return nil, refused("%v", err)
-	}
-	rep.Keep = append(rep.Keep, st.Keep...)
-	have, err := env.Keep()
+	rep.Notes = append(rep.Notes, notes...)
+	keep, err := env.Keep()
 	if err != nil {
 		return nil, fmt.Errorf("nhm's keep list cannot be read: %w", err)
 	}
-	if missing := notIn(st.Keep, have); len(missing) > 0 {
-		return nil, refused("nhm's keep list lacks %s: add them to [reap] keep in ~/.config/nhm/config.toml or ACFS's agents.toml first",
-			strings.Join(missing, ", "))
-	}
+	rep.Keep = append(rep.Keep, keep...)
 	imp, err := env.ImportBindings(ctx, rep.DryRun, snap)
 	serverDown := err != nil && herdr.ServerDown(err)
 	if serverDown {
@@ -498,21 +491,6 @@ func (p *takeoverPlan) apply(ctx context.Context, env Env) error {
 	return tx.Commit()
 }
 
-// notIn lists the names of want that have lacks, ignoring case.
-func notIn(want, have []string) []string {
-	set := map[string]bool{}
-	for _, h := range have {
-		set[strings.ToLower(h)] = true
-	}
-	var out []string
-	for _, w := range want {
-		if !set[strings.ToLower(w)] {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
 // index finds bindings by project and name, and projects by their hash.
 type index struct {
 	byKey    map[string][]bindings.Binding
@@ -700,7 +678,7 @@ func planWake(ctx context.Context, env Env, idx *index, w WakeEntry, p *takeover
 	// The Bash has woken the agent for a message only when the message's
 	// own delivery event is at or before its cursor. An unread message
 	// with no event (pruned, or under another key) proves nothing: it is
-	// new, and nhm's wake nudges for it, as a handback refuses it.
+	// new, and nhm's wake nudges for it.
 	events, err := env.Events.After(ctx, project, w.Name, 0)
 	if err != nil {
 		return it, fmt.Errorf("the delivery events of %s cannot be read: %w", w.Name, err)

@@ -264,7 +264,7 @@ func instanceChecks(ctx context.Context, inst store.Instance) []doctorCheck {
 	switch {
 	case err != nil:
 		checks = append(checks, doctorCheck{Name: "owner", Result: checkFail, Detail: err.Error(),
-			Fix: "every mutation is refused until owner.toml is repaired (nhm admin takeover or handback)"})
+			Fix: "every mutation is refused until owner.toml is repaired, or removed and nhm admin takeover run again"})
 	case o.Owner == core.OwnerNhm:
 		checks = append(checks, doctorCheck{Name: "owner", Result: checkOK, Detail: fmt.Sprintf("nhm owns this server (generation %d)", o.Generation)})
 	default:

@@ -57,8 +57,8 @@ func runAdminLifecycle(args []string, stdout, stderr io.Writer) (int, bool) {
 		return runExport(args[1:], stdout, stderr), true
 	case len(args) >= 1 && args[0] == "import":
 		return runImport(args[1:], stdout, stderr), true
-	case len(args) >= 1 && (args[0] == "takeover" || args[0] == "handback"):
-		return runSwitch(args[0], args[1:], stdout, stderr), true
+	case len(args) >= 1 && args[0] == "takeover":
+		return runTakeover(args[1:], stdout, stderr), true
 	}
 	return 0, false
 }
