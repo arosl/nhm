@@ -314,7 +314,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "compatibility", run: runCompatibility},
 		{name: "quota", run: runQuota},
 		{name: "limits", run: runLimits},
-		{name: "palette", run: runPalette},
 		// dashboard, with ntm's short names dash and d, is ntm's name for the
 		// board (the operator's F.7 ruling, nhm-k9d); dashboard <session>
 		// shows that session's workspace (the operator's ruling, 2026-10-23).
@@ -434,7 +433,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}

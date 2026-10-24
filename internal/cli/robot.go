@@ -52,6 +52,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotFlag(args, "--robot-assign") {
 		return runRobotAssign(args, stdout)
 	}
+	if hasRobotFlag(args, "--robot-palette") {
+		return runRobotPalette(args, stdout)
+	}
 	now := time.Now()
 	if slices.Contains(args, "--robot-health") {
 		// ntm's bare form is project health: bv's drift, bottlenecks and

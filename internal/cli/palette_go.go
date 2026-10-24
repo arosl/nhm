@@ -33,27 +33,30 @@ import (
 // the popup. ACFS's acfs palette hands off to it (NHM_PALETTE_CWD), and
 // ACFS's lessons call --list and --show.
 
-const paletteUsage = `Usage: nhm palette [--workspace ID] [--file PATH]
+const paletteUsage = `Usage: nhm palette [session] [--workspace ID] [--file PATH]
+       nhm palette [session] --json [--file PATH]
        nhm palette --list [--json] [--file PATH]
        nhm palette --show KEY [--file PATH]
        nhm board [session]
        nhm menu
 
 The command palette (ntm's), the agent board and the nhm menu, in this
-terminal, for the calling pane's workspace; nhm board <session> shows
-that session's workspace (an id or label). In herdr, prefix+a opens the
-palette and prefix+m the menu in a popup, and prefix+d opens the board
-in a tab of its own (nhm bind). nhm dashboard [session], or dash or d,
-is nhm board, by ntm's names.
+terminal, for the calling pane's workspace, or the session's (a workspace
+id or label); nhm board <session> shows that session's workspace. In
+herdr, prefix+a opens the palette and prefix+m the menu in a popup, and
+prefix+d opens the board in a tab of its own (nhm bind). nhm dashboard
+[session], or dash or d, is nhm board, by ntm's names.
 
 In the palette, pick a prompt, edit it, pick the agents by kind digit or
 by hand, and read a receipt per agent.
 
+  --json           ntm's PaletteOutput: the prompts, pins, favorites and
+                   categories, as JSON, and exit
   --workspace ID   the agents of this workspace (default: the context's;
                    else pick one)
   --file PATH      read prompts from this file only
-  --list           print the prompts (key, label, category, file) and exit
-  --json           with --list, as JSON
+  --list           print the prompts (key, label, category, file) and exit;
+                   with --json, as nhm's JSON
   --show KEY       print one prompt's text and exit
   --go             accepted by all three; it does nothing
 

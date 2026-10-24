@@ -3,9 +3,9 @@
 // ResolveExplicitSessionName, sessionNames), internal/cli/util.go
 // (SessionResolution, ExplainIfInferredForOutput,
 // ResolveSessionWithOptionsContext, inferSessionFromCWD,
-// orderSessionsForSelection), internal/tmux/session.go
-// (ValidateSessionName) and internal/config/label.go (HasLabel); see
-// LICENSE in this directory and PROVENANCE.md. Local changes: a session
+// orderSessionsForSelection) and internal/tmux/session.go
+// (ValidateSessionName); see LICENSE in this directory and PROVENANCE.md.
+// ntm's HasLabel comes from internal/core/sessionlabel. Local changes: a session
 // is a herdr workspace, named by its label (or its id without one); an
 // exact label or workspace id comes before ntm's name check, so a
 // workspace that herdr labelled with a dot is still found, and a label
@@ -26,6 +26,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/arosl/nhm/internal/core/sessionlabel"
 )
 
 // Session is one session as ntm resolves it: a herdr workspace.
@@ -324,15 +326,6 @@ func ValidateName(name string) error {
 	return nil
 }
 
-// labelSeparator is ntm's separator of a session's base name and its
-// label ("myproject--frontend").
-const labelSeparator = "--"
-
-// hasLabel is ntm's config.HasLabel.
-func hasLabel(name string) bool {
-	return strings.Contains(name, labelSeparator)
-}
-
 // inferFromCwd is ntm's inferSessionFromCWD: the session whose project
 // directory holds the cwd, the longest match first; then the session
 // named like the cwd's base name.
@@ -372,7 +365,7 @@ func inferFromCwd(sessions []Session, cwd string) (Session, string, bool) {
 	if len(bestMatches) > 1 {
 		// First, a session without a label.
 		for _, m := range bestMatches {
-			if !hasLabel(m.Name) {
+			if !sessionlabel.HasLabel(m.Name) {
 				return m, "current directory (base session preferred)", true
 			}
 		}
