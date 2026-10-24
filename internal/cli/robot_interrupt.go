@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"slices"
@@ -32,8 +31,8 @@ const interruptPoll = 300 * time.Millisecond
 // the calling pane is left out, as nhm interrupt does.
 func runRobotInterrupt(args []string, stdout io.Writer) int {
 	now := time.Now()
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs, root := newRobotFlagSet(args, stdout)
+	defer root.undo()
 	session := fs.String("robot-interrupt", "", "")
 	format := fs.String("robot-format", "auto", "")
 	var msg, timeoutS string
@@ -62,6 +61,9 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 			msg = err.Error()
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+	}
+	if code, done := applyRobotRoot(root, now); done {
+		return code
 	}
 	switch *format {
 	case "auto", "json":

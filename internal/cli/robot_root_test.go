@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -80,6 +81,81 @@ func TestRootFlagsInFrontOfARobotFlag(t *testing.T) {
 	}
 	if _, out, _ := run("--config", cfg, "--robot-spawn=s", "--spawn-zzrobot=1", "--dry-run"); strings.Contains(out, "spawn-zzrobot") {
 		t.Errorf("with --config: %q", out)
+	}
+	if v := os.Getenv("NHM_CONFIG"); v != "" {
+		t.Errorf("NHM_CONFIG outlived the run: %q", v)
+	}
+}
+
+// ntm's root flags after the robot flag, in each robot flag set: the
+// parse takes them (the bad --robot-format is the next refusal);
+// --redact and --allow-secret are not built (exit 2); a bad value is
+// INVALID_FLAG. A root flag's word after a robot flag that takes a value
+// is that value.
+func TestRootFlagsAfterARobotFlag(t *testing.T) {
+	t.Setenv("NHM_CONFIG", "")
+	for _, call := range []string{"--robot-status", "--robot-wait=s", "--robot-interrupt=s", "--robot-assign=s",
+		"--robot-palette", "--robot-send=s", "--robot-spawn=s"} {
+		for _, c := range []struct {
+			after []string
+			exit  int
+			error string
+		}{
+			{[]string{"--json", "--no-color", "--profile-startup", "--config=", "--ssh="}, robotError, "nhm writes json only"},
+			{[]string{"--json=maybe"}, robotError, `invalid boolean value "maybe" for -json`},
+			{[]string{"--redact", "warn"}, robotNotImplemented, "--redact is not in this nhm"},
+			{[]string{"--allow-secret"}, robotNotImplemented, "--allow-secret is not in this nhm"},
+		} {
+			args := append([]string{call, "--robot-format=xml"}, c.after...)
+			code, out, errOut := run(args...)
+			var m map[string]any
+			err := json.Unmarshal([]byte(out), &m)
+			if msg, _ := m["error"].(string); err != nil || code != c.exit || !strings.Contains(msg, c.error) || errOut != "" {
+				t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
+			}
+		}
+	}
+	for _, args := range [][]string{
+		{"--robot-send=s", "--msg", "--redact", "--robot-format=xml"},
+		{"--robot-interrupt=s", "--msg", "--allow-secret", "--robot-format=xml"},
+		{"--robot-spawn=s", "--spawn-prompt", "--redact", "--robot-format=xml"},
+	} {
+		if _, out, _ := run(args...); !strings.Contains(out, "nhm writes json only") {
+			t.Errorf("%v: %q", args, out)
+		}
+	}
+}
+
+// --config F after the robot flag: robot spawn takes F's kind flags, the
+// last --config wins, and a "--config" that is another flag's value stays
+// that value; robot send reads F's enrichment. NHM_CONFIG ends with the
+// call.
+func TestConfigAfterARobotFlag(t *testing.T) {
+	t.Setenv("NHM_CONFIG", "")
+	cfg, other := kindConfig(t, "zzafter"), kindConfig(t, "zzother")
+	t.Chdir(t.TempDir()) // no project: a dry run stops there
+	for _, c := range []struct {
+		args    []string
+		unknown bool
+	}{
+		{[]string{"--robot-spawn=s", "--spawn-zzafter=1", "--dry-run"}, true},
+		{[]string{"--robot-spawn=s", "--spawn-zzafter=1", "--dry-run", "--config", cfg}, false},
+		{[]string{"--robot-spawn=s", "--spawn-zzafter", "1", "--config=" + cfg, "--dry-run"}, false},
+		{[]string{"--config", cfg, "--robot-spawn=s", "--spawn-zzafter=1", "--config", other, "--dry-run"}, true},
+		{[]string{"--config", other, "--robot-spawn=s", "--spawn-zzafter=1", "--config", cfg, "--dry-run"}, false},
+		{[]string{"--robot-spawn=s", "--spawn-prompt", "--config", "--config", cfg, "--spawn-zzafter=1", "--dry-run"}, false},
+	} {
+		_, out, _ := run(c.args...)
+		if strings.Contains(out, "flag provided but not defined: -spawn-zzafter") != c.unknown {
+			t.Errorf("%v: %q", c.args, out)
+		}
+	}
+	bad := filepath.Join(t.TempDir(), "bad.toml")
+	if err := os.WriteFile(bad, []byte("[[[\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, out, _ := run("--robot-send=s", "--msg", "hi", "--config", bad); !strings.Contains(out, bad+": toml") {
+		t.Errorf("robot send with a bad --config: %q", out)
 	}
 	if v := os.Getenv("NHM_CONFIG"); v != "" {
 		t.Errorf("NHM_CONFIG outlived the run: %q", v)

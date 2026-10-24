@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"slices"
@@ -41,8 +40,8 @@ var ntmOnlyWaitConditions = []string{"stalled", "rate_limited", "rate_limit_lift
 // an error, 2 a condition nhm does not answer.
 func runRobotWait(args []string, stdout io.Writer) int {
 	now := time.Now()
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs, root := newRobotFlagSet(args, stdout)
+	defer root.undo()
 	session := fs.String("robot-wait", "", "")
 	format := fs.String("robot-format", "auto", "")
 	var condition, timeoutS, pollS string
@@ -71,6 +70,9 @@ func runRobotWait(args []string, stdout io.Writer) int {
 			msg = err.Error()
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+	}
+	if code, done := applyRobotRoot(root, now); done {
+		return code
 	}
 	switch *format {
 	case "auto", "json":

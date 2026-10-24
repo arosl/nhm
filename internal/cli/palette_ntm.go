@@ -12,7 +12,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -194,8 +193,8 @@ func paletteOutput(ctx context.Context, socket, name, file string, opts robot.Pa
 // and --palette-search): ntm's PaletteOutput.
 func runRobotPalette(args []string, stdout io.Writer) int {
 	now := time.Now()
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs, root := newRobotFlagSet(args, stdout)
+	defer root.undo()
 	fs.Bool("robot-palette", false, "")
 	var sess, category, search string
 	for _, alias := range []string{"session", "palette-session"} {
@@ -215,6 +214,9 @@ func runRobotPalette(args []string, stdout io.Writer) int {
 			msg = err.Error()
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+	}
+	if code, done := applyRobotRoot(root, now); done {
+		return code
 	}
 	switch *format {
 	case "auto", "json":

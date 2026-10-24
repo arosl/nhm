@@ -610,8 +610,8 @@ func robotDispatchFlag(args []string) string {
 
 func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 	now := time.Now()
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs, root := newRobotFlagSet(args, stdout)
+	defer root.undo()
 	sendS := fs.String("robot-send", "", "")
 	receiptOp := fs.String("robot-send-receipt", "", "")
 	ackS := fs.String("robot-ack", "", "")
@@ -637,6 +637,9 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 			msg = err.Error()
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+	}
+	if code, done := applyRobotRoot(root, now); done {
+		return code
 	}
 	switch *format {
 	case "auto", "json":

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -26,8 +25,8 @@ import (
 // that project's bound agents in the workspace.
 func runRobotAssign(args []string, stdout io.Writer) int {
 	now := time.Now()
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs, root := newRobotFlagSet(args, stdout)
+	defer root.undo()
 	session := fs.String("robot-assign", "", "")
 	beads := fs.String("beads", "", "")
 	strategy := fs.String("strategy", "simple", "")
@@ -39,6 +38,9 @@ func runRobotAssign(args []string, stdout io.Writer) int {
 			msg = err.Error()
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+	}
+	if code, done := applyRobotRoot(root, now); done {
+		return code
 	}
 	switch *format {
 	case "auto", "json":

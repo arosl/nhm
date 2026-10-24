@@ -1301,8 +1301,10 @@ func hasRobotSpawn(args []string) bool {
 // [--trust-folder] [--ignore-capacity].
 func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	now := time.Now()
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	restore := robotConfigFirst(args, func(fs *flag.FlagSet) { addRobotSpawnFlags(fs) })
+	defer restore()
+	fs, root := newRobotFlagSet(args, stdout)
+	defer root.undo()
 	rf := addRobotSpawnFlags(fs)
 	dir, format := rf.dir, rf.format
 	dryRun, assign, socket := rf.dryRun, rf.assign, rf.socket
@@ -1312,6 +1314,9 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 			msg = err.Error()
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+	}
+	if code, done := applyRobotRoot(root, now); done {
+		return code
 	}
 	switch *format {
 	case "auto", "json":

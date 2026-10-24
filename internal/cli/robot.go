@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os/exec"
@@ -66,8 +65,8 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "--robot-health requires a session name or no value for project health",
 			"Use --robot-health for project health or --robot-health=SESSION for session health", "json", robotError, now)
 	}
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs, root := newRobotFlagSet(args, stdout)
+	defer root.undo()
 	status := fs.Bool("robot-status", false, "")
 	snap := fs.Bool("robot-snapshot", false, "")
 	caps := fs.Bool("robot-capabilities", false, "")
@@ -88,6 +87,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 			msg = err.Error()
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+	}
+	if code, done := applyRobotRoot(root, now); done {
+		return code
 	}
 	switch *format {
 	case "auto", "json":
