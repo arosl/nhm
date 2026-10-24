@@ -200,15 +200,13 @@ func spawnSlots(t *testing.T, args ...string) map[string]string {
 		t.Fatalf("%v = %d %s %s", args, code, out, errOut)
 	}
 	panes := map[string]string{}
-	if args[0] == "add" { // nhm's envelope, until nhm-2p6.4.9
-		for _, a := range decodeEnvelope(t, out)["result"].(map[string]any)["agents"].([]any) {
-			m := a.(map[string]any)
-			panes[m["slot"].(string)] = m["pane_id"].(string)
-		}
-		return panes
+	// ntm's SpawnResponse lists the session's panes, its AddResponse the
+	// new ones; an agent's pane_target is its slot.
+	key := "panes"
+	if args[0] == "add" {
+		key = "new_panes"
 	}
-	// spawn's is ntm's SpawnResponse: an agent's pane_target is its slot.
-	for _, p := range decodeSpawnResponse(t, out)["panes"].([]any) {
+	for _, p := range decodeSpawnResponse(t, out)[key].([]any) {
 		if m := p.(map[string]any); m["type"] != "user" {
 			panes[m["pane_target"].(string)] = m["pane_id"].(string)
 		}

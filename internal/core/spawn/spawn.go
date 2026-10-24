@@ -225,7 +225,8 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		return res, err
 	}
 	if ws == "" && req.Add {
-		return res, fmt.Errorf("%w: %s (nhm add needs an existing workspace; nhm spawn creates it)", ErrNoWorkspace, req.Session)
+		// ntm's words (internal/cli/add.go, runAdd).
+		return res, fmt.Errorf("%w: session '%s' does not exist (use 'nhm spawn' to create)", ErrNoWorkspace, req.Session)
 	}
 	if ws != "" && req.Safety {
 		// ntm's words (internal/robot/spawn.go, setSpawnSafetyConflict;

@@ -26,14 +26,15 @@ func TestAddWarnsOfAnotherProjectsWorkspace(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("add = %d %s %s", code, out, errOut)
 		}
-		env := decodeEnvelope(t, out)
-		warnings, _ := env["warnings"].([]any)
+		// ntm's AddResponse, nhm's result and warnings under _nhm.
+		nhm := decodeSpawnResponse(t, out)["_nhm"].(map[string]any)
+		warnings, _ := nhm["warnings"].([]any)
 		for _, w := range warnings {
 			if text, _ := w.(string); strings.Contains(text, "holds agents of other projects only") {
-				return env["result"].(map[string]any), text
+				return nhm["result"].(map[string]any), text
 			}
 		}
-		return env["result"].(map[string]any), ""
+		return nhm["result"].(map[string]any), ""
 	}
 
 	// The session's workspace w1 holds IcyKnoll and BlueLake of /p only.

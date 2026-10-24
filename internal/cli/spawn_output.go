@@ -19,18 +19,32 @@ import (
 	"github.com/arosl/nhm/internal/robot"
 )
 
-// runSpawnNTM is nhm spawn without --assign, with ntm's output
-// (nhm-2p6.4.8): under --json ntm's SpawnResponse, or on an error its
-// agentLifecycleFailureResponse, both with nhm's own facts under "_nhm";
-// else ntm's step lines, nhm's agent lines on stderr and, on a terminal,
-// ntm's "What's next?". A dry run and a replay (nhm's --dry-run and
-// --op-id) print nhm's text. Every error exits 1.
-func runSpawnNTM(ctx context.Context, req spawn.Request, project, socket string, asJSON bool, stdout, stderr io.Writer) int {
+// runSpawnNTM is nhm spawn and add without --assign, with ntm's output
+// (nhm-2p6.4.8, nhm-2p6.4.9): under --json ntm's SpawnResponse or
+// AddResponse, or on an error its agentLifecycleFailureResponse, all with
+// nhm's own facts under "_nhm"; else ntm's text, nhm's agent lines on
+// stderr and, on a terminal, ntm's "What's next?". A dry run and a replay
+// (nhm's --dry-run and --op-id) print nhm's text. Every error exits 1.
+func runSpawnNTM(ctx context.Context, verb string, req spawn.Request, project, socket string, asJSON bool,
+	stdout, stderr io.Writer) int {
+	write := writeSpawnNTM
+	if verb == "add" {
+		write = writeAddNTM
+	}
 	ie, err := openInstance(socket)
 	if err != nil {
-		return writeSpawnNTM(stdout, stderr, asJSON, spawnOut{res: spawn.Result{Session: req.Session}}, err)
+		return write(stdout, stderr, asJSON, spawnOut{res: spawn.Result{Session: req.Session}}, err)
 	}
 	defer ie.db.Close()
+	if verb == "add" {
+		// ntm's add looks the session up first (resolveAddSession): a
+		// unique prefix in text, the exact name under --json.
+		r, err := resolveSession(ctx, ie, req.Session, asJSON, stdout, stderr)
+		if err != nil {
+			return write(stdout, stderr, asJSON, spawnOut{res: spawn.Result{Session: req.Session}}, err)
+		}
+		req.Session = r.Session
+	}
 	res, _, err := spawnUnderOwner(ctx, ie, &req, project)
 	out := spawnOut{res: res, warnings: append(append([]string{}, res.Admission.Warnings...), res.Warnings...)}
 	if s, ok := req.Scope.(core.Scope); ok {
@@ -39,13 +53,14 @@ func runSpawnNTM(ctx context.Context, req spawn.Request, project, socket string,
 	if err == nil {
 		err = spawnOutcomeError(res)
 	}
-	if asJSON && err == nil && !res.DryRun {
+	// spawn lists the panes under --json; add counts them in its text too.
+	if (asJSON || verb == "add") && err == nil && !res.DryRun {
 		var perr error
 		if out.panes, perr = sessionPanes(ctx, ie, res); perr != nil {
 			out.warnings = append(out.warnings, "the session's panes: "+perr.Error())
 		}
 	}
-	return writeSpawnNTM(stdout, stderr, asJSON, out, err)
+	return write(stdout, stderr, asJSON, out, err)
 }
 
 // spawnOut is what spawn's output shows: the spawn, its scope (nil when
@@ -201,6 +216,12 @@ func spawnResponseOf(o spawnOut) spawnResponse {
 	if s := res.Stagger; s != nil && s.Mode != "" && s.Mode != "none" {
 		out.Stagger = &staggerConfig{Enabled: true, Mode: s.Mode, IntervalMs: s.IntervalMs}
 	}
+	out.AgentMail = agentMailOf(res)
+	return out
+}
+
+// agentMailOf is the Agent Mail names of the spawn's agents, by pane.
+func agentMailOf(res spawn.Result) *agentMailSpawnStatus {
 	mail := &agentMailSpawnStatus{AgentMap: map[string]string{}}
 	for _, t := range res.Targets {
 		if t.MailName != "" && t.PaneID != "" {
@@ -212,7 +233,110 @@ func spawnResponseOf(o spawnOut) spawnResponse {
 	}
 	mail.Available = mail.AgentsRegistered > 0
 	mail.ProjectRegistered = mail.Available
-	out.AgentMail = mail
+	return mail
+}
+
+// writeAddNTM writes an add's outcome, ntm's way, and returns its exit:
+// "Adding N agent(s) to session 'S'..." once admission let it through,
+// then "✓ Added N agent(s) (total M panes now)".
+func writeAddNTM(stdout, stderr io.Writer, asJSON bool, out spawnOut, err error) int {
+	if out.warnings == nil {
+		out.warnings = []string{}
+	}
+	res := out.res
+	if asJSON {
+		var v any = addResponseOf(out)
+		if err != nil {
+			v = spawnFailureOf(out, err)
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if e := enc.Encode(v); e != nil {
+			fmt.Fprintln(stderr, "Error:", e)
+			return exitError
+		}
+		if err != nil {
+			return exitError
+		}
+		return exitOK
+	}
+	for _, w := range out.warnings {
+		fmt.Fprintf(stderr, "nhm add: warning: %s\n", w)
+	}
+	switch {
+	case res.DryRun || res.Replayed:
+		printSpawn(stdout, res)
+	case res.Admission.Decision == spawn.Admit:
+		fmt.Fprintf(stdout, "Adding %d agent(s) to session '%s'...\n", len(res.Targets), res.Session)
+		printSpawn(stderr, res)
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "Error:", err)
+		return exitError
+	}
+	if !res.DryRun && !res.Replayed {
+		total := len(out.panes)
+		if out.panes == nil {
+			total = len(targetPanes(res))
+		}
+		fmt.Fprintf(stdout, "✓ Added %d agent(s) (total %d panes now)\n", len(res.Targets), total)
+		printSuccessFooter(stdout, addSuggestions(res.Session)...)
+	}
+	return exitOK
+}
+
+// addResponseOf projects an add onto ntm's AddResponse: the agents added
+// by type, their panes, their Agent Mail names and the admission. A dry
+// run added nothing.
+func addResponseOf(o spawnOut) addResponse {
+	res := o.res
+	out := addResponse{timestampedResponse: newTimestamped(), Session: res.Session, NHM: spawnNHM(res, o.scope, o.warnings),
+		Admission: &robot.SpawnAdmission{Decision: res.Admission.Decision, Reason: res.Admission.Reason, Session: res.Session,
+			RequestedAgents: len(res.Targets), Reasons: res.Admission.Reasons, Warnings: res.Admission.Warnings}}
+	if res.DryRun {
+		return out
+	}
+	for _, t := range res.Targets {
+		switch kinds.Lookup(t.Kind).NTMType {
+		case "claude":
+			out.AddedClaude++
+		case "codex":
+			out.AddedCodex++
+		case "gemini":
+			out.AddedGemini++
+		case "antigravity":
+			out.AddedAntigravity++
+		case "grok":
+			out.AddedGrok++
+		case "ollama":
+			out.AddedOllama++
+		case "cursor":
+			out.AddedCursor++
+		case "windsurf":
+			out.AddedWindsurf++
+		case "aider":
+			out.AddedAider++
+		case "oc", "opencode":
+			out.AddedOpencode++
+		case "omp":
+			out.AddedOmp++
+		}
+		out.TotalAdded++
+	}
+	added := map[string]bool{}
+	for _, t := range res.Targets {
+		added[t.PaneID] = t.PaneID != ""
+	}
+	panes := o.panes
+	if panes == nil {
+		panes = targetPanes(res)
+	}
+	for _, p := range panes {
+		if added[p.PaneID] {
+			out.NewPanes = append(out.NewPanes, p)
+		}
+	}
+	out.AgentMail = agentMailOf(res)
 	return out
 }
 

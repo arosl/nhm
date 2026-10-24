@@ -247,6 +247,29 @@ func TestSpawnSafety(t *testing.T) {
 	}
 }
 
+// add looks the session up as ntm's does: an unknown one is ntm's error,
+// a unique prefix names it in text, and --json takes the exact name only
+// (nhm-2p6.4.9).
+func TestAddFindsTheSession(t *testing.T) {
+	s, _, h := newSendInstance(t)
+	spawnHerdr(t, s, h)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	base := []string{"--cc=1", "--project", t.TempDir(), "--allow-unguarded", "--prompt", "hi", "--dry-run", "--socket", s.SocketPath}
+	code, out, errOut := run(append([]string{"add", "nowhere"}, base...)...)
+	if code != exitError || out != "" || !strings.HasPrefix(errOut, `Error: session "nowhere" not found (available: `) {
+		t.Fatalf("an unknown session = %d %q %q", code, out, errOut)
+	}
+	if code, out, errOut := run(append([]string{"add", "swa"}, base...)...); code != 0 || !strings.Contains(out, "would start 1 agents in swarm (w1)") {
+		t.Fatalf("a prefix = %d %s %s", code, out, errOut)
+	}
+	code, out, _ = run(append([]string{"add", "swa", "--json"}, base...)...)
+	if m := decodeSpawnResponse(t, out); code != exitError || m["success"] != false ||
+		!strings.HasPrefix(m["error"].(string), `session "swa" not found (available: `) {
+		t.Fatalf("a prefix under --json = %d %v", code, m)
+	}
+}
+
 // ntm's -l/--label makes the session <session>--<label> in the same
 // project, for spawn and add; nhm's tab label is --tab-label
 // (nhm-2p6.4.5).

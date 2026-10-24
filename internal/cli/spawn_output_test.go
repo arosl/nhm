@@ -201,6 +201,71 @@ func TestSpawnText(t *testing.T) {
 	}
 }
 
+// add --json is ntm's AddResponse: the agents added by type, their panes
+// only, their Agent Mail names and the admission; nhm's result under
+// _nhm (nhm-2p6.4.9).
+func TestAddJSONIsAddResponse(t *testing.T) {
+	res := twoAgents()
+	res.WorkspaceNew, res.Stagger = false, nil
+	snap := herdr.SessionSnapshot{Panes: []herdr.PaneInfo{
+		{PaneID: "w1:p0", TabID: "w1:t2", WorkspaceID: "w1", Label: "older"},
+		{PaneID: "w1:p2", TabID: "w1:t2", WorkspaceID: "w1", Label: "greenpike"},
+		{PaneID: "w1:p3", TabID: "w1:t2", WorkspaceID: "w1", Label: "redstone"},
+	}}
+	bs := []bindings.Binding{
+		{PaneID: "w1:p0", TabID: "w1:t2", Slot: "2.0", Kind: "claude"},
+		{PaneID: "w1:p2", TabID: "w1:t2", Slot: "2.1", Kind: "claude", Model: "opus"},
+		{PaneID: "w1:p3", TabID: "w1:t2", Slot: "2.2", Kind: "codex"},
+	}
+	m := asMap(t, addResponseOf(spawnOut{res: res, panes: panesOf(snap, bs, res), warnings: []string{}}))
+	if got := strings.Join(keys(m), ","); got != "_nhm,added_aider,added_antigravity,added_claude,added_codex,added_cursor,"+
+		"added_gemini,added_grok,added_ollama,added_omp,added_opencode,added_windsurf,admission,agent_mail,generated_at,"+
+		"new_panes,session,total_added" {
+		t.Fatalf("keys = %s", got)
+	}
+	var panes []string
+	for _, p := range m["new_panes"].([]any) {
+		panes = append(panes, fmt.Sprint(p.(map[string]any)["pane_target"]))
+	}
+	if m["session"] != "swarm" || m["added_claude"] != 1.0 || m["added_codex"] != 1.0 || m["added_gemini"] != 0.0 ||
+		m["total_added"] != 2.0 || strings.Join(panes, ",") != "2.1,2.2" ||
+		m["admission"].(map[string]any)["decision"] != "admit" ||
+		m["agent_mail"].(map[string]any)["agent_map"].(map[string]any)["w1:p2"] != "GreenPike" ||
+		len(m["_nhm"].(map[string]any)["result"].(map[string]any)["agents"].([]any)) != 2 {
+		t.Fatalf("add response = %v", m)
+	}
+	// A dry run added nothing.
+	res.DryRun = true
+	if m = asMap(t, addResponseOf(spawnOut{res: res})); m["total_added"] != 0.0 || m["new_panes"] != nil || m["agent_mail"] != nil {
+		t.Fatalf("dry run = %v", m)
+	}
+}
+
+// add's text is ntm's two lines; nhm's agent lines go to stderr; a
+// missing session is the error alone, and the core's own words are
+// ntm's (nhm-2p6.4.9).
+func TestAddText(t *testing.T) {
+	res := twoAgents()
+	res.WorkspaceNew, res.Stagger = false, nil
+	var stdout, stderr bytes.Buffer
+	if code := writeAddNTM(&stdout, &stderr, false, spawnOut{res: res, panes: make([]paneResponse, 5)}, nil); code != exitOK ||
+		stdout.String() != "Adding 2 agent(s) to session 'swarm'...\n✓ Added 2 agent(s) (total 5 panes now)\n" ||
+		!strings.Contains(stderr.String(), "GreenPike (claude, opus) slot 2.1") {
+		t.Fatalf("add = %d %q %q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	err := errors.New(`session "nowhere" not found (available: swarm)`)
+	if code := writeAddNTM(&stdout, &stderr, false, spawnOut{res: spawn.Result{Session: "nowhere"}}, err); code != exitError ||
+		stdout.Len() != 0 || stderr.String() != "Error: session \"nowhere\" not found (available: swarm)\n" {
+		t.Fatalf("missing = %d %q %q", code, stdout.String(), stderr.String())
+	}
+	gone := fmt.Errorf("%w: session 'swarm' does not exist (use 'nhm spawn' to create)", spawn.ErrNoWorkspace)
+	if got := (ntmWords{gone, spawn.ErrNoWorkspace}).Error(); got != "session 'swarm' does not exist (use 'nhm spawn' to create)" {
+		t.Fatalf("the core's words = %q", got)
+	}
+}
+
 // A failure under --json is ntm's agentLifecycleFailureResponse, with
 // ntm's codes, and exits 1 (nhm-2p6.4.8).
 func TestSpawnFailureResponse(t *testing.T) {

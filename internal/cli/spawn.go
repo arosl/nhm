@@ -319,11 +319,11 @@ func spawnEnrichment(f *spawnFlags) (send.Enrichment, error) {
 	return e, nil
 }
 
-// verbOutput is output for add and spawn --assign on the shared parser
-// (spawn's own is runSpawnNTM's): nhm's envelope with --json (until
-// nhm-2p6.4.9 and nhm-2p6.4.11 give them ntm's), else the text; an error
-// is ntm's "Error: <msg>" on stderr; and every error or partial outcome
-// exits 1, ntm's code.
+// verbOutput is output for spawn and add with --assign on the shared
+// parser (without it, runSpawnNTM's): nhm's envelope with --json (until
+// nhm-2p6.4.11 gives them ntm's), else the text; an error is ntm's
+// "Error: <msg>" on stderr; and every error or partial outcome exits 1,
+// ntm's code.
 func verbOutput(stdout, stderr io.Writer, asJSON bool, env envelope, err error, code int, text func(io.Writer)) int {
 	if code != exitOK || err != nil {
 		code = exitError
@@ -380,8 +380,8 @@ func spawnVerb(verb, session string, f *spawnFlags, stdout, stderr io.Writer) (i
 	if err != nil {
 		return exitError, err
 	}
-	if verb == "spawn" && !f.assign {
-		return runSpawnNTM(context.Background(), req, f.project, f.socket, f.asJSON, stdout, stderr), nil
+	if !f.assign {
+		return runSpawnNTM(context.Background(), verb, req, f.project, f.socket, f.asJSON, stdout, stderr), nil
 	}
 	env := envelope{Command: verb}
 	// ntm takes the assignment flags without --assign and does nothing
@@ -783,15 +783,15 @@ func runSpawnRequest(ctx context.Context, req spawn.Request, project, socket str
 	return output(stdout, stderr, asJSON, env, nil, spawnExit(res), show)
 }
 
-// sessionExistsError is the safety refusal in ntm's words, without the
-// core's "spawn safety: ".
-type sessionExistsError struct{ err error }
+// ntmWords is a core refusal in ntm's words, without the core's sentinel
+// ("spawn safety: ", "no such workspace: ").
+type ntmWords struct{ err, sentinel error }
 
-func (e sessionExistsError) Error() string {
-	return strings.TrimPrefix(e.err.Error(), spawn.ErrSessionExists.Error()+": ")
+func (e ntmWords) Error() string {
+	return strings.TrimPrefix(e.err.Error(), e.sentinel.Error()+": ")
 }
 
-func (e sessionExistsError) Unwrap() error { return e.err }
+func (e ntmWords) Unwrap() error { return e.err }
 
 // spawnUnderOwner fills the project scope and runs the spawn.
 func spawnUnderOwner(ctx context.Context, ie *instanceEnv, req *spawn.Request, project string) (spawn.Result, int, error) {
@@ -806,8 +806,10 @@ func spawnUnderOwner(ctx context.Context, ie *instanceEnv, req *spawn.Request, p
 	}
 	run := func() (spawn.Result, int, error) {
 		res, err := spawn.Spawn(ctx, senv, *req)
-		if errors.Is(err, spawn.ErrSessionExists) {
-			err = sessionExistsError{err}
+		for _, sentinel := range []error{spawn.ErrSessionExists, spawn.ErrNoWorkspace} {
+			if errors.Is(err, sentinel) {
+				err = ntmWords{err, sentinel}
+			}
 		}
 		switch {
 		case errors.Is(err, spawn.ErrRefused):

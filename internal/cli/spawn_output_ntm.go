@@ -1,16 +1,19 @@
 // Taken in part from ntm (github.com/Dicklesworthstone/ntm)
 // internal/output/schema.go at commit 9d5ed977: TimestampedResponse,
 // NewTimestamped, PaneResponse, AgentCountsResponse, StaggerConfig,
-// RecoverySpawnStatus and SpawnResponse; internal/spawnidentity/coordinator.go at the same commit:
+// RecoverySpawnStatus, SpawnResponse and AddResponse;
+// internal/spawnidentity/coordinator.go at the same commit:
 // AgentMailSpawnStatus; internal/cli/add.go at the same commit:
 // agentLifecycleFailureResponse and newAgentLifecycleFailureResponse;
 // internal/cli/create.go at the same commit: incrementAgentCounts;
 // internal/output/progress.go at the same commit: Steps; and
 // internal/output/success.go at the same commit: Suggestion,
-// PrintSuccessFooter and SpawnSuggestions; see LICENSE in this directory
-// and PROVENANCE.md. Local changes (nhm-2p6.4.8): this header; package and
-// imports; unexported names; SpawnResponse and the failure response carry
-// nhm's own facts under "_nhm"; no seat skips, persona prompt source,
+// PrintSuccessFooter, SpawnSuggestions and AddSuggestions; see LICENSE in
+// this directory and PROVENANCE.md. Local changes (nhm-2p6.4.8,
+// nhm-2p6.4.9): this header; package and imports; unexported names;
+// SpawnResponse, AddResponse and the failure response carry nhm's own
+// facts under "_nhm"; AddResponse holds the admission that ntm's add
+// writes beside it (add.go 1193); no seat skips, persona prompt source,
 // context or pane age, which nhm does not have; the counts take ntm's type
 // strings; the failure response's codes are the ones nhm's spawn can
 // give; the steps and the footer print without colour (as ntm does with
@@ -115,6 +118,29 @@ type spawnResponse struct {
 	Stagger          *staggerConfig        `json:"stagger,omitempty"`
 	AgentMail        *agentMailSpawnStatus `json:"agent_mail,omitempty"`
 	Recovery         *recoverySpawnStatus  `json:"recovery,omitempty"`
+	NHM              any                   `json:"_nhm,omitempty"`
+}
+
+// addResponse is the output format for add command (adding agents to
+// session), with the admission ntm's add writes beside it.
+type addResponse struct {
+	timestampedResponse
+	Session          string                `json:"session"`
+	AddedClaude      int                   `json:"added_claude"`
+	AddedCodex       int                   `json:"added_codex"`
+	AddedGemini      int                   `json:"added_gemini"`
+	AddedAntigravity int                   `json:"added_antigravity"`
+	AddedGrok        int                   `json:"added_grok"`
+	AddedOllama      int                   `json:"added_ollama"`
+	AddedCursor      int                   `json:"added_cursor"`
+	AddedWindsurf    int                   `json:"added_windsurf"`
+	AddedAider       int                   `json:"added_aider"`
+	AddedOpencode    int                   `json:"added_opencode"`
+	AddedOmp         int                   `json:"added_omp"`
+	TotalAdded       int                   `json:"total_added"`
+	NewPanes         []paneResponse        `json:"new_panes,omitempty"`
+	AgentMail        *agentMailSpawnStatus `json:"agent_mail,omitempty"`
+	Admission        *robot.SpawnAdmission `json:"admission,omitempty"`
 	NHM              any                   `json:"_nhm,omitempty"`
 }
 
@@ -266,6 +292,15 @@ func printSuccessFooter(w io.Writer, suggestions ...suggestion) {
 		fmt.Fprintf(w, "  %s  # %s\n", s.Command, s.Description)
 	}
 	fmt.Fprintln(w)
+}
+
+// addSuggestions returns suggestions for after adding agents.
+func addSuggestions(session string) []suggestion {
+	return []suggestion{
+		{Command: fmt.Sprintf("nhm status %s", session), Description: "Check session status"},
+		{Command: fmt.Sprintf("nhm send %s", session), Description: "Send prompt to agents"},
+		{Command: fmt.Sprintf("nhm dashboard %s", session), Description: "Live status overview"},
+	}
 }
 
 // spawnSuggestions returns suggestions for after spawning a session.
