@@ -18,18 +18,27 @@ func TestVersionJSON(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
-	var info VersionInfo
+	// ntm's VersionResponse, with nhm's extras under _nhm.
+	var info VersionResponse
 	if err := json.Unmarshal([]byte(out), &info); err != nil {
 		t.Fatalf("stdout is not JSON: %v (%q)", err, out)
 	}
-	if info.Version == "" || info.NTMCommit != NTMCommit || info.HerdrProtocol != 22 {
+	if info.Version != Version || info.GeneratedAt.IsZero() || info.GoVersion == "" || !strings.Contains(info.Platform, "/") ||
+		info.NHM.NTMCommit != NTMCommit || info.NHM.HerdrProtocol != 22 {
 		t.Fatalf("info = %+v", info)
+	}
+	var keys map[string]any
+	_ = json.Unmarshal([]byte(out), &keys)
+	for _, k := range []string{"generated_at", "version", "commit", "built_at", "built_by", "go_version", "platform", "_nhm"} {
+		if _, ok := keys[k]; !ok {
+			t.Errorf("no %q in %s", k, out)
+		}
 	}
 }
 
 func TestVersionText(t *testing.T) {
 	code, out, _ := run("version")
-	if code != 0 || !strings.HasPrefix(out, "nhm version ") || !strings.Contains(out, "herdr protocol 22") {
+	if code != 0 || !strings.HasPrefix(out, "nhm version ") || !strings.Contains(out, "\n  herdr:     protocol 22\n") {
 		t.Fatalf("exit %d, stdout %q", code, out)
 	}
 }

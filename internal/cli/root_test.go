@@ -107,7 +107,7 @@ func TestFlagErrorHints(t *testing.T) {
 func TestRootFlagsBeforeTheVerb(t *testing.T) {
 	for _, args := range [][]string{{"--json", "version"}, {"--no-color", "--json", "version", "-s"}} {
 		code, out, errOut := run(args...)
-		var info VersionInfo
+		var info VersionResponse
 		if code != 0 || errOut != "" || json.Unmarshal([]byte(out), &info) != nil || info.Version != Version {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
 		}
@@ -117,7 +117,7 @@ func TestRootFlagsBeforeTheVerb(t *testing.T) {
 func TestRootFlagsAfterTheVerb(t *testing.T) {
 	for _, args := range [][]string{{"version", "--json"}, {"version", "-s", "--json", "--no-color"}} {
 		code, out, errOut := run(args...)
-		var info VersionInfo
+		var info VersionResponse
 		if code != 0 || errOut != "" || json.Unmarshal([]byte(out), &info) != nil || info.Version != Version {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
 		}

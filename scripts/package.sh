@@ -29,6 +29,8 @@ fi
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 commit="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+# The commit's own time, so that a rebuild of the same commit stays the same.
+built="$(TZ=UTC git -C "$root" log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 stage="$(mktemp -d)"
@@ -45,7 +47,7 @@ for platform in "${platforms[@]}"; do
     (
       cd "$root" || exit 1
       CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
-        -ldflags "-s -w -X github.com/arosl/nhm/internal/cli.Version=${version} -X github.com/arosl/nhm/internal/cli.Commit=${commit}" \
+        -ldflags "-s -w -X github.com/arosl/nhm/internal/cli.Version=${version} -X github.com/arosl/nhm/internal/cli.Commit=${commit} -X github.com/arosl/nhm/internal/cli.Date=${built} -X github.com/arosl/nhm/internal/cli.BuiltBy=scripts/package.sh" \
         -o "$dir/$cmd" "./cmd/$cmd"
     )
   done

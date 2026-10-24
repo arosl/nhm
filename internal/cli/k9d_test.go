@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,19 +12,29 @@ import (
 )
 
 // nhm version prints ntm's headline on line 1, "nhm version <v>": ACFS's
-// export-config.sh reads field 3. Line 2 holds the commit, the herdr
-// protocol and the ntm commit (the operator's F.7 ruling, nhm-k9d).
+// export-config.sh reads field 3. ntm's five detail lines follow, then
+// nhm's two (nhm-2p6.1.6; rule 4 replaces the F.7 line 2 of nhm-k9d).
 func TestVersionHasNTMsHeadline(t *testing.T) {
 	code, out, errOut := run("version")
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if code != 0 || errOut != "" || len(lines) != 2 {
+	if code != 0 || errOut != "" || len(lines) != 8 {
 		t.Fatalf("version = %d %q %q", code, out, errOut)
 	}
 	if lines[0] != "nhm version "+Version || strings.Fields(lines[0])[2] != Version {
 		t.Errorf("line 1 = %q, want field 3 to be %q", lines[0], Version)
 	}
-	if want := fmt.Sprintf("commit %s, herdr protocol 22, ntm %.8s", Commit, NTMCommit); lines[1] != want {
-		t.Errorf("line 2 = %q, want %q", lines[1], want)
+	for i, want := range []string{
+		"  commit:    " + Commit,
+		"  built:     " + Date,
+		"  builder:   " + BuiltBy,
+		"  go:        " + runtime.Version(),
+		fmt.Sprintf("  platform:  %s/%s", runtime.GOOS, runtime.GOARCH),
+		"  herdr:     protocol 22",
+		fmt.Sprintf("  ntm:       %.8s", NTMCommit),
+	} {
+		if lines[i+1] != want {
+			t.Errorf("line %d = %q, want %q", i+2, lines[i+1], want)
+		}
 	}
 	if code, out, _ := run("--version"); code != 0 || !strings.HasPrefix(out, "nhm version "+Version+"\n") {
 		t.Errorf("--version = %d %q", code, out)

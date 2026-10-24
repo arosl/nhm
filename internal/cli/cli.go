@@ -3,22 +3,21 @@
 package cli
 
 import (
-	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
-
-	"github.com/spf13/cobra"
-
-	"github.com/arosl/nhm/internal/herdr/schema"
 )
 
-// Build facts, set at link time by the release build:
+// Build facts, set at link time by the release build (scripts/package.sh):
 //
 //	-ldflags "-X github.com/arosl/nhm/internal/cli.Version=0.1.0 ..."
+//
+// Date is the build's date (ISO 8601, UTC) and BuiltBy what built it, as
+// ntm's version prints them.
 var (
 	Version = "dev"
 	Commit  = "unknown"
+	Date    = "unknown"
+	BuiltBy = "unknown"
 )
 
 // NTMCommit is the ntm commit whose grammar and robot types nhm tracks.
@@ -164,49 +163,4 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runRobot(args, stdout, stderr)
 	}
 	return newRoot(stdout, stderr).execute(args, stdout, stderr)
-}
-
-// VersionInfo is the JSON form of `nhm version --json`.
-type VersionInfo struct {
-	Version       string `json:"version"`
-	Commit        string `json:"commit"`
-	NTMCommit     string `json:"ntm_commit"`
-	HerdrProtocol int    `json:"herdr_protocol"`
-}
-
-// newVersionCmd is ntm's version verb on the shared parser: --short
-// (-s), and the root's --json. Like ntm's, it takes no argument check.
-func newVersionCmd() *cobra.Command {
-	var short bool
-	cmd := &cobra.Command{
-		Use:   "version",
-		Short: "Print version information",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return printVersion(cmd.OutOrStdout(), wantJSON(cmd), short)
-		},
-	}
-	cmd.Flags().BoolVarP(&short, "short", "s", false, "print the version alone")
-	return cmd
-}
-
-func printVersion(stdout io.Writer, asJSON, short bool) error {
-	s, err := schema.Load()
-	if err != nil {
-		return err
-	}
-	info := VersionInfo{Version: Version, Commit: Commit, NTMCommit: NTMCommit, HerdrProtocol: s.Protocol}
-	if asJSON {
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(info)
-	}
-	if short {
-		// ntm's --short: the version alone (--json wins over it, as in ntm).
-		fmt.Fprintln(stdout, info.Version)
-		return nil
-	}
-	// ntm's headline, "ntm version <v>": ACFS's export-config.sh reads
-	// field 3 of line 1. The detail goes to line 2 (nhm-k9d).
-	fmt.Fprintf(stdout, "nhm version %s\ncommit %s, herdr protocol %d, ntm %.8s\n", info.Version, info.Commit, info.HerdrProtocol, info.NTMCommit)
-	return nil
 }
