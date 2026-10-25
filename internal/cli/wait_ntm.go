@@ -1,8 +1,8 @@
 // Derived from ntm (github.com/Dicklesworthstone/ntm) at commit 9d5ed977:
 // internal/cli/wait.go (newWaitCmd's use, flags, defaults and texts,
 // runWait's lines and errors, isValidCondition, WaitTimeoutError,
-// WaitErrorStateError) and internal/robot/robot.go (ResolveAgentType's
-// check); see LICENSE in this directory and PROVENANCE.md. Local
+// WaitErrorStateError); see LICENSE in this directory and PROVENANCE.md;
+// ntm's --type is agenttype_ntm.go's ntmTypeKinds. Local
 // changes: the agents are the session's bound agents, and the calling
 // pane, nhm's user pane, is left out; the poll loop is core/wait's
 // NTMWait, on herdr's agent states where ntm reads a screen classifier;
@@ -28,8 +28,6 @@ import (
 	"github.com/arosl/nhm/internal/core/session"
 	"github.com/arosl/nhm/internal/core/snapshot"
 	"github.com/arosl/nhm/internal/core/wait"
-	"github.com/arosl/nhm/internal/integrations/kinds"
-	"github.com/arosl/nhm/internal/ui/tui/agent"
 	"github.com/arosl/nhm/internal/ui/tui/theme"
 )
 
@@ -133,44 +131,6 @@ func ntmWaitConditions(until string) ([]string, error) {
 		default:
 			return nil, fmt.Errorf("invalid condition '%s': must be one of idle, complete, generating, healthy", until)
 		}
-	}
-	return out, nil
-}
-
-// ntmTypeKinds are nhm's kinds of ntm's --type (robot.ResolveAgentType's
-// names: cc and claude, cod and codex, agy and antigravity …), or the
-// name itself when no nhm kind has it.
-func ntmTypeKinds(raw string) ([]string, error) {
-	t := strings.ToLower(strings.TrimSpace(raw))
-	switch c := agent.AgentType(t).Canonical(); c {
-	case agent.AgentTypeClaudeCode:
-		t = "claude"
-	case agent.AgentTypeCodex:
-		t = "codex"
-	case agent.AgentTypeGemini:
-		t = "gemini"
-	case agent.AgentTypeAntigravity:
-		t = "antigravity"
-	case agent.AgentTypeUser:
-		t = "user"
-	case agent.AgentTypeUnknown:
-		t = "unknown"
-	default:
-		if c != "" {
-			t = string(c)
-		}
-	}
-	if t == "" || t == "unknown" || t == "user" {
-		return nil, fmt.Errorf("invalid agent type '%s'", strings.TrimSpace(raw))
-	}
-	var out []string
-	for _, a := range kinds.All() {
-		if strings.EqualFold(a.NTMType, t) {
-			out = append(out, a.Name)
-		}
-	}
-	if len(out) == 0 {
-		out = []string{t}
 	}
 	return out, nil
 }

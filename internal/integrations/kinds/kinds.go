@@ -861,7 +861,11 @@ func init() {
 		strategy assign-strategy require-reservation reservation-paths names tab-label stagger
 		pane-env verify-boot no-hooks cass-context cass-context-limit cass-context-days
 		init-prompt assign-agent assign-verbose assign-quiet assign-timeout with-agent-name create-dir
-		privacy allow-persist assign-cc-only assign-cod-only assign-gmi-only assign-agy-only`) {
+		privacy allow-persist assign-cc-only assign-cod-only assign-gmi-only assign-agy-only
+		gmi clear-input skip-first prefix suffix context tag smart route distribute dist-strategy dist-limit
+		dist-auto loop-mode force-non-interactive cass-similarity cass-check-days randomize seed pace-dispatch
+		priority-order base-prompt base-prompt-file batch delay confirm-each stop-on-error broadcast
+		codex-goal project-key exit-on-error`) {
 		reserved[f] = true
 	}
 }

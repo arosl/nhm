@@ -21,13 +21,14 @@ func TestSendTypesIntoABusyAgentNotABlockedOne(t *testing.T) {
 		strings.Join(h.sent(), ";") != "w1:p1=first" {
 		t.Fatalf("busy, the default = %d %s %s %v", code, out, errOut, h.sent())
 	}
-	if code, out, _ := run("send", "swarm", "second", "--name", "IcyKnoll", "--when", "ready", "--socket", sock); code != exitAdmission ||
-		!strings.Contains(out, "refused (busy)") || len(h.sent()) != 1 {
-		t.Fatalf("busy, --when ready = %d %s", code, out)
+	// A refused target is ntm's delivery error, exit 1.
+	if code, _, errOut := run("send", "swarm", "second", "--name", "IcyKnoll", "--when", "ready", "--socket", sock); code != exitError ||
+		!strings.HasSuffix(errOut, "Error: sending to pane 0.1: the agent is working\n") || len(h.sent()) != 1 {
+		t.Fatalf("busy, --when ready = %d %q", code, errOut)
 	}
-	if code, out, _ := run("send", "swarm", "third", "--name", "BlueLake", "--socket", sock); code != exitAdmission ||
-		!strings.Contains(out, "refused (blocked)") || len(h.sent()) != 1 {
-		t.Fatalf("blocked = %d %s", code, out)
+	if code, _, errOut := run("send", "swarm", "third", "--name", "BlueLake", "--socket", sock); code != exitError ||
+		!strings.Contains(errOut, "Error: sending to pane 1.1: ") || !strings.Contains(errOut, "dialog") || len(h.sent()) != 1 {
+		t.Fatalf("blocked = %d %q", code, errOut)
 	}
 
 	busy, code := robotJSON(t, "--robot-send=swarm", "--panes=0.1", "--msg=robot", "--socket", sock)

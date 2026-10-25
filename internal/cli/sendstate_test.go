@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr"
 )
 
@@ -33,7 +34,15 @@ func TestParseStatesBetweenIsIdleOrDone(t *testing.T) {
 
 // nhm send --state between selects the agents between turns.
 func TestSendRequestTakesStateBetween(t *testing.T) {
-	req, err := (sendFlags{when: "ready", states: listFlag{"between", "working"}}).request("x")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	request := func(args ...string) (send.Request, error) {
+		cmd, f := newSendCommand()
+		if err := cmd.ParseFlags(args); err != nil {
+			t.Fatal(err)
+		}
+		return f.coreRequest("x")
+	}
+	req, err := request("--when", "ready", "--state", "between", "--state", "working")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +50,7 @@ func TestSendRequestTakesStateBetween(t *testing.T) {
 	if !reflect.DeepEqual(req.Selector.States, want) {
 		t.Fatalf("states = %v, want %v", req.Selector.States, want)
 	}
-	if _, err := (sendFlags{when: "ready", states: listFlag{"sleepy"}}).request("x"); err == nil {
+	if _, err := request("--state", "sleepy"); err == nil {
 		t.Fatal("an unknown state was accepted")
 	}
 	if !strings.Contains(sendUsage, "--state idle|done|working|blocked|between") || !strings.Contains(sendUsage, "--state between is idle or done") {

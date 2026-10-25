@@ -2,38 +2,30 @@ package cli
 
 import (
 	"errors"
-	"flag"
-	"io"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// send's kind flags come from the kind registry: every name and flag,
-// and send's own flags win.
+// send's type flags are ntm's (--cc, --cod, --gmi, --agy, --grok, --oc,
+// --omp), each with an optional variant; every other name and flag of
+// the kind registry gets one too (--claude, --pi …).
 func TestSendKindFlagsFromTheRegistry(t *testing.T) {
-	fs := flag.NewFlagSet("send", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.Bool("all", false, "")
-	sel := registerKindFlags(fs)
-	got := map[string]string{}
-	for _, k := range sel {
-		got[k.flag] = k.kind
-	}
-	for flagName, kind := range map[string]string{"cc": "claude", "claude": "claude", "cod": "codex", "agy": "agy",
-		"pi": "pi", "omp": "omp", "oc": "opencode", "opencode": "opencode", "grok": "grok"} {
-		if got[flagName] != kind {
-			t.Errorf("--%s selects %q, want %q", flagName, got[flagName], kind)
+	cmd, f := newSendCommand()
+	for _, name := range []string{"cc", "cod", "gmi", "agy", "grok", "oc", "omp", "claude", "codex", "pi", "opencode"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("no --%s", name)
 		}
 	}
-	if err := fs.Parse([]string{"--oc", "--cc", "--claude"}); err != nil {
+	if err := cmd.ParseFlags([]string{"--oc", "--cc=opus", "--claude", "--pi", "--omp=false"}); err != nil {
 		t.Fatal(err)
 	}
-	req, err := sendFlags{kindSel: sel, when: "ready"}.request("hi")
-	if err != nil {
-		t.Fatal(err)
+	var got []string
+	for _, tg := range f.targets {
+		got = append(got, tg.kind+":"+tg.variant)
 	}
-	if strings.Join(req.Selector.Kinds, ",") != "claude,opencode" {
-		t.Fatalf("kinds = %v", req.Selector.Kinds)
+	if want := []string{"opencode:", "claude:opus", "claude:", "pi:"}; !slices.Equal(got, want) {
+		t.Fatalf("targets = %v, want %v", got, want)
 	}
 }
 

@@ -15,16 +15,22 @@ import (
 
 // nhm send refuses a prompt that Claude Code or Codex would run as a
 // shell command, before anything is claimed or typed, a dry run too, and
-// says why (nhm-ubi); a "!" on a later line goes out as typed.
+// says why (nhm-ubi): ntm's error for a send that its guard refused, exit
+// 1; under --json ntm's SendResult with the error. A "!" on a later line
+// goes out as typed.
 func TestSendRefusesAShellEscape(t *testing.T) {
 	s, inst, h := newSendInstance(t)
 	ownNhm(t, inst)
 	sock := s.SocketPath
 	for _, args := range [][]string{{"!ls"}, {"  !ls"}, {"!ls", "--dry-run"}, {"--msg", "hi\x1b[201~\r!ls"}} {
 		code, out, errOut := run(append([]string{"send", "swarm", "--socket", sock}, args...)...)
-		if code != 2 || !strings.Contains(errOut, "refused before any prompt") || !strings.Contains(errOut, "IcyKnoll (claude), BlueLake (codex)") {
+		if code != exitError || !strings.Contains(errOut, "refused before any prompt") || !strings.Contains(errOut, "IcyKnoll (claude), BlueLake (codex)") {
 			t.Fatalf("%q = %d %q %q", args, code, out, errOut)
 		}
+	}
+	code, out, _ := run("send", "swarm", "!ls", "--socket", sock, "--json")
+	if r := decodeSendResult(t, out); code != exitError || r.Success || !strings.Contains(r.Error, "refused before any prompt") {
+		t.Fatalf("--json = %d %s", code, out)
 	}
 	if _, _, errOut := run("send", "swarm", "!ls", "--socket", sock); !strings.Contains(errOut, `starts with "!"`) ||
 		!strings.Contains(errOut, "no guard such as dcg screens it") {
@@ -41,7 +47,7 @@ func TestSendRefusesAShellEscape(t *testing.T) {
 	if err := os.WriteFile(file, []byte("!make deploy\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, errOut := run("send", "swarm", "--msg-file", file, "--socket", sock); code != 2 || !strings.Contains(errOut, `starts with "!"`) ||
+	if code, _, errOut := run("send", "swarm", "--msg-file", file, "--socket", sock); code != exitError || !strings.Contains(errOut, `starts with "!"`) ||
 		len(h.sent()) != 1 {
 		t.Fatalf("--msg-file = %d %s", code, errOut)
 	}

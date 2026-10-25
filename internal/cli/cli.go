@@ -84,8 +84,8 @@ Usage:
                          until an operation's turn completes (nhm's result)
   nhm interrupt <session> [--tag T] [selector] [--json]
                          send each agent ntm's interrupt key (Ctrl+C; Escape for omp)
-  nhm send <session> [prompt] [selector] [-t KEY] [--op-id ID] [--wait] [--dry-run] [--json]
-                         send one prompt, once, with a receipt per agent
+  nhm send <session> [prompt] [--all|--cc[=V]|--cod[=V]|…] [--tag T] [-p N|--panes P] [-t KEY] [--dry-run] [--json]
+                         ntm's send: one prompt to the session's agents, a receipt per agent (--project P: every session of P)
   nhm memory serve [--port N] | context <task> | outcome <status> [--rules IDS] | privacy …
                          ntm's memory verbs over CM: run its daemon, ask it, record
   nhm feedback list|mark|outcomes [--json]

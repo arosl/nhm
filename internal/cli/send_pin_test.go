@@ -33,7 +33,7 @@ func TestSendIfGeneration(t *testing.T) {
 
 	// The pin alone is the selection: IcyKnoll only, not every agent.
 	code, out, errOut := run("send", "swarm", "packet", "--if-generation", pin, "--op-id", "op-pin1", "--socket", sock)
-	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): submitted") || strings.Contains(out, "BlueLake") {
+	if code != 0 || out != "Sent to 1 pane(s)\n" {
 		t.Fatalf("matching pin = %d %s %s", code, out, errOut)
 	}
 	if got := h.sent(); len(got) != 1 || got[0] != "w1:p1=packet" {
@@ -46,43 +46,49 @@ func TestSendIfGeneration(t *testing.T) {
 		PaneID: icy.PaneID, HerdrAlias: icy.HerdrAlias, Kind: icy.Kind}); err != nil {
 		t.Fatal(err)
 	}
+	// The refused target is ntm's failed delivery (exit 1); the receipt
+	// under _nhm says why.
 	code, out, _ = run("send", "swarm", "packet", "--if-generation", pin, "--op-id", "op-pin2", "--socket", sock, "--json")
-	tg := decodeEnvelope(t, out)["result"].(map[string]any)["targets"].([]any)
-	first := tg[0].(map[string]any)
-	if code != exitAdmission || len(tg) != 1 || first["submission"] != "refused" || first["error_code"] != "generation_changed" {
-		t.Fatalf("stale pin = %d %v", code, tg)
+	r := decodeSendResult(t, out)
+	if code != exitError || r.Success || r.Failed != 1 || r.ErrorCode != "SEND_FAILED" || r.NHM == nil || len(r.NHM.Receipts) != 1 ||
+		r.NHM.Receipts[0].Status != "refused" || r.NHM.Receipts[0].ErrorCode != "generation_changed" {
+		t.Fatalf("stale pin = %d %s", code, out)
 	}
 	if len(h.sent()) != 1 {
 		t.Fatalf("a prompt was typed: %v", h.sent())
 	}
-	code, out, _ = run("send", "swarm", "packet", "--if-generation", pin, "--dry-run", "--socket", sock)
-	if code != 0 || !strings.Contains(out, "refused") || !strings.Contains(out, "expected generation 1, the binding is at generation 2") {
-		t.Fatalf("stale pin, dry run = %d %s", code, out)
+	// A dry run names the refusal as a warning and would send nothing.
+	code, out, errOut = run("send", "swarm", "packet", "--if-generation", pin, "--dry-run", "--socket", sock)
+	if code != 0 || !strings.Contains(out, "Would send 0 prompt(s):") ||
+		!strings.Contains(errOut, "Warning: pane 0.1 (IcyKnoll): refused: ") || !strings.Contains(errOut, "expected generation 1, the binding is at generation 2") {
+		t.Fatalf("stale pin, dry run = %d %q %q", code, out, errOut)
 	}
 
 	// With a selector, a selected agent that is not pinned is refused,
 	// and a pin the selector does not reach is reported.
 	code, out, _ = run("send", "swarm", "packet", "--name", "BlueLake", "--if-generation", icy.ID+":2", "--op-id", "op-pin3",
 		"--socket", sock, "--json")
-	tg = decodeEnvelope(t, out)["result"].(map[string]any)["targets"].([]any)
+	r = decodeSendResult(t, out)
 	codes := map[string]bool{}
-	for _, x := range tg {
-		codes[fmt.Sprint(x.(map[string]any)["error_code"])] = true
+	if r.NHM != nil {
+		for _, rc := range r.NHM.Receipts {
+			codes[rc.ErrorCode] = true
+		}
 	}
-	if code != exitAdmission || !codes["not_reviewed"] || !codes["not_selected"] || len(h.sent()) != 1 {
-		t.Fatalf("pin with a selector = %d %v", code, tg)
+	if code != exitError || !codes["not_reviewed"] || !codes["not_selected"] || len(h.sent()) != 1 {
+		t.Fatalf("pin with a selector = %d %s", code, out)
 	}
 
-	// Every pinned binding gone: refused before the claim, exit 2, and
-	// never widened to the other agents.
+	// Every pinned binding gone: refused before the claim (ntm's error,
+	// exit 1), and never widened to the other agents.
 	code, _, _ = run("send", "swarm", "packet", "--if-generation", "bnd-gone:1", "--op-id", "op-pin5", "--socket", sock)
-	if code != exitRefused || len(h.sent()) != 1 {
+	if code != exitError || len(h.sent()) != 1 {
 		t.Fatalf("only gone pins = %d, prompts %v", code, h.sent())
 	}
 
 	for _, bad := range []string{"bnd-x", "bnd-x:0", "bnd-x:two", ":3", "bnd-x:1,bnd-x:2"} {
-		if code, _, _ := run("send", "swarm", "x", "--if-generation", bad, "--socket", sock); code != exitRefused {
-			t.Errorf("--if-generation %q = %d, want %d", bad, code, exitRefused)
+		if code, _, _ := run("send", "swarm", "x", "--if-generation", bad, "--socket", sock); code != exitError {
+			t.Errorf("--if-generation %q = %d, want %d", bad, code, exitError)
 		}
 	}
 

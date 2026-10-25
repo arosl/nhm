@@ -26,19 +26,20 @@ func TestEveryVerbFlagIsReservedForKinds(t *testing.T) {
 	// spawn has its own flags too.
 	names := func(verb string) []string {
 		var out []string
-		if verb == "spawn" {
+		switch verb {
+		case "spawn":
 			fs := pflag.NewFlagSet(verb, pflag.ContinueOnError)
 			addSpawnOnlyFlags(fs, addSpawnFlags(fs))
 			fs.VisitAll(func(f *pflag.Flag) { out = append(out, f.Name) })
 			return out
+		case "send":
+			cmd, _ := newSendCommand()
+			cmd.Flags().VisitAll(func(f *pflag.Flag) { out = append(out, f.Name) })
+			return out
 		}
 		fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		if verb == "send" {
-			addSendFlags(fs)
-		} else {
-			addRobotSpawnFlags(fs)
-		}
+		addRobotSpawnFlags(fs)
 		fs.VisitAll(func(f *flag.Flag) { out = append(out, f.Name) })
 		return out
 	}
@@ -67,13 +68,9 @@ func TestKindNamedAfterAFlagDoesNotPanic(t *testing.T) {
 			t.Errorf("kind %q registered", name)
 		}
 	}
-	for _, add := range []func(*flag.FlagSet){
-		func(fs *flag.FlagSet) { addSendFlags(fs) },
-		func(fs *flag.FlagSet) { addRobotSpawnFlags(fs) },
-	} {
-		fs := flag.NewFlagSet("x", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		add(fs)
-	}
+	fs := flag.NewFlagSet("x", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	addRobotSpawnFlags(fs)
+	newSendCommand()
 	addSpawnFlags(pflag.NewFlagSet("spawn", pflag.ContinueOnError))
 }

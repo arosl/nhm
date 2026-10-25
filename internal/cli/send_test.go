@@ -95,8 +95,9 @@ func (h *sendHerdr) sent() []string {
 }
 
 // A "!" that a person left in an agent's input box refuses that target
-// (nhm-mowp): the send says why, --robot-send lists it as failed, and
-// the other agent gets its prompt.
+// (nhm-mowp): the send says why (ntm's delivery error, exit 1), --json
+// and --robot-send list it as failed, and the other agent gets its
+// prompt.
 func TestSendRefusesATargetWithAShellDraft(t *testing.T) {
 	s, inst, h := newSendInstance(t)
 	ownNhm(t, inst)
@@ -105,8 +106,13 @@ func TestSendRefusesATargetWithAShellDraft(t *testing.T) {
 	why := `the input box shows Claude Code's bash mode (a "!" draft): herdr types nhm's text after what a person left there, ` +
 		"so the agent would run it as a shell command that no guard such as dcg screens; clear the input box in pane w1:p1"
 	code, out, errOut := run("send", "swarm", "hello", "--socket", s.SocketPath)
-	if code != 1 || !strings.Contains(out, "IcyKnoll (0.1): refused (ready): "+why) || !strings.Contains(out, "BlueLake (1.1): submitted") {
-		t.Fatalf("send = %d %s %s", code, out, errOut)
+	if code != exitError || out != "" || !strings.HasSuffix(errOut, "Error: sending to pane 0.1: "+why+"\n") {
+		t.Fatalf("send = %d %q %q", code, out, errOut)
+	}
+	code, out, _ = run("send", "swarm", "hello json", "--socket", s.SocketPath, "--json")
+	if r := decodeSendResult(t, out); code != exitError || r.Success || r.Delivered != 1 || r.Failed != 1 || r.Error != why ||
+		strings.Join(r.Targets, ",") != "0.1,1.1" {
+		t.Fatalf("send --json = %d %s", code, out)
 	}
 	rout, rcode := robotJSON(t, "--robot-send=swarm", "--socket="+s.SocketPath, "--msg=hello again")
 	failed, _ := rout["failed"].([]any)
@@ -116,7 +122,7 @@ func TestSendRefusesATargetWithAShellDraft(t *testing.T) {
 	if first, _ := failed[0].(map[string]any); first["pane"] != "0.1" || first["error"] != "shell_draft: "+why {
 		t.Fatalf("robot send failed = %v", failed)
 	}
-	if got := h.sent(); len(got) != 2 || got[0] != "w1:p2=hello" || got[1] != "w1:p2=hello again" {
+	if got := h.sent(); len(got) != 3 || got[0] != "w1:p2=hello" || got[1] != "w1:p2=hello json" || got[2] != "w1:p2=hello again" {
 		t.Fatalf("prompts = %v", got)
 	}
 }
@@ -128,43 +134,63 @@ func ownNhm(t *testing.T, inst store.Instance) {
 	}
 }
 
+// decodeSendResult reads ntm's SendResult, one line of JSON.
+func decodeSendResult(t *testing.T, out string) SendResult {
+	t.Helper()
+	var r SendResult
+	if strings.Count(strings.TrimRight(out, "\n"), "\n") != 0 || json.Unmarshal([]byte(out), &r) != nil {
+		t.Fatalf("not one line of SendResult: %q", out)
+	}
+	return r
+}
+
+// TestSendVerb: ntm's send, its text and SendResult, on nhm's core send:
+// the owner check, the dry run, a type flag, nhm's --op-id (a replay sends
+// nothing; another request under the id is ntm's error, exit 1), --when
+// ready and --wait.
 func TestSendVerb(t *testing.T) {
 	s, inst, h := newSendInstance(t)
 	sock := s.SocketPath
-	// Under the Bash, a send is refused; a dry run reads only.
+	// Under the Bash, a send fails; a dry run reads only.
 	code, out, _ := run("send", "swarm", "hello", "--socket", sock, "--json")
-	if code != 2 || !strings.Contains(decodeEnvelope(t, out)["error"].(string), "owned by another") {
+	if r := decodeSendResult(t, out); code != exitError || r.Success || !strings.Contains(r.Error, "owned by another") || len(r.Targets) != 0 {
 		t.Fatalf("under the Bash = %d %s", code, out)
 	}
+	if code, _, errOut := run("send", "swarm", "hello", "--socket", sock); code != exitError || !strings.HasPrefix(errOut, "Error: this herdr instance is owned by another") {
+		t.Fatalf("under the Bash, text = %d %q", code, errOut)
+	}
 	code, out, _ = run("send", "swarm", "hello", "--dry-run", "--socket", sock)
-	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): would send") || !strings.Contains(out, "--- BlueLake (1.1) ---\nhello") || len(h.sent()) != 0 {
-		t.Fatalf("dry run = %d %s", code, out)
+	if code != 0 || out != "Dry Run: nhm send swarm\n\nWould send 2 prompt(s):\n"+
+		"  1. IcyKnoll (pane 0.1): \"hello\" (args)\n  2. BlueLake (pane 1.1): \"hello\" (args)\n\nuse without --dry-run to execute\n" || len(h.sent()) != 0 {
+		t.Fatalf("dry run = %d %q", code, out)
 	}
 	ownNhm(t, inst)
 	code, out, errOut := run("send", "swarm", "hello", "there", "--cc", "--op-id", "op-v1", "--socket", sock)
-	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): submitted (working)") || strings.Contains(out, "BlueLake") ||
-		!strings.Contains(out, "operation op-v1") {
-		t.Fatalf("send = %d %s %s", code, out, errOut)
+	if code != 0 || out != "Sent to 1 pane(s)\n" {
+		t.Fatalf("send = %d %q %s", code, out, errOut)
 	}
 	if got := h.sent(); len(got) != 1 || got[0] != "w1:p1=hello there" {
 		t.Fatalf("prompts = %v", got)
 	}
 	// The same id: the stored receipt, nothing sent.
 	code, out, _ = run("send", "swarm", "hello", "there", "--cc", "--op-id", "op-v1", "--socket", sock)
-	if code != 0 || !strings.Contains(out, "was claimed before") || len(h.sent()) != 1 {
+	if code != 0 || out != "operation op-v1 was claimed before; nothing sent\n" || len(h.sent()) != 1 {
 		t.Fatalf("replay = %d %s", code, out)
 	}
-	if code, _, _ = run("send", "swarm", "other", "--cc", "--op-id", "op-v1", "--socket", sock); code != 2 {
-		t.Fatalf("conflict = %d", code)
+	if code, _, errOut := run("send", "swarm", "other", "--cc", "--op-id", "op-v1", "--socket", sock); code != exitError || !strings.Contains(errOut, "operation_id_conflict") {
+		t.Fatalf("conflict = %d %q", code, errOut)
 	}
-	// IcyKnoll works now. --when ready refuses it (exit 3); the default
-	// types the prompt in, as ntm's send does (nhm-r0v).
-	code, out, _ = run("send", "swarm", "again", "--name", "IcyKnoll", "--when", "ready", "--socket", sock)
-	if code != exitAdmission || !strings.Contains(out, "refused (busy)") {
-		t.Fatalf("busy, --when ready = %d %s", code, out)
+	// IcyKnoll works now. --when ready refuses it: ntm's delivery error,
+	// exit 1. The default types the prompt in, as ntm's send does
+	// (nhm-r0v); the receipt names the gate under _nhm.
+	code, _, errOut = run("send", "swarm", "again", "--name", "IcyKnoll", "--when", "ready", "--socket", sock)
+	if code != exitError || !strings.HasSuffix(errOut, "Error: sending to pane 0.1: the agent is working\n") {
+		t.Fatalf("busy, --when ready = %d %q", code, errOut)
 	}
-	code, out, _ = run("send", "swarm", "again", "--name", "IcyKnoll", "--socket", sock)
-	if got := h.sent(); code != 0 || got[len(got)-1] != "w1:p1=again" {
+	code, out, _ = run("send", "swarm", "again", "--name", "IcyKnoll", "--socket", sock, "--json")
+	r := decodeSendResult(t, out)
+	if got := h.sent(); code != 0 || got[len(got)-1] != "w1:p1=again" || !r.Success || r.Delivered != 1 || len(r.Targets) != 1 || r.Targets[0] != "0.1" ||
+		r.NHM == nil || len(r.NHM.Receipts) != 1 || r.NHM.Receipts[0].Status != "submitted" || r.NHM.Receipts[0].Result.Gate != "busy" {
 		t.Fatalf("busy, the default = %d %s %v", code, out, got)
 	}
 	// --msg-file - reads stdin; --wait records the completion.
@@ -178,23 +204,32 @@ func TestSendVerb(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("wait = %d %s %s", code, out, errOut)
 	}
-	res := decodeEnvelope(t, out)["result"].(map[string]any)
-	tg := res["targets"].([]any)[0].(map[string]any)
-	obs := tg["result"].(map[string]any)["completion_observation"].(map[string]any)
-	if tg["submission"] != "submitted" || obs["observation"] != "completed" || obs["correlation"] != "strong" {
-		t.Fatalf("target = %v", tg)
+	r = decodeSendResult(t, out)
+	if r.PromptPreview != "from stdin" || r.NHM == nil || len(r.NHM.Receipts) != 1 || len(r.NHM.Wait) != 1 {
+		t.Fatalf("wait = %s", out)
 	}
-	for _, args := range [][]string{
-		{"send", "swarm", "x", "--with-cass", "--no-cass", "--socket", sock},
-		{"send", "swarm", "x", "--msg", "y", "--socket", sock},
-		{"send", "swarm", "--socket", sock},
-		{"send", "swarm", "x", "--state", "sleepy", "--socket", sock},
-		{"send", "swarm", "x", "--name", "Nobody", "--socket", sock},
-		{"send", "swarm", "-t", "no_such_template", "--socket", sock},
+	rc, w := r.NHM.Receipts[0], r.NHM.Wait[0]
+	if obs := rc.Result.Completion; rc.Status != "submitted" || obs == nil || obs.Observation != "completed" || obs.Correlation != "strong" ||
+		w.Outcome != "complete" || w.MailName != "BlueLake" {
+		t.Fatalf("receipt %+v, wait %+v", rc, w)
+	}
+	// ntm's errors, exit 1; --no-cass overrides --with-cass, as in ntm.
+	for _, c := range []struct {
+		args []string
+		err  string
+	}{
+		{[]string{"x", "--msg", "y"}, "give the prompt once"},
+		{[]string{}, "no prompt provided (use argument, --file, or pipe to stdin)"},
+		{[]string{"x", "--state", "sleepy"}, `not "sleepy"`},
+		{[]string{"x", "--name", "Nobody"}, "Nobody has no binding"},
+		{[]string{"-t", "no_such_template"}, "template not found: no_such_template"},
 	} {
-		if code, _, _ := run(args...); code != 2 {
-			t.Errorf("%v = %d, want 2", args[2:], code)
+		if code, _, errOut := run(append([]string{"send", "swarm", "--socket", sock}, c.args...)...); code != exitError || !strings.Contains(errOut, c.err) {
+			t.Errorf("%v = %d %q", c.args, code, errOut)
 		}
+	}
+	if code, out, _ := run("send", "swarm", "x", "--with-cass", "--no-cass", "--name", "IcyKnoll", "--socket", sock); code != 0 || out != "Sent to 1 pane(s)\n" {
+		t.Errorf("--with-cass --no-cass = %d %q", code, out)
 	}
 	// --with-memory=false is accepted.
 	if code, out, _ = run("send", "swarm", "x", "--name", "IcyKnoll", "--with-memory=false", "--no-cass", "--dry-run", "--socket", sock); code != 0 {

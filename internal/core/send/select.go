@@ -35,6 +35,36 @@ type Selector struct {
 	States      []herdr.AgentStatus `json:"states,omitempty"`
 	Limit       int                 `json:"limit,omitempty"`
 	IncludeSelf bool                `json:"include_self,omitempty"`
+	// ntm's filters of a broad send (nhm-2p6.5.4); an agent named or
+	// picked by pane passes them. Variants keep the agents of the kinds
+	// given, each with an empty variant (any) or one that is the
+	// binding's model (send --cc=opus).
+	Variants map[string][]string `json:"variants,omitempty"`
+	// Tags keep the agents in TaggedPanes: the panes whose herdr label
+	// ends in one of the tags (send --tag), which the caller reads.
+	Tags []string `json:"tags,omitempty"`
+	// SkipFirst is send --skip-first: SkipPanes holds the first pane of
+	// the workspace, which the caller reads.
+	SkipFirst bool `json:"skip_first,omitempty"`
+	// The resolved panes stay out of the operation's fingerprint: the
+	// selector, not herdr's panes of the moment, binds an operation id.
+	TaggedPanes []string `json:"-"`
+	SkipPanes   []string `json:"-"`
+}
+
+// broadFilter reports whether a broad send keeps b: ntm's variants, tags
+// and skipped panes.
+func (sel Selector) broadFilter(b bindings.Binding) bool {
+	if len(sel.Variants) > 0 {
+		vs, ok := sel.Variants[b.Kind]
+		if !ok || (!slices.Contains(vs, "") && !slices.Contains(vs, b.Model)) {
+			return false
+		}
+	}
+	if len(sel.Tags) > 0 && !slices.Contains(sel.TaggedPanes, b.PaneID) {
+		return false
+	}
+	return !slices.Contains(sel.SkipPanes, b.PaneID)
 }
 
 // Target is one selected agent: its binding, frozen at selection, and
@@ -162,6 +192,9 @@ func Select(ctx context.Context, l Lister, agents []herdr.AgentInfo, workspaceID
 			}
 		}
 		if caller != "" && b.PaneID == caller && !sel.IncludeSelf && !named[b.ID] {
+			continue
+		}
+		if !named[b.ID] && !sel.broadFilter(b) {
 			continue
 		}
 		out = append(out, Target{Binding: b, Agent: a, Key: key(b)})

@@ -113,9 +113,11 @@ func TestSendWithMemoryAndFeedback(t *testing.T) {
 	if _, help, _ := run("feedback", "--help"); strings.Contains(help, "maintain runs") || !strings.Contains(help, "nothing runs it on its own") {
 		t.Fatalf("help = %s", help)
 	}
-	// Conflicting flags refuse before anything is sent.
-	if code, _, _ = run("send", "swarm", "x", "--with-cass", "--no-cass", sock); code != exitRefused || len(h.sent()) != 1 {
-		t.Fatalf("conflict = %d", code)
+	// --no-cass overrides --with-cass, as in ntm: no CASS context; the
+	// duplicate check still runs (only --no-cass-check stops it, as ntm's).
+	if code, out, _ = run("send", "swarm", "x", "--name", "IcyKnoll", "--with-cass", "--no-cass", sock); code != 0 || len(h.sent()) != 2 ||
+		f.count("cass search") != 2 {
+		t.Fatalf("--with-cass --no-cass = %d %s %q", code, out, f.calls)
 	}
 }
 
