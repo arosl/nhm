@@ -1,8 +1,45 @@
 // Ported in part from ntm (github.com/Dicklesworthstone/ntm)
-// internal/util/text.go (Truncate) at commit 9d5ed977; see LICENSE in this
-// directory and PROVENANCE.md. Local changes: the package (nhm's cli);
-// Truncate is truncateText.
+// internal/util/text.go (Truncate, SanitizeFilename) at commit 9d5ed977;
+// see LICENSE in this directory and PROVENANCE.md. Local changes: the
+// package (nhm's cli); Truncate is truncateText, SanitizeFilename
+// sanitizeFilename.
 package cli
+
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// sanitizeFilename makes a string safe for use as a filename.
+func sanitizeFilename(name string) string {
+	// Replace unsafe characters
+	replacer := strings.NewReplacer(
+		"/", "-",
+		"\\", "-",
+		":", "-",
+		"*", "-",
+		"?", "-",
+		"\"", "-",
+		"<", "-",
+		">", "-",
+		"|", "-",
+		"%", "_",
+		" ", "_",
+		".", "_", // Prevent dotfiles and directory traversal
+	)
+	safe := replacer.Replace(strings.TrimSpace(name))
+
+	// Limit length while respecting UTF-8 boundaries
+	if len(safe) > 50 {
+		for i := 50; i >= 0; i-- {
+			if utf8.RuneStart(safe[i]) {
+				return safe[:i]
+			}
+		}
+		return safe[:50]
+	}
+	return safe
+}
 
 // truncateText shortens a string to maxLen with ellipsis.
 // Uses three ASCII periods "..." to indicate truncation.
