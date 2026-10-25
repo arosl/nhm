@@ -54,12 +54,13 @@ func TestInterruptAndWaitRefuseANameOfTwoProjects(t *testing.T) {
 		return map[string]any{"type": "ok"}, nil
 	})
 
-	code, _, errOut := runVerb(runInterrupt, "swarm", "--name", "IcyKnoll", "--include-self", "--socket", s.SocketPath)
-	if code != exitRefused || !strings.Contains(errOut, "name one by its slot") {
+	code, _, errOut := runVerb(verbRun("interrupt"), "swarm", "--name", "IcyKnoll", "--include-self", "--socket", s.SocketPath)
+	if code != exitError || !strings.Contains(errOut, "name one by its slot") {
 		t.Fatalf("interrupt without --project = %d %s", code, errOut)
 	}
-	code, out, errOut := runVerb(runInterrupt, "swarm", "--name", "IcyKnoll", "--project", project, "--include-self", "--socket", s.SocketPath)
-	if code != exitOK || !strings.Contains(out, "IcyKnoll ("+other.Slot+"): sent esc") {
+	code, out, errOut := runVerb(verbRun("interrupt"), "swarm", "--name", "IcyKnoll", "--project", project, "--include-self", "--socket", s.SocketPath, "--json")
+	r := decodeInterrupt(t, out)
+	if code != exitOK || r.Interrupted != 1 || r.NHM.Targets[0].Slot != other.Slot {
 		t.Fatalf("interrupt with --project = %d %s %s", code, out, errOut)
 	}
 	mu.Lock()

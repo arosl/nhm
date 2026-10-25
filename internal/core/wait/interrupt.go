@@ -18,6 +18,12 @@ import (
 // then nhm refuses instead of guessing.
 func InterruptKeys(kind string) []string { return kinds.Lookup(kind).InterruptKeys }
 
+// NTMInterrupts is ntm's isInterruptibleAgentPane on nhm's kinds: ntm's
+// interrupt verb leaves out antigravity (agy) and the user pane, which
+// has no binding in nhm. Every other kind is a target, and Interrupt
+// refuses one without a checked key.
+func NTMInterrupts(kind string) bool { return kinds.Lookup(kind).NTMType != "antigravity" }
+
 // Interrupt statuses.
 const (
 	InterruptSent    = "sent"

@@ -45,14 +45,13 @@ key enter
 expect 5 (generation 1, pane w1:p1)
 note a hand-off while the confirm screen is open: the same binding, generation 2
 run cd "$HOME/proj" && nhm adopt IcyKnoll --pane w1:p1 --handoff-from "$(nhm resolve IcyKnoll --json | jq -r .result.binding.binding_id)"
-run grep -c '"data":"escape"' "$HERDR_WORK/fake.log" >"$HERDR_WORK/cases.esc"
+run grep -c '"data":"c-c"' "$HERDR_WORK/fake.log" >"$HERDR_WORK/cases.cc"
 note tab, enter: confirm; the core refuses generation 1, and no key reaches the agent
 key tab
 key enter
 expect 10 IcyKnoll: refused: expected generation 1
-note the fake agent keeps a lone ESC until more input comes (it may start a sequence): a left arrow (ESC [ D) makes it log one that waits
-run sleep 0.5; herdr pane send-keys w1:p1 left >/dev/null
-check sleep 0.5; test "$(grep -c '"data":"escape"' "$HERDR_WORK/fake.log")" = "$(cat "$HERDR_WORK/cases.esc")"
+note the fake agent logs a Ctrl+C at once, as c-c: none came
+check sleep 0.5; test "$(grep -c '"data":"c-c"' "$HERDR_WORK/fake.log")" = "$(cat "$HERDR_WORK/cases.cc")"
 note enter closes the result; x again: generation 2, and the interrupt reaches the agent
 key enter
 key x
@@ -62,9 +61,8 @@ key enter
 expect 5 (generation 2, pane w1:p1)
 key tab
 key enter
-expect 10 IcyKnoll: sent: esc
-run herdr pane send-keys w1:p1 left >/dev/null
-check for _ in $(seq 50); do test "$(grep -c '"data":"escape"' "$HERDR_WORK/fake.log")" -gt "$(cat "$HERDR_WORK/cases.esc")" && exit 0; sleep 0.1; done; exit 1
+expect 10 IcyKnoll: sent: ctrl+c
+check for _ in $(seq 50); do test "$(grep -c '"data":"c-c"' "$HERDR_WORK/fake.log")" -gt "$(cat "$HERDR_WORK/cases.cc")" && exit 0; sleep 0.1; done; exit 1
 key enter
 key esc esc
 refute 1 nhm  workspace proj

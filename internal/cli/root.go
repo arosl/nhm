@@ -320,7 +320,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "bind", run: runBind, own: []string{"config"}},
 		{name: "ui", run: runUI},
 		{name: "wait", run: runWait},
-		{name: "interrupt", run: runInterrupt},
 		{name: "send", run: runSend},
 		{name: "feedback", run: runFeedback},
 		{name: "modes", run: runModes},
@@ -430,7 +429,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd())
 	cmd.AddCommand(newDoctorCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))

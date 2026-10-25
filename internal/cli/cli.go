@@ -64,8 +64,8 @@ Usage:
                          stream the agents' output, a bead or files, as ntm's watch (also w)
   nhm wait [session] [selector] [--until idle|done|complete|generating|healthy] [--after-op OP] [--timeout D] [--json]
                          wait until agents reach a state, or a turn completes
-  nhm interrupt [session] [selector] [--json]
-                         send each agent its kind's interrupt key
+  nhm interrupt <session> [--tag T] [selector] [--json]
+                         send each agent ntm's interrupt key (Ctrl+C; Escape for omp)
   nhm send <session> [prompt] [selector] [-t KEY] [--op-id ID] [--wait] [--dry-run] [--json]
                          send one prompt, once, with a receipt per agent
   nhm memory serve [--port N] | context <task> | outcome <status> [--rules IDS] | privacy …

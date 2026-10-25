@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/core/wake"
@@ -287,55 +286,5 @@ func TestWaitAfterANudge(t *testing.T) {
 	if code, out, _ = runVerb(runWait, "--after-op", "op-wake-2", "--until", "idle", "--socket", s.SocketPath); code != 0 ||
 		!strings.Contains(out, "IcyKnoll (0.1): done") {
 		t.Fatalf("idle after the nudge = %d %s", code, out)
-	}
-}
-
-func TestInterruptVerb(t *testing.T) {
-	s, inst, _ := waitInstance(t, func(pane string) map[string]any {
-		if pane == "w1:p1" {
-			return agentMap(pane, "claude", "working", 4, 0)
-		}
-		return agentMap(pane, "codex", "working", 7, 0)
-	})
-	var mu sync.Mutex
-	var sent []string
-	s.Handle("agent.send_keys", func(r herdrtest.Request) (any, *herdrtest.Error) {
-		var p struct {
-			Target string   `json:"target"`
-			Keys   []string `json:"keys"`
-		}
-		_ = json.Unmarshal(r.Params, &p)
-		mu.Lock()
-		sent = append(sent, p.Target+"="+strings.Join(p.Keys, "+"))
-		mu.Unlock()
-		return map[string]any{"type": "ok"}, nil
-	})
-	code, out, _ := runVerb(runInterrupt, "swarm", "--socket", s.SocketPath, "--json")
-	if code != 2 || !strings.Contains(decodeEnvelope(t, out)["error"].(string), "owned by another") {
-		t.Fatalf("under the Bash = %d %s", code, out)
-	}
-	if _, err := core.SwitchOwner(context.Background(), inst.Dir, core.OwnerNhm, time.Now(), nil); err != nil {
-		t.Fatal(err)
-	}
-	// The caller (w1:p2) is left out unless --include-self.
-	t.Setenv("HERDR_PANE_ID", "w1:p2")
-	code, out, errOut := runVerb(runInterrupt, "swarm", "--op-id", "op-int-1", "--socket", s.SocketPath)
-	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): sent esc") || strings.Contains(out, "BlueLake") {
-		t.Fatalf("interrupt = %d %s %s", code, out, errOut)
-	}
-	// The same op id sends nothing.
-	code, out, _ = runVerb(runInterrupt, "swarm", "--op-id", "op-int-1", "--socket", s.SocketPath)
-	if code != 0 || !strings.Contains(out, "nothing sent") {
-		t.Fatalf("repeat = %d %s", code, out)
-	}
-	code, out, _ = runVerb(runInterrupt, "swarm", "--include-self", "--socket", s.SocketPath, "--json")
-	res := decodeEnvelope(t, out)["result"].(map[string]any)
-	if code != 0 || res["status"] != "done" || len(res["targets"].([]any)) != 2 {
-		t.Fatalf("include-self = %d %v", code, res)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if strings.Join(sent, " ") != "w1:p1=esc w1:p1=esc w1:p2=esc" {
-		t.Fatalf("keys = %v", sent)
 	}
 }

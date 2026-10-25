@@ -59,7 +59,7 @@ func TestRobotInterruptRuForm(t *testing.T) {
 		len(out["failed"].([]any)) != 0 || prev["0.1"].(map[string]any)["state"] != "active" || prev["1.1"].(map[string]any)["state"] != "idle" {
 		t.Fatalf("interrupt = %d %v", code, out)
 	}
-	if got := keys(); len(got) != 1 || got[0] != "w1:p1=esc" {
+	if got := keys(); len(got) != 1 || got[0] != "w1:p1=ctrl+c" {
 		t.Fatalf("keys = %v", got)
 	}
 }

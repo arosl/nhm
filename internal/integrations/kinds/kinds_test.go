@@ -271,7 +271,7 @@ func TestBuiltins(t *testing.T) {
 		t.Fatalf("names = %s", got)
 	}
 	c, _ := r.Get("claude")
-	if !c.Builtin || c.ModelFlag != "--model" || !slices.Equal(c.InterruptKeys, []string{"esc"}) || !c.CodeReview || c.Continue == nil {
+	if !c.Builtin || c.ModelFlag != "--model" || !slices.Equal(c.InterruptKeys, []string{"ctrl+c"}) || !c.CodeReview || c.Continue == nil {
 		t.Fatalf("claude = %+v", c)
 	}
 	// A resumed Claude runs as guarded as the spawned one (the review of

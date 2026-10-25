@@ -33,13 +33,13 @@ check test "$(jq -r '"\(.pane_id) \(.pid)"' $XDG_STATE_HOME/nhm/inst-*/ui/board-
 note x marks IcyKnoll; space x interrupts the mark, after a review
 key x
 expect 3 1 marked
-run grep -c '"data":"escape"' "$HERDR_WORK/fake.log" >"$HERDR_WORK/esc.before"
+run grep -c '"data":"c-c"' "$HERDR_WORK/fake.log" >"$HERDR_WORK/cc.before"
 key space
 expect 3 Actions for 1 marked agents
 key x
 expect 8 [ cancel ]
 key tab enter
-expect 10 IcyKnoll: sent: esc
+expect 10 IcyKnoll: sent: ctrl+c
 key esc
 note after the interrupt herdr's own detection of the fake agent can read "unknown" for a while, and a send to it is refused (seen in CI): report it idle, as its hooks would
 run herdr pane report-agent --source e2e --agent claude --state idle w1:p1 >/dev/null
@@ -54,8 +54,8 @@ key ctrl+s
 expect 30 any key closes
 expect 2 IcyKnoll: submitted
 check grep -q '"event":"submit","data":"SURFACE-SEND hello"' "$HERDR_WORK/fake.log"
-note the interrupt's esc reached the agent: the fake agent logs a bare Escape when the next byte comes (an ESC may start a sequence), here the send's
-check test "$(grep -c '"data":"escape"' "$HERDR_WORK/fake.log")" -gt "$(cat "$HERDR_WORK/esc.before")"
+note the interrupt's Ctrl+C reached the agent: the fake agent logs it as c-c
+check test "$(grep -c '"data":"c-c"' "$HERDR_WORK/fake.log")" -gt "$(cat "$HERDR_WORK/cc.before")"
 key esc
 note esc on the board clears the mark
 key esc

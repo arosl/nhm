@@ -2,81 +2,94 @@ package cli
 
 import (
 	"context"
-	"flag"
-	"fmt"
+	"errors"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/session"
 	"github.com/arosl/nhm/internal/core/wait"
 )
 
-const interruptUsage = `Usage: nhm interrupt [session] [--name N]… [--pane N.M]… [--type K]… [--include-self]
-                     [--project DIR] [--op-id ID] [--socket PATH] [--json]
+const interruptUsage = `Usage: nhm interrupt <session> [--tag T]… [--json]
+                     [--name N]… [--pane N.M]… [--type K]… [--include-self]
+                     [--project DIR] [--op-id ID] [--socket PATH]
 
-Send each selected agent its kind's interrupt key (Esc for Claude, Codex
-and omp). The session is a workspace id or label; without it, the calling
-pane's workspace. Without a selector, every bound agent of the session
-except the caller. nhm refuses a kind whose key it has not checked, and an
-agent whose binding changed. One operation id sends at most once. Runs
-only when nhm owns this herdr instance.
+ntm's interrupt: send each agent of the session its interrupt key,
+whatever it is doing: Ctrl+C, or Escape for omp and pi. agy is left out,
+as ntm leaves out antigravity, and so is the calling pane, nhm's user
+pane. --tag (repeatable, or a comma list) keeps the agents whose herdr
+pane label ends in one of the tags: "IcyKnoll opus[frontend,api]".
 
-Exit codes: 0 sent to every target; 1 an error or a partial result;
-2 refused (bad arguments, no agent, not the owner, or every target
-refused).
+nhm's selectors narrow the agents further: --name, --pane (the slot),
+--type, --project; --include-self adds the calling pane. One operation
+id (--op-id) sends at most once. nhm sends no key to a kind whose key it
+has not checked (opencode, grok): that agent fails. Runs only when nhm
+owns this herdr instance.
+
+Prints "Sent Ctrl+C to N agent pane(s)", or with an Escape among them
+"Sent interrupt to N agent pane(s) (Ctrl+C: a, Escape: b)". --json gives
+ntm's InterruptResponse, with nhm's operation under "_nhm".
+
+Exit codes: 0 every target interrupted; 1 an error, or a target failed.
 `
 
-func runInterrupt(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("interrupt", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, interruptUsage) }
-	sel := addSelectorFlags(fs)
-	includeSelf := fs.Bool("include-self", false, "also interrupt the calling pane")
-	project := fs.String("project", "", "only this project's agents")
-	opID := fs.String("op-id", "", "operation id, for an idempotent retry")
-	socket := fs.String("socket", "", "herdr API socket")
-	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
-	pos, err := parseInterleaved(fs, args)
-	if err != nil {
-		return exitRefused
+// runInterruptNTM is ntm's runInterrupt on nhm's bound agents. An error is
+// ntm's: returned for the root's "Error: …", or under --json ntm's
+// failure envelope; either way exit 1.
+func runInterruptNTM(name string, f interruptFlags, asJSON bool, stdout, stderr io.Writer) error {
+	fail := func(err error) error {
+		if asJSON {
+			return jsonFailure(stdout, err)
+		}
+		return err
 	}
-	if len(pos) > 1 {
-		fmt.Fprint(stderr, interruptUsage)
-		return exitRefused
-	}
-	session := ""
-	if len(pos) == 1 {
-		session = pos[0]
-	}
-	env := envelope{Command: "interrupt"}
 	ctx := context.Background()
-	ie, err := openInstance(*socket)
+	ie, err := openInstance(f.socket)
 	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
+		return fail(err)
 	}
 	defer ie.db.Close()
+	// ntm's interrupt takes a unique prefix of the name under --json too
+	// (normalizeExplicitLiveSessionName(…, true)).
+	r, err := resolveSession(ctx, ie, name, false, stdout, stderr)
+	if err != nil {
+		return fail(err)
+	}
+	if r.WorkspaceID == "" {
+		return nil // a cancelled picker
+	}
+	ws := r.WorkspaceID
 	store := bindings.NewStore(ie.db)
 	projectKey := ""
-	if *project != "" {
-		s, err := projectScope(ctx, ie.inst.ID, *project)
+	if f.project != "" {
+		s, err := projectScope(ctx, ie.inst.ID, f.project)
 		if err != nil {
-			return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
+			return fail(err)
 		}
-		projectKey, env.Scope = s.MailProjectKey, s
+		projectKey = s.MailProjectKey
 	}
-	ws, err := sessionWorkspace(ctx, ie.herdr, session)
+	all, err := store.List(ctx, bindings.Filter{WorkspaceID: ws, Statuses: []bindings.Status{bindings.Active}})
 	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
+		return fail(err)
 	}
-	s := sel.selector()
-	if !*includeSelf {
-		s.Exclude = ie.callerPane(ctx)
+	sel := wait.Selector{Names: f.names, Slots: f.slots, Kinds: f.kinds}
+	if !f.includeSelf {
+		sel.Exclude = ie.callerPane(ctx)
 	}
-	targets, err := wait.Select(ctx, store, ws, projectKey, s)
+	// In ntm's form a session without agents is no error: ntm sends to
+	// none. nhm's selectors that match no agent stay one.
+	targets, err := wait.Select(ctx, store, ws, projectKey, sel)
+	if errors.Is(err, wait.ErrNoTargets) && len(sel.Names)+len(sel.Slots)+len(sel.Kinds) == 0 && projectKey == "" {
+		targets, err = nil, nil
+	}
 	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
+		return fail(err)
+	}
+	targets, skipped, err := interruptTargets(ctx, ie, targets, f.tags)
+	if err != nil {
+		return fail(err)
 	}
 	scope := map[string]string{"instance_id": ie.inst.ID, "workspace_id": ws}
 	if projectKey != "" {
@@ -85,45 +98,55 @@ func runInterrupt(args []string, stdout, stderr io.Writer) int {
 	lctx, cancel := context.WithTimeout(ctx, lockWait)
 	defer cancel()
 	var res wait.InterruptResult
-	code := exitOK
 	err = core.WithOwnerShared(lctx, ie.inst.Dir, func(o core.Owner) error {
 		if err := core.RequireOwner(o, core.OwnerNhm); err != nil {
-			code = exitRefused
 			return err
 		}
 		var ierr error
-		res, ierr = wait.Interrupt(ctx, ie.db, ie.herdr, store, wait.InterruptRequest{OperationID: *opID, Scope: scope, Targets: targets}, time.Now)
+		res, ierr = wait.Interrupt(ctx, ie.db, ie.herdr, store, wait.InterruptRequest{OperationID: f.opID, Scope: scope, Targets: targets}, time.Now)
 		return ierr
 	})
-	switch {
-	case err != nil && code == exitOK:
-		code = exitError
-	case err != nil:
-	case res.Existing, res.Status == "done":
-		code = exitOK
-	case res.Status == "refused":
-		code = exitRefused
-	default:
-		code = exitError
+	if err != nil {
+		return fail(err)
 	}
-	env.OperationID, env.Result = res.OperationID, res
-	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) { printInterrupt(w, res) })
+	resp := buildInterruptResponse(r.Session, res, skipped, len(session.AgentTabs(all)) > 1)
+	if asJSON {
+		if err := writeNTMJSON(stdout, resp); err != nil {
+			return err
+		}
+		if !resp.Success {
+			return verbExit{code: exitError}
+		}
+		return nil
+	}
+	return printInterruptText(stdout, resp)
 }
 
-func printInterrupt(w io.Writer, res wait.InterruptResult) {
-	if res.Existing {
-		fmt.Fprintf(w, "operation %s was claimed before (%s); nothing sent\n", res.OperationID, res.Status)
-		return
-	}
-	for _, t := range res.Targets {
-		line := fmt.Sprintf("%s (%s): %s", t.MailName, dash(t.Slot), t.Status)
-		if len(t.Keys) > 0 && t.Status == wait.InterruptSent {
-			line += " " + strings.Join(t.Keys, " ")
+// interruptTargets keeps the agents that ntm's interrupt reaches: not
+// agy, and with tags, those whose pane label holds one. skipped counts
+// the agents that the tags left out, as ntm counts them.
+func interruptTargets(ctx context.Context, ie *instanceEnv, list []bindings.Binding, tags []string) ([]bindings.Binding, int, error) {
+	labels := map[string]string{}
+	if len(tags) > 0 {
+		snap, err := ie.herdr.Snapshot(ctx)
+		if err != nil {
+			return nil, 0, err
 		}
-		if t.Reason != "" {
-			line += ": " + t.Reason
+		for _, p := range snap.Panes {
+			labels[p.PaneID] = p.Label
 		}
-		fmt.Fprintln(w, line)
 	}
-	fmt.Fprintf(w, "operation %s: %s\n", res.OperationID, res.Status)
+	var out []bindings.Binding
+	skipped := 0
+	for _, b := range list {
+		if !wait.NTMInterrupts(b.Kind) {
+			continue
+		}
+		if len(tags) > 0 && !session.HasAnyTag(session.PaneTags(labels[b.PaneID]), tags) {
+			skipped++
+			continue
+		}
+		out = append(out, b)
+	}
+	return out, skipped, nil
 }

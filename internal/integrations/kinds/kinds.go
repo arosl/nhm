@@ -690,7 +690,10 @@ func builtins() []Adapter {
 			// "!" first is its bash mode: no PreToolUse or UserPromptSubmit
 			// hook sees the command (Claude Code 2.1.310, nhm-ubi).
 			ShellEscape: "!", ShellDraft: claudeShellDraft,
-			InterruptKeys: []string{"esc"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
+			// ntm's interrupt key (tmux.InterruptKeyForAgent): Ctrl+C
+			// stops a turn; at an empty prompt it asks for a second one,
+			// which quits (the operator's ruling, nhm-2p6.5.1).
+			InterruptKeys: []string{"ctrl+c"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true},
 			Limit:      regexp.MustCompile(`(?i)usage limit reached|you('|’)ve (hit|reached) your ([a-z0-9-]+ )?limit|(5-hour|session|weekly|opus|sonnet) limit reached|rate_limit_error|api error: 429`),
 			Transcript: Transcript{Dir: ".claude/projects", Format: "claude-jsonl"}, CodeReview: true,
@@ -713,7 +716,8 @@ func builtins() []Adapter {
 			// matcher) or UserPromptSubmit hook sees it (Codex 0.164.0,
 			// nhm-ubi).
 			ShellEscape: "!", ShellDraft: codexShellDraft,
-			InterruptKeys: []string{"esc"}, QuotaPool: "codex", QuotaSource: "codex session logs",
+			// ntm's interrupt key, as for claude (nhm-2p6.5.1).
+			InterruptKeys: []string{"ctrl+c"}, QuotaPool: "codex", QuotaSource: "codex session logs",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true, Trust: true},
 			Limit:      regexp.MustCompile(`(?i)you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit reached|429 too many requests`),
 			Transcript: Transcript{Dir: ".codex/sessions", Format: "codex-jsonl"}, CodeReview: false,
