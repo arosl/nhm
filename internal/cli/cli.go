@@ -135,6 +135,7 @@ Usage:
   nhm --robot-* … --robot-format=json (or --robot-output-format=json)
                          every robot flag answers JSON (auto is JSON)
   nhm quota [--json]     each plan's windows and the live agents per kind
+      [--robot-verbosity=terse|default|debug]
   nhm limits [session] [--once|--loop] [--dry-run] [--json]
                          the agents a usage limit stopped
   nhm palette | board | menu

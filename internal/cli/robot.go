@@ -90,7 +90,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
-	root.formatNoConfig = *caps || *version
+	root.noConfig = *caps || *version
 	if code, done := applyRobotRoot(root, now); done {
 		return code
 	}
@@ -322,7 +322,13 @@ func robotCategory(flagName string) string {
 	}
 }
 
+// robotWrite writes a robot answer. A successful one (code robotOK, as
+// ntm's exit code is 0 only for success) gets the call's verbosity, as
+// ntm's encodeJSON applies it; an error envelope never does.
 func robotWrite(stdout io.Writer, v any, code int) int {
+	if code == robotOK && robotOut.verbosity != robot.VerbosityDefault {
+		v = robot.ApplyVerbosity(v, robotOut.verbosity, robotOut.format)
+	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {

@@ -8,6 +8,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/arosl/nhm/internal/integrations/kinds"
+	"github.com/arosl/nhm/internal/robot"
 )
 
 // ntm's global robot modifiers are root flags, so every robot call takes
@@ -55,10 +56,45 @@ func resolveRobotFormat(flag string, useConfig bool) (string, error) {
 // errRobotTOON refuses --robot-format=toon, which nhm does not write yet.
 var errRobotTOON = errors.New("--robot-format=toon: nhm writes json only")
 
+// --robot-verbosity is resolved as the format is (ntm's
+// resolveRobotVerbosity): the flag, then NHM_ROBOT_VERBOSITY (ntm's
+// NTM_ROBOT_VERBOSITY), then the config's [robot] verbosity, else
+// default (nhm-2p6.2.3).
+
+// robotVerbosityHint is ntm's hint for a verbosity it does not know.
+const robotVerbosityHint = "Use terse, default, or debug"
+
+// resolveRobotVerbosity is the verbosity of a robot call: flag, else
+// NHM_ROBOT_VERBOSITY, else, when useConfig is true, the config's [robot]
+// verbosity, else default. A value ntm does not know is ntm's error.
+func resolveRobotVerbosity(flag string, useConfig bool) (robot.RobotVerbosity, error) {
+	v := flag
+	if v == "" {
+		v = os.Getenv("NHM_ROBOT_VERBOSITY")
+	}
+	if v == "" && useConfig {
+		v = robotConfig().Robot.Verbosity
+	}
+	return robot.ParseRobotVerbosity(v)
+}
+
+// robotOutput is how the robot call that runs writes its successful
+// answer: its format, which debug's _debug names, and its verbosity.
+// applyRobotRoot sets it for the call, and the call's undo restores it,
+// as ntm's process globals hold them for its one call.
+type robotOutput struct {
+	format    string
+	verbosity robot.RobotVerbosity
+}
+
+// robotOut is the running robot call's output.
+var robotOut = robotOutput{format: "auto", verbosity: robot.VerbosityDefault}
+
 // robotConfigFile is the part of nhm's config that robot calls read.
 type robotConfigFile struct {
 	Robot struct {
-		Output struct {
+		Verbosity string `toml:"verbosity"`
+		Output    struct {
 			Format string `toml:"format"`
 		} `toml:"output"`
 	} `toml:"robot"`

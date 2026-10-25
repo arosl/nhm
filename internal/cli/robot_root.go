@@ -73,9 +73,11 @@ type robotOptions struct {
 	// when neither is; applyRobotRoot replaces it with the call's
 	// resolved format, which the call's output names.
 	format string
-	// formatNoConfig leaves the config out of the format: ntm's help,
-	// version and capabilities load no config.
-	formatNoConfig bool
+	// verbosity is --robot-verbosity as given, "" when it is not.
+	verbosity string
+	// noConfig leaves the config out of the format and the verbosity:
+	// ntm's help, version and capabilities load no config.
+	noConfig bool
 }
 
 // newRobotFlagSet is a robot call's flag set, with ntm's root flags and
@@ -101,18 +103,20 @@ func newRobotFlagSet(args []string, stdout io.Writer) (*flag.FlagSet, *robotOpti
 	setFormat := func(value string) error { o.format = value; return nil }
 	fs.Func("robot-format", "", setFormat)
 	fs.Func("robot-output-format", "", setFormat)
+	fs.Func("robot-verbosity", "", func(value string) error { o.verbosity = value; return nil })
 	return fs, o
 }
 
 // applyRobotRoot applies a robot call's root flags (applyRootFlags), then
-// resolves its format, as ntm does before any dispatch: a format ntm does
-// not know is ntm's INVALID_FLAG. done is true when the call ends here,
-// with code.
+// resolves its format and its verbosity, in ntm's order, before any
+// dispatch: a value ntm does not know is ntm's INVALID_FLAG. The
+// verbosity shapes the call's successful answer (robotWrite) until
+// o.undo. done is true when the call ends here, with code.
 func applyRobotRoot(o *robotOptions, now time.Time) (code int, done bool) {
 	if code, done := applyRootFlags(o.rootOptions, now); done {
 		return code, true
 	}
-	format, err := resolveRobotFormat(o.format, !o.formatNoConfig)
+	format, err := resolveRobotFormat(o.format, !o.noConfig)
 	switch {
 	case errors.Is(err, errRobotTOON):
 		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), "use --robot-format=json", "auto", robotError, now), true
@@ -120,6 +124,13 @@ func applyRobotRoot(o *robotOptions, now time.Time) (code int, done bool) {
 		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), robotFormatHint, "auto", robotError, now), true
 	}
 	o.format = format
+	verbosity, err := resolveRobotVerbosity(o.verbosity, !o.noConfig)
+	if err != nil {
+		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), robotVerbosityHint, format, robotError, now), true
+	}
+	prev := robotOut
+	robotOut = robotOutput{format: format, verbosity: verbosity}
+	o.restore = append(o.restore, func() { robotOut = prev })
 	return 0, false
 }
 
