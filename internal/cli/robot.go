@@ -361,7 +361,7 @@ func robotWrite(stdout io.Writer, v any, code int) int {
 
 func robotFail(stdout io.Writer, code, msg, hint, format string, exit int, now time.Time) int {
 	out := robot.NewError(code, msg, hint, format, now)
-	out.Meta = &robot.ResponseMeta{ExitCode: exit}
+	out.Meta = &robot.ResponseMeta{ExitCode: exit, Command: robotCommand}
 	robotWrite(stdout, out, exit)
 	return exit
 }

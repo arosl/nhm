@@ -22,7 +22,12 @@ func TestRobotCall(t *testing.T) {
 		{[]string{"--config", "--robot-status"}, 0, false},
 		{[]string{"status", "--robot-status"}, 0, false},
 		{[]string{"-V", "--robot-status"}, 0, false},
-		{[]string{"--lines", "5", "--robot-tail=s"}, 0, false},
+		// A robot flag's own flags in front of it, as ntm takes them
+		// (nhm-2p6.2.5).
+		{[]string{"--lines", "5", "--robot-tail=s"}, 0, true},
+		{[]string{"--json", "--panes=2", "--robot-send=s"}, 1, true},
+		{[]string{"--lines", "5", "status"}, 0, false},
+		{[]string{"--lines", "5", "--", "--robot-tail=s"}, 0, false},
 		{nil, 0, false},
 	} {
 		lead, rest, ok := robotCall(c.args)

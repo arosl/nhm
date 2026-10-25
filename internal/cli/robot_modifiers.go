@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -78,6 +79,40 @@ func resolveRobotVerbosity(flag string, useConfig bool) (robot.RobotVerbosity, e
 	}
 	return robot.ParseRobotVerbosity(v)
 }
+
+// robotModifiers are ntm's global robot modifiers (isRobotGlobalModifier):
+// flags of every robot call, never its command.
+var robotModifiers = map[string]bool{"robot-format": true, "robot-output-format": true, "robot-verbosity": true,
+	"robot-limit": true, "robot-offset": true}
+
+// robotInvocation is ntm's robotInvocationFromArgs: the robot command a
+// call names, its first --robot-* flag before any "--" that is not a
+// global modifier, else its first one, without "--"; "" for none.
+func robotInvocation(args []string) string {
+	fallback := ""
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		name, _, _ := strings.Cut(a, "=")
+		if !strings.HasPrefix(name, "--robot-") {
+			continue
+		}
+		command := strings.TrimPrefix(name, "--")
+		if fallback == "" {
+			fallback = command
+		}
+		if !robotModifiers[command] {
+			return command
+		}
+	}
+	return fallback
+}
+
+// robotCommand is the running robot call's command (robotInvocation),
+// which its error envelopes name in _meta.command, as ntm's
+// EncodeErrorJSON does (nhm-2p6.2.5). runRobotCall sets it for the call.
+var robotCommand string
 
 // robotOutput is how the robot call that runs writes its successful
 // answer: its format, which debug's _debug names, and its verbosity.

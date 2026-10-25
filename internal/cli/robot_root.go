@@ -15,15 +15,19 @@ import (
 
 // ntm's robot flags are flags of its root, so its root flags work in a
 // robot call too, in front of the robot flag or after it: `ntm --json
-// --robot-status`, `ntm --robot-status --json`. nhm's robot flags have
-// their own grammar (runRobot); robotCall finds a call whose root flags
-// come in front of the first --robot-* flag, and each robot flag set
-// takes the root flags after it (newRobotFlagSet).
+// --robot-status`, `ntm --robot-status --json`. So do the robot flags'
+// own flags: `ntm --lines=50 --robot-tail=S`, `ntm --panes=2
+// --robot-send=S …`. nhm's robot flags have their own grammar
+// (runRobot); robotCall finds a robot call, and each robot flag set takes
+// the root flags and the global modifiers anywhere (newRobotFlagSet).
 
-// robotCall splits a call whose first word after ntm's root flags is a
-// --robot-* flag into those root flags (lead) and the robot call (rest).
-// ok is false for any other call. A root flag that takes a value takes
-// the next word, as pflag does.
+// robotCall splits a robot call into ntm's root flags in front (lead)
+// and the robot call (rest): a call whose first word after the root
+// flags is a --robot-* flag, or another long flag with a --robot-* flag
+// after it (before any "--"), which then starts rest (ntm's robot
+// modifiers are all long flags; -V and -h stay the root's). ok is false
+// for any other call: a verb comes first. A root flag that takes a value
+// takes the next word, as pflag does.
 func robotCall(args []string) (lead, rest []string, ok bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -32,14 +36,32 @@ func robotCall(args []string) (lead, rest []string, ok bool) {
 		}
 		name, _, hasValue := strings.Cut(strings.TrimPrefix(a, "--"), "=")
 		f, isRoot := findRootFlag(name)
-		if !strings.HasPrefix(a, "--") || !isRoot {
-			return nil, nil, false
+		if strings.HasPrefix(a, "--") && isRoot {
+			if f.value && !hasValue {
+				i++ // its value
+			}
+			continue
 		}
-		if f.value && !hasValue {
-			i++ // its value
+		if strings.HasPrefix(a, "--") && a != "--" && robotFlagAhead(args[i:]) {
+			return args[:i], args[i:], true // a robot flag's own flag first
 		}
+		return nil, nil, false
 	}
 	return nil, nil, false
+}
+
+// robotFlagAhead reports whether args hold a --robot-* flag before any
+// "--".
+func robotFlagAhead(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if strings.HasPrefix(a, "--robot-") {
+			return true
+		}
+	}
+	return false
 }
 
 // runRobotCall applies the root flags in front of a robot call, then runs
@@ -48,6 +70,9 @@ func runRobotCall(lead, rest []string, stdout, stderr io.Writer) int {
 	now := time.Now()
 	o := &rootOptions{set: map[string]bool{}, args: append(append([]string{}, lead...), rest...), stdout: stdout, stderr: stderr}
 	defer o.undo()
+	prev := robotCommand
+	robotCommand = robotInvocation(rest)
+	defer func() { robotCommand = prev }()
 	for i := 0; i < len(lead); i++ {
 		name, value, hasValue := strings.Cut(strings.TrimPrefix(lead[i], "--"), "=")
 		f, _ := findRootFlag(name)
