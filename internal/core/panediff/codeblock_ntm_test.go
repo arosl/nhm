@@ -2,13 +2,63 @@
 // internal/codeblock/parser_test.go at commit 9d5ed977; see LICENSE in
 // this directory and PROVENANCE.md. Local changes: the package (nhm's
 // panediff); only the tests of what codeblock_ntm.go keeps (the tests of
-// the file path detection, Extraction and DetectLanguage are left out).
+// Extraction, CodeBlock's String and DetectLanguage are left out); the
+// file path tests as tables without subtests; plus nhm's test of the
+// language filter.
 
 package panediff
 
 import (
 	"testing"
 )
+
+func TestParseFilePathComment(t *testing.T) {
+	for _, c := range []struct {
+		text, wantPath string
+		wantIsNew      bool
+	}{
+		{"```python\n# src/auth.py\ndef auth():\n    pass\n```", "src/auth.py", false},
+		{"```javascript\n// src/utils.js\nfunction util() {}\n```", "src/utils.js", false},
+		{"```html\n<!-- templates/index.html -->\n<html></html>\n```", "templates/index.html", false},
+		{"```go\npackage mypackage\n\nfunc Do() {}\n```", "mypackage/mypackage.go", true},
+		{"```go\npackage main\n\nfunc main() {}\n```", "main.go", true},
+		// No path detectable, isNew defaults to false
+		{"```python\nprint('hello')\n```", "", false},
+	} {
+		blocks := ExtractFromText(c.text)
+		if len(blocks) != 1 || blocks[0].FilePath != c.wantPath || blocks[0].IsNew != c.wantIsNew {
+			t.Errorf("%q = %+v, want %q new=%v", c.text, blocks, c.wantPath, c.wantIsNew)
+		}
+	}
+}
+
+func TestLooksLikeFilePath(t *testing.T) {
+	for _, c := range []struct {
+		input    string
+		expected bool
+	}{
+		{"src/main.go", true}, {"file.py", true}, {"path/to/file.js", true}, {"./relative.txt", true},
+		{"just text", false}, {"", false}, {"single", false}, {"path/", true},
+	} {
+		if got := looksLikeFilePath(c.input); got != c.expected {
+			t.Errorf("looksLikeFilePath(%q) = %v, want %v", c.input, got, c.expected)
+		}
+	}
+}
+
+// The language filter keeps the blocks of its languages, by their
+// canonical names (py is python).
+func TestParseLanguageFilter(t *testing.T) {
+	text := "```py\na = 1\n```\n```go\nx := 1\n```\n```\nplain\n```"
+	blocks := NewParser().WithLanguageFilter([]string{"python"}).Parse(text)
+	if len(blocks) != 1 || blocks[0].Language != "python" || blocks[0].Content != "a = 1" {
+		t.Errorf("python filter = %+v", blocks)
+	}
+	blocks = NewParser().WithLanguageFilter([]string{"text", "golang", "go"}).Parse(text)
+	if len(blocks) != 2 || blocks[0].Language != "go" || blocks[1].Language != "text" {
+		t.Errorf("go and text filter = %+v", blocks)
+	}
+}
 
 func TestParseSimpleBlock(t *testing.T) {
 	text := "Some text\n```python\ndef hello():\n    print('hello')\n```\nMore text"

@@ -429,7 +429,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		defaultHelp(c, args)
 	})
 	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd(), newKillCmd())
-	cmd.AddCommand(newDoctorCmd(), newCopyCmd(), newGrepCmd(), newErrorsCmd(), newGetAllSessionTextCmd(), newSwitchAgentCmd())
+	cmd.AddCommand(newDoctorCmd(), newCopyCmd(), newGrepCmd(), newErrorsCmd(), newGetAllSessionTextCmd(), newSwitchAgentCmd(), newExtractCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}

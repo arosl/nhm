@@ -34,6 +34,7 @@ var verbUsage = map[string]string{
 	"grep":          grepUsage,
 	"errors":        errorsUsage,
 	"switch":        switchUsage,
+	"extract":       extractUsage,
 	"spawn":         spawnUsage,
 	"add":           spawnUsage,
 	"new":           newUsage,

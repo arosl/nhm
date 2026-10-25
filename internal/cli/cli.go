@@ -54,6 +54,8 @@ Usage:
                          every session's panes as a markdown table, as ntm's
   nhm switch <agent-name> [--session S] [--json]
                          focus an agent's pane, as ntm's switch
+  nhm extract <session> [pane] [-l L] [--last] [-n N] [-s N] [-a] [--json]
+                         the code blocks in the panes' output, as ntm's extract
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm admin takeover (--dry-run | --yes)
