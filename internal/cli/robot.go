@@ -53,6 +53,15 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotFlag(args, "--robot-assign") {
 		return runRobotAssign(args, stdout)
 	}
+	if hasRobotFlag(args, "--robot-logs") {
+		return runRobotLogs(args, stdout)
+	}
+	if hasRobotFlag(args, "--robot-pane-address") {
+		return runRobotPaneAddress(args, stdout)
+	}
+	if hasRobotFlag(args, "--robot-watch-bead") {
+		return runRobotWatchBead(args, stdout)
+	}
 	if hasRobotFlag(args, "--robot-agent-names") {
 		return runRobotAgentNames(args, stdout)
 	}
