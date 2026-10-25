@@ -75,6 +75,10 @@ type robotOptions struct {
 	format string
 	// verbosity is --robot-verbosity as given, "" when it is not.
 	verbosity string
+	// robotLimit, limit and offset are --robot-limit, --limit and
+	// --robot-offset or --offset (one value) as given; pagination reads
+	// them for the calls that page.
+	robotLimit, limit, offset int
 	// noConfig leaves the config out of the format and the verbosity:
 	// ntm's help, version and capabilities load no config.
 	noConfig bool
@@ -104,6 +108,10 @@ func newRobotFlagSet(args []string, stdout io.Writer) (*flag.FlagSet, *robotOpti
 	fs.Func("robot-format", "", setFormat)
 	fs.Func("robot-output-format", "", setFormat)
 	fs.Func("robot-verbosity", "", func(value string) error { o.verbosity = value; return nil })
+	fs.IntVar(&o.robotLimit, "robot-limit", 0, "")
+	fs.IntVar(&o.limit, "limit", 0, "")
+	fs.IntVar(&o.offset, "robot-offset", 0, "")
+	fs.IntVar(&o.offset, "offset", 0, "")
 	return fs, o
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os/exec"
@@ -83,7 +84,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	socket := fs.String("socket", "", "")
 	noMail := fs.Bool("no-mail", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		if name := unknownRobotFlag(args); name != "" {
+		if name := unknownRobotFlag(fs, args); name != "" {
 			return robotFail(stdout, "NOT_IMPLEMENTED", fmt.Sprintf("%s is not in this nhm", name),
 				notImplementedHint(name), "auto", robotNotImplemented, now)
 		}
@@ -112,6 +113,13 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if *version {
 		return robotWrite(stdout, robotVersion(*format, now), robotOK)
 	}
+	var page robot.PaginationOptions
+	if *status || *snap {
+		var err error
+		if page, err = root.pagination(fs); err != nil {
+			return robotFail(stdout, robot.ErrCodeInvalidFlag, err.Error(), robotPagingHint, *format, robotError, now)
+		}
+	}
 	if *lines <= 0 {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "--lines must be positive", "", *format, robotError, now)
 	}
@@ -129,9 +137,13 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	}
 	switch {
 	case *status:
-		return robotWrite(stdout, snapshot.Status(m, snapshot.Attention(m), buildInfo(), *format, now), robotOK)
+		out := snapshot.Status(m, snapshot.Attention(m), buildInfo(), *format, now)
+		out.Sessions, out.Pagination, out.AgentHints = robot.PageSessions(out.Sessions, page)
+		return robotWrite(stdout, out, robotOK)
 	case *snap:
-		return robotWrite(stdout, snapshot.Snapshot(m, snapshot.Attention(m), *format, now), robotOK)
+		out := snapshot.Snapshot(m, snapshot.Attention(m), *format, now)
+		out.Sessions, out.Pagination, out.AgentHints = robot.PageSessions(out.Sessions, page)
+		return robotWrite(stdout, out, robotOK)
 	}
 	session := *activity + *tail + *health
 	one, ws, err := selectWorkspace(m, session)
@@ -232,15 +244,13 @@ func robotKinds(types []string) []string {
 	return out
 }
 
-// unknownRobotFlag returns the first --robot-* flag this nhm does not
-// parse.
-func unknownRobotFlag(args []string) string {
-	known := map[string]bool{"--robot-status": true, "--robot-snapshot": true, "--robot-capabilities": true,
-		"--robot-activity": true, "--robot-tail": true, "--robot-health": true, "--robot-format": true, "--robot-version": true,
-		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true, "--robot-spawn": true, "--robot-output-format": true}
+// unknownRobotFlag returns the first --robot-* flag of args that fs, the
+// call's flag set, does not define: one this nhm does not answer. The
+// global modifiers are in every flag set, so they never count.
+func unknownRobotFlag(fs *flag.FlagSet, args []string) string {
 	for _, a := range args {
 		name, _, _ := strings.Cut(a, "=")
-		if strings.HasPrefix(name, "--robot-") && !known[name] {
+		if strings.HasPrefix(name, "--robot-") && fs.Lookup(name[2:]) == nil {
 			return name
 		}
 	}

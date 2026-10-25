@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 
@@ -89,6 +90,32 @@ type robotOutput struct {
 
 // robotOut is the running robot call's output.
 var robotOut = robotOutput{format: "auto", verbosity: robot.VerbosityDefault}
+
+// robotPagingHint is ntm's hint for a negative --robot-limit or offset.
+const robotPagingHint = "Pagination values must be zero or greater"
+
+// pagination is ntm's resolveRobotPagination for a call whose flag set
+// fs parsed: --robot-limit, else --limit when given; --robot-offset or
+// --offset; a negative value is ntm's error. The calls that page call it
+// (status and snapshot), so the others ignore the flags, as in ntm
+// (nhm-2p6.2.4).
+func (o *robotOptions) pagination(fs *flag.FlagSet) (robot.PaginationOptions, error) {
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	opts := robot.PaginationOptions{}
+	if given["robot-limit"] {
+		opts.Limit = o.robotLimit
+	} else if given["limit"] {
+		opts.Limit = o.limit
+	}
+	if given["robot-offset"] || given["offset"] {
+		opts.Offset = o.offset
+	}
+	if opts.Limit < 0 || opts.Offset < 0 {
+		return opts, errors.New("pagination values must be >= 0")
+	}
+	return opts, nil
+}
 
 // robotConfigFile is the part of nhm's config that robot calls read.
 type robotConfigFile struct {

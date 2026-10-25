@@ -116,6 +116,8 @@ Usage:
   nhm --robot-status | --robot-snapshot | --robot-activity=S |
       --robot-tail=S [--lines N] | --robot-capabilities | --robot-version
                          ntm's robot read flags, ntm's types
+  nhm --robot-status | --robot-snapshot [--robot-limit=N] [--robot-offset=N]
+                         a page of the sessions, ntm's pagination
   nhm --robot-send=S --panes=P --type=K (--msg=M | --msg-file=-) --op-id=ID |
       --robot-send-receipt=OP | --robot-ack=S [--op-id=ID] [--timeout=D]
                          ntm's robot dispatch flags, ntm's types
@@ -137,9 +139,9 @@ Usage:
   nhm --robot-agent-names=S [--spawn-names=a,b]
                          a NATO name for each pane, ntm's AgentNamesOutput
   nhm --robot-* … --robot-format=json (or --robot-output-format=json)
+      [--robot-verbosity=terse|default|debug]
                          every robot flag answers JSON (auto is JSON)
   nhm quota [--json]     each plan's windows and the live agents per kind
-      [--robot-verbosity=terse|default|debug]
   nhm limits [session] [--once|--loop] [--dry-run] [--json]
                          the agents a usage limit stopped
   nhm palette | board | menu

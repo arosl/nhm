@@ -96,6 +96,8 @@ type StatusOutput struct {
 	OverallStatus   string                `json:"overall_status,omitempty"`
 	System          SystemInfo            `json:"system"`
 	Sessions        []StatusSessionHeader `json:"sessions"`
+	Pagination      *PaginationInfo       `json:"pagination,omitempty"`
+	AgentHints      *AgentHints           `json:"_agent_hints,omitempty"`
 	Summary         StatusSummary         `json:"summary"`
 	DegradedSources []string              `json:"degraded_sources,omitempty"`
 	AgentMail       *AgentMailSummary     `json:"agent_mail,omitempty"`
@@ -163,6 +165,8 @@ type SnapshotOutput struct {
 	Sessions                 []SnapshotSession        `json:"sessions"`
 	ActiveIncidents          []SnapshotIncident       `json:"active_incidents"`
 	DegradedSources          []string                 `json:"degraded_sources,omitempty"`
+	Pagination               *PaginationInfo          `json:"pagination,omitempty"`
+	AgentHints               *AgentHints              `json:"_agent_hints,omitempty"`
 	Summary                  StatusSummary            `json:"summary"`
 	MailUnread               int                      `json:"mail_unread,omitempty"`
 	Alerts                   []string                 `json:"alerts"`

@@ -1,8 +1,9 @@
 // Derived from ntm (github.com/Dicklesworthstone/ntm)
 // internal/robot/tui_parity.go (PaletteOutput, PaletteCmd, PaletteRecent,
 // PaletteOptions, GetPalette, hasPaletteKey) and internal/robot/types.go
-// (AgentHints, without its paging and action fields, which the palette
-// never sets) at commit 9d5ed977; see LICENSE in this directory and
+// (AgentHints, with its paging fields for --robot-status and
+// --robot-snapshot, nhm-2p6.2.4, and without its action fields, which
+// nhm never sets) at commit 9d5ed977; see LICENSE in this directory and
 // PROVENANCE.md. Local changes: GetPalette takes nhm's palette (its
 // catalog commands, pins and favorites) as PaletteSource, not ntm's
 // config; ntm's kernel command registry and its xf entry have no nhm
@@ -52,9 +53,11 @@ type PaletteRecent struct {
 
 // AgentHints are ntm's notes for an AI reader of a robot answer.
 type AgentHints struct {
-	Summary  string   `json:"summary,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
-	Notes    []string `json:"notes,omitempty"`
+	Summary        string   `json:"summary,omitempty"`
+	NextOffset     *int     `json:"next_offset,omitempty"`
+	PagesRemaining *int     `json:"pages_remaining,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
+	Notes          []string `json:"notes,omitempty"`
 }
 
 // PaletteOptions filter the palette: the recents of one session, the
