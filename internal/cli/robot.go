@@ -250,13 +250,33 @@ func unknownRobotFlag(args []string) string {
 	return ""
 }
 
+// notImplementedHint is the disposition of flagName's own robot row: the
+// row whose form starts with that whole flag, so --robot-ensemble never
+// gets the --robot-ensemble-modes row's hint (nhm-2p6.2.10).
 func notImplementedHint(flagName string) string {
 	for _, r := range compat.Rows() {
-		if strings.HasPrefix(strings.Trim(r.Form, "`"), flagName) && r.Disposition != "implemented" {
+		if robotRowFlag(r.Form) == flagName && r.Disposition != "implemented" {
 			return r.Disposition + ": " + r.Note
 		}
 	}
 	return "nhm --robot-capabilities lists what this nhm answers"
+}
+
+// robotRowFlag is the --robot-* flag that a row's form starts with, cut
+// where its name ends ("=", a space, a backtick), or "" for a row of
+// another form.
+func robotRowFlag(form string) string {
+	form = strings.TrimPrefix(form, "`")
+	if !strings.HasPrefix(form, "--robot-") {
+		return ""
+	}
+	end := strings.IndexFunc(form[2:], func(c rune) bool {
+		return c != '-' && (c < 'a' || c > 'z') && (c < '0' || c > '9')
+	})
+	if end < 0 {
+		return form
+	}
+	return form[:2+end]
 }
 
 // robotCapabilities lists the robot flags of the inventory, the missing
@@ -266,11 +286,10 @@ func robotCapabilities(format string, now time.Time) robot.CapabilitiesOutput {
 		Commands: []robot.RobotCommandInfo{}, Categories: []string{"state", "dispatch", "lifecycle"},
 		NHM: map[string]any{"ntm_commit": NTMCommit, "herdr_protocol": herdr.Protocol}}
 	for _, r := range compat.Rows() {
-		form := strings.Trim(r.Form, "`")
-		if !strings.HasPrefix(form, "--robot-") {
+		flagName := robotRowFlag(r.Form)
+		if flagName == "" {
 			continue
 		}
-		flagName, _, _ := strings.Cut(strings.Fields(form)[0], "=")
 		cmd := robot.RobotCommandInfo{Name: strings.TrimPrefix(flagName, "--"), Flag: flagName, Category: robotCategory(flagName),
 			OutputFormats: []string{"json"}, DefaultOutputFormat: "json", SchemaSource: "ntm@" + NTMCommit[:8]}
 		switch flagName {
