@@ -20,8 +20,7 @@ const attachUsage = `Usage: nhm attach [session] [--socket PATH] [--json]
 
 ntm's attach on herdr: focus the session's workspace (a workspace id or
 label), so that every herdr client shows it. Open herdr to see it. Without
-a session, it runs nhm list (the agents and their sessions), as ntm runs
-its list. Changes no agent, so it runs whoever owns this herdr instance.
+a session, it runs nhm list (the sessions), as ntm runs its list. Changes no agent, so it runs whoever owns this herdr instance.
 `
 
 const zoomUsage = `Usage: nhm zoom <session> <pane> [--socket PATH] [--json]
@@ -68,7 +67,7 @@ func runAttach(args []string, stdout, stderr io.Writer) int {
 		if *asJSON {
 			listArgs = append(listArgs, "--json")
 		}
-		return runList(listArgs, stdout, stderr)
+		return verbRun("list")(listArgs, stdout, stderr)
 	case 1:
 	default:
 		fmt.Fprint(stderr, attachUsage)

@@ -40,6 +40,8 @@ var verbUsage = map[string]string{
 	"new":           newUsage,
 	"status":        statusUsage,
 	"list":          listUsage,
+	"ls":            listUsage,
+	"l":             listUsage,
 	"snapshot":      snapshotUsage,
 	"attention":     attentionUsage,
 	"read":          readUsage,

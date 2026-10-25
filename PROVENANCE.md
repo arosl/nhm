@@ -323,6 +323,7 @@ The same rules apply to code from pt and dcg.
 | `internal/integrations/clipboard/LICENSE` | `LICENSE` | none |
 | `internal/integrations/clipboard/clipboard_ntm.go` | `internal/clipboard/clipboard.go` (in part) | provenance header; copy only (no paste); herdr takes the tmux buffer's place: inside a herdr pane, an OSC 52 write to the pane's terminal, at most 100000 bytes; `New` takes the terminal's opener (nhm-2p6.8.1) |
 | `internal/integrations/clipboard/clipboard_ntm_test.go` | `internal/clipboard/clipboard_test.go`, `clipboard_extra_test.go` (in part) | provenance header; the backend choice tests as one table, herdr where ntm has tmux; the paste and timeout tests left out; plus nhm's herdr backend tests (nhm-2p6.8.1) |
+| `internal/cli/list_ntm.go` | `internal/cli/session.go` (`newListCmd`, `runListPaged`, `buildSessionListResponse`, `paginateSessionList`), `internal/output/schema.go` (`ListResponse`, `SessionListItem`) (in part) | provenance header; a session is a herdr workspace, by its label (else its id): its windows are the tabs, attached is herdr's focus, its folder is the one project folder of its bound agents; its panes are the workspace's (`core/session.Panes`), a pane without an agent being ntm's user pane; tags end the herdr pane label; a server that nhm has not enrolled shows herdr's agents only; "tmux" in the texts reads "herdr"; `--socket` beside ntm's flags; output to cobra's writer (nhm-2p6.3.1) |
 
 ## Files from herdr
 

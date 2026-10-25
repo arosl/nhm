@@ -403,51 +403,15 @@ func mailCell(s *snapshot.MailState, bound bool) string {
 	}
 }
 
-const listUsage = `Usage: nhm list [--project DIR] [--socket PATH] [--json]
-
-Every bound agent across workspaces, with the native session herdr reports
-for it (that is how a "fresh" reviewer is proved), and the bindings whose
-pane holds no agent.
-`
-
-func runList(args []string, stdout, stderr io.Writer) int {
-	return readVerb{name: "list", usage: listUsage,
-		run: func(ctx context.Context, r *reader, m *snapshot.Model, ws *snapshot.Workspace, f readFlags) (any, func(io.Writer), error) {
-			var bound []snapshot.Agent
-			for _, a := range m.Agents {
-				if a.Binding != nil {
-					bound = append(bound, a)
-				}
-			}
-			if bound == nil {
-				bound = []snapshot.Agent{}
-			}
-			res := map[string]any{"agents": bound, "absent_bindings": m.Absent, "displaced_bindings": m.Displaced}
-			return res, func(w io.Writer) {
-				tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(tw, "NAME\tKIND\tSTATE\tSESSION\tSLOT\tPANE\tBINDING\tNATIVE SESSION")
-				for _, a := range bound {
-					session := "-"
-					if a.Session != nil {
-						session = a.Session.Value
-					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s/%d\t%s\n", a.Binding.MailName, a.Kind, a.State,
-						wsLabel(m, a.WorkspaceID), dash(a.Slot), a.PaneID, a.Binding.ID, a.Binding.Generation, session)
-				}
-				for _, b := range m.Absent {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s/%d\t-\n", b.MailName, b.Kind, "absent",
-						wsLabel(m, b.WorkspaceID), dash(b.Slot), dash(b.PaneID), b.ID, b.Generation)
-				}
-				_ = tw.Flush()
-			}, nil
-		}}.main(args, stdout, stderr)
-}
-
 const snapshotUsage = `Usage: nhm snapshot [session] [--project DIR] [--no-mail] [--socket PATH]
 
 The one machine read model, as JSON: workspaces and agents, binding ids
 and generations, states, mail, open operations, uncertain sends, quota,
 pending wakes, and each source's health. A robot bootstraps with one call.
+Each agent (.result.model.agents[]) carries its binding and the native
+session herdr reports for it (agent_session): that is how a "fresh"
+reviewer is proved. The bindings whose pane holds no agent are
+absent_bindings.
 `
 
 func runSnapshot(args []string, stdout, stderr io.Writer) int {

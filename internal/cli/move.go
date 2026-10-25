@@ -255,7 +255,7 @@ func resolveMovable(ctx context.Context, ie *instanceEnv, name string, res *Move
 	}
 	r, err := bindings.Resolve(ctx, bindings.NewStore(ie.db), ie.herdr, bindings.Query{Target: name}, os.Getenv)
 	if errors.Is(err, bindings.ErrNotFound) {
-		return refuse("%s: no such binding (nhm list shows the agents)", name)
+		return refuse("%s: no such binding (nhm status shows the agents)", name)
 	}
 	if err != nil {
 		return bindings.Binding{}, err

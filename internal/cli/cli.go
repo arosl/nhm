@@ -63,8 +63,8 @@ Usage:
   nhm new <session>      create the workspace only
   nhm status [session] [--watch] [--json]
                          one row per agent: slot, name, kind, state, mail
-  nhm list [--project DIR] [--json]
-                         every bound agent across workspaces
+  nhm list [--tag T] [-p NAME] [--limit N] [--offset N] [--json]   (also ls, l)
+                         ntm's list: the sessions, their windows, state and agents
   nhm snapshot [session] the machine read model, as JSON
   nhm attention [session] [--watch] [--json|--jsonl]
                          what needs a decision

@@ -242,19 +242,51 @@ func TestStatusWatchCount(t *testing.T) {
 	}
 }
 
-func TestListVerb(t *testing.T) {
+// nhm's agent list is the snapshot's, since list is ntm's session list
+// (nhm-2p6.3.1): ACFS's rehearsals E02 and E03 read an agent's native
+// session at .result.model.agents[] | select(.binding.mail_name == N) |
+// .agent_session.value.
+func TestSnapshotListsTheAgentsAndTheirSessions(t *testing.T) {
 	s := swarmInstance(t)
-	code, out, _ := run("list", "--json", "--socket", s.SocketPath)
-	agents := envelopeOf(t, out)["result"].(map[string]any)["agents"].([]any)
-	if code != 0 || len(agents) != 1 || agents[0].(map[string]any)["binding"].(map[string]any)["mail_name"] != "IcyKnoll" {
-		t.Fatalf("list = %d %v", code, agents)
+	s.Handle("session.snapshot", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
+			"protocol": 22, "version": "0.9.3", "layouts": []any{}, "tabs": []any{}, "panes": []any{},
+			"workspaces": []any{map[string]any{"workspace_id": "w1", "number": 1, "label": "swarm", "focused": true,
+				"pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1", "agent_status": "idle"}},
+			"agents": []any{map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "t-w1:p1",
+				"agent_status": "idle", "focused": false, "revision": 1, "agent": "claude", "name": "icyknoll",
+				"agent_session": map[string]any{"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "sess-1"}}},
+		}}, nil
+	})
+	code, out, _ := run("snapshot", "--no-mail", "--json", "--socket", s.SocketPath)
+	var env struct {
+		Result struct {
+			Model struct {
+				Agents []struct {
+					Binding *struct {
+						MailName string `json:"mail_name"`
+					} `json:"binding"`
+					Session *struct {
+						Value string `json:"value"`
+					} `json:"agent_session"`
+				} `json:"agents"`
+			} `json:"model"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != 0 {
+		t.Fatalf("snapshot = %d %v\n%s", code, err, out)
+	}
+	agents := env.Result.Model.Agents
+	if len(agents) != 1 || agents[0].Binding == nil || agents[0].Binding.MailName != "IcyKnoll" ||
+		agents[0].Session == nil || agents[0].Session.Value != "sess-1" {
+		t.Fatalf("agents = %s", out)
 	}
 }
 
-// METHOD-MATRIX E04 (nhm-8ns): status and list show the binding's
+// METHOD-MATRIX E04 (nhm-8ns): status and the snapshot show the binding's
 // compacted_at and resumed_at once the hook recorded them, as resolve
 // does, and leave them out before.
-func TestStatusAndListShowCompactionAndResume(t *testing.T) {
+func TestStatusAndSnapshotShowCompactionAndResume(t *testing.T) {
 	s := swarmInstance(t)
 	binding := func(args ...string) map[string]any {
 		t.Helper()
@@ -262,7 +294,11 @@ func TestStatusAndListShowCompactionAndResume(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("%v = %d\n%s%s", args, code, out, errOut)
 		}
-		for _, a := range envelopeOf(t, out)["result"].(map[string]any)["agents"].([]any) {
+		res := envelopeOf(t, out)["result"].(map[string]any)
+		if m, ok := res["model"].(map[string]any); ok {
+			res = m
+		}
+		for _, a := range res["agents"].([]any) {
 			if b, ok := a.(map[string]any)["binding"].(map[string]any); ok && b["mail_name"] == "IcyKnoll" {
 				return b
 			}
@@ -270,7 +306,7 @@ func TestStatusAndListShowCompactionAndResume(t *testing.T) {
 		t.Fatalf("%v: IcyKnoll has no binding\n%s", args, out)
 		return nil
 	}
-	verbs := [][]string{{"status", "swarm", "--no-mail"}, {"list"}}
+	verbs := [][]string{{"status", "swarm", "--no-mail"}, {"snapshot", "--no-mail"}}
 	for _, verb := range verbs {
 		b := binding(verb...)
 		if _, has := b["compacted_at"]; has {
