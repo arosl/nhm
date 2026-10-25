@@ -23,6 +23,19 @@ type fakeHerdr struct {
 	agents    map[string]herdr.AgentInfo
 	promptErr map[string]error
 	prompts   []herdr.AgentPromptParams
+	// screens are the panes' last lines (none: an empty screen); readErr
+	// fails every read.
+	screens map[string]string
+	readErr error
+}
+
+func (f *fakeHerdr) AgentRead(_ context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.readErr != nil {
+		return herdr.PaneRead{}, f.readErr
+	}
+	return herdr.PaneRead{PaneID: p.Target, Source: p.Source, Text: f.screens[p.Target]}, nil
 }
 
 func (f *fakeHerdr) AgentGet(_ context.Context, pane string) (herdr.AgentInfo, error) {
@@ -371,6 +384,41 @@ func TestRefusedStaysPendingAndIsRetried(t *testing.T) {
 	rep, err = Pass(ctx, w.env, nil, TriggerMaintain)
 	if err != nil || rep.Decisions[0].Outcome != send.StatusSubmitted {
 		t.Fatalf("retry = %+v, %v", rep, err)
+	}
+}
+
+// A "!" that a person left in the input box would make the nudge a shell
+// command (nhm-mowp): wake skips the recipient before its claim, with the
+// reason, and the mail stays pending for the next pass.
+func TestADraftInTheInputBoxHoldsTheNudge(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.bind(t, "IcyKnoll", "w1:p1", "codex", herdr.StatusIdle)
+	w.h.screens = map[string]string{"w1:p1": "›  !\n\n  mock-model xhigh · ~/proj\n                Shell mode\n"}
+	rep, err := MailSent(ctx, w.env, []Sent{sent(1, "SageOak", "t1", "IcyKnoll")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := rep.Decisions[0]; d.Action != ActionSkipped || d.OperationID != "" ||
+		!strings.HasPrefix(d.Reason, `shell_draft: the input box shows Codex's shell mode (a "!" draft)`) || w.h.promptsTo("w1:p1") != 0 {
+		t.Fatalf("decision = %+v, %d prompts", d, w.h.promptsTo("w1:p1"))
+	}
+	if got := pendingIDs(t, w, "IcyKnoll"); len(got) != 1 {
+		t.Fatalf("pending = %v", got)
+	}
+	// A box that herdr cannot read holds the nudge too.
+	delete(w.h.screens, "w1:p1")
+	w.h.readErr = errors.New("read failed")
+	w.env.Mail = nil
+	rep, err = Pass(ctx, w.env, nil, TriggerMaintain)
+	if err != nil || rep.Decisions[0].Action != ActionSkipped ||
+		!strings.HasPrefix(rep.Decisions[0].Reason, "screen_unread: nhm could not read the agent's input box (read failed)") {
+		t.Fatalf("an unread box = %+v, %v", rep, err)
+	}
+	w.h.readErr = nil
+	rep, err = Pass(ctx, w.env, nil, TriggerMaintain)
+	if err != nil || rep.Decisions[0].Outcome != send.StatusSubmitted || w.h.promptsTo("w1:p1") != 1 {
+		t.Fatalf("after the draft = %+v, %v", rep, err)
 	}
 }
 

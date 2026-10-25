@@ -35,10 +35,15 @@ type fakeHerdr struct {
 	prompts   []promptCall
 	// onErr runs, under the lock, when a prompt fails.
 	onErr func(pane string)
+	// screens are the panes' last lines (none: an empty screen); a read
+	// of a pane in readErr fails. reads counts the reads.
+	screens map[string]string
+	readErr map[string]error
+	reads   int
 }
 
 func newFake() *fakeHerdr {
-	return &fakeHerdr{agents: map[string]herdr.AgentInfo{}, promptErr: map[string]error{}}
+	return &fakeHerdr{agents: map[string]herdr.AgentInfo{}, promptErr: map[string]error{}, screens: map[string]string{}, readErr: map[string]error{}}
 }
 
 func (f *fakeHerdr) add(pane, kind, name string, st herdr.AgentStatus, seq uint64) {
@@ -85,6 +90,16 @@ func (f *fakeHerdr) AgentPrompt(_ context.Context, p herdr.AgentPromptParams) (h
 	a.CompletionSeq = nil
 	f.agents[p.Target] = a
 	return a, nil
+}
+
+func (f *fakeHerdr) AgentRead(_ context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if err := f.readErr[p.Target]; err != nil {
+		return herdr.PaneRead{}, err
+	}
+	return herdr.PaneRead{PaneID: p.Target, Source: p.Source, Text: f.screens[p.Target]}, nil
 }
 
 func (f *fakeHerdr) promptCount() int {

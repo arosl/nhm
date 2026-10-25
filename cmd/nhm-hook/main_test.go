@@ -126,6 +126,11 @@ func TestMailSentNudgesTheRecipient(t *testing.T) {
 	s.Handle("agent.prompt", func(herdrtest.Request) (any, *herdrtest.Error) {
 		return map[string]any{"type": "agent_prompted", "agent": agent}, nil
 	})
+	// Claude's empty prompt box: no draft (nhm-mowp).
+	s.Handle("agent.read", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "pane_read", "read": map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t2", "workspace_id": "w1",
+			"source": "recent", "format": "text", "revision": 1, "text": "❯ \n", "truncated": false}}, nil
+	})
 	root, err := store.StateRoot()
 	if err != nil {
 		t.Fatal(err)

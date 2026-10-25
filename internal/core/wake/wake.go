@@ -44,6 +44,7 @@ import (
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 )
 
@@ -106,6 +107,7 @@ func DefaultConfig() Config {
 type Herdr interface {
 	AgentGet(ctx context.Context, target string) (herdr.AgentInfo, error)
 	AgentPrompt(ctx context.Context, p herdr.AgentPromptParams) (herdr.AgentInfo, error)
+	send.ScreenReader
 }
 
 // Mail calls an Agent Mail tool; *agentmail.Client has it.
@@ -355,6 +357,12 @@ func Nudge(ctx context.Context, env Env, b bindings.Binding, trigger string) (De
 	if g, reason := send.DeliveryGate(b, &agent); g != send.GateReady {
 		// Never prompt a working, blocked or unknown pane.
 		d.skip(fmt.Sprintf("%s: %s", g, reason))
+		return d, nil
+	}
+	// A "!" that a person left in the input box would make the nudge a
+	// shell command (nhm-mowp).
+	if code, why := send.ShellDraft(ctx, env.Herdr, b.PaneID, kinds.Lookup(b.Kind)); code != "" {
+		d.skip(code + ": " + why)
 		return d, nil
 	}
 	now := env.now()

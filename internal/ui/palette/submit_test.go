@@ -68,6 +68,11 @@ func (f *fakeHerdr) AgentPrompt(_ context.Context, p herdr.AgentPromptParams) (h
 	return a, nil
 }
 
+// AgentRead shows an empty screen: no draft in the input box.
+func (f *fakeHerdr) AgentRead(_ context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error) {
+	return herdr.PaneRead{PaneID: p.Target, Source: p.Source}, nil
+}
+
 func (f *fakeHerdr) sent() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

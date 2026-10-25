@@ -20,6 +20,7 @@ import (
 	"github.com/arosl/nhm/internal/core/templates"
 	"github.com/arosl/nhm/internal/core/wait"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/store"
 	"github.com/arosl/nhm/internal/store/history"
 )
@@ -54,6 +55,7 @@ type Herdr interface {
 	AgentList(ctx context.Context) ([]herdr.AgentInfo, error)
 	AgentGet(ctx context.Context, target string) (herdr.AgentInfo, error)
 	AgentPrompt(ctx context.Context, p herdr.AgentPromptParams) (herdr.AgentInfo, error)
+	ScreenReader
 }
 
 // Bead is the bead a template's bead_* placeholders come from.
@@ -393,6 +395,11 @@ func Send(ctx context.Context, env Env, req Request) (Result, error) {
 			if code, why := expectRefusal(req.Expect, t.Binding.ID, t.Binding.Generation); code != "" {
 				status, reason = StatusRefused, why
 			}
+			if status != StatusRefused {
+				if code, why := ShellDraft(ctx, env.Herdr, t.Binding.PaneID, kinds.Lookup(t.Binding.Kind)); code != "" {
+					status, reason = StatusRefused, why
+				}
+			}
 			res.Targets = append(res.Targets, Receipt{TargetIndex: i, Key: t.Key, BindingID: t.Binding.ID,
 				MailName: t.Binding.MailName, PaneID: t.Binding.PaneID, Kind: t.Binding.Kind, Generation: t.Binding.Generation,
 				Status: status, Result: ReceiptResult{Gate: g, Reason: reason, TaskResult: "unknown"}})
@@ -573,6 +580,11 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 	}
 	if !Admit(g, anyState, false) {
 		return finish(StatusRefused, "gate_"+string(g), reason)
+	}
+	// Last, under the lock: a "!" that a person left in the input box
+	// would make the prompt a shell command (nhm-mowp).
+	if code, why := ShellDraft(ctx, env.Herdr, cur.PaneID, kinds.Lookup(cur.Kind)); code != "" {
+		return finish(StatusRefused, code, why)
 	}
 	var inode uint64
 	if env.Inode != nil {

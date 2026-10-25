@@ -172,6 +172,13 @@ type Adapter struct {
 	// and the keys nil when nhm does not answer the dialog; the name is
 	// "" when the lines show none (recycle's stop, nhm-m7x).
 	ExitDialog func(screen string) (name, answer string, keys []string) `json:"-"`
+	// ShellDraft names a draft in the kind's input box, on the pane's last
+	// lines, that makes text typed after it a shell command: its shell
+	// mode, or an input line that starts with its escape. herdr types a
+	// prompt after what the box holds, so nhm types nothing while one
+	// shows (nhm-mowp). "" when the lines show none; nil for a kind whose
+	// screen the sandbox has not read.
+	ShellDraft func(screen string) string `json:"-"`
 	// Cannot lists what nhm cannot prove for this kind.
 	Cannot []string `json:"cannot,omitempty"`
 	// Builtin is false for a kind from config.
@@ -439,14 +446,19 @@ func (a Adapter) ShellPrefix(text string) string {
 	if esc == "" {
 		return ""
 	}
-	skip := func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
-	text = strings.TrimLeftFunc(text, skip)
+	text = strings.TrimLeftFunc(text, skipBeforeEscape)
 	for _, e := range append([]string{esc}, a.ExtraEscapes...) {
 		if e != "" && strings.HasPrefix(text, e) {
 			return e
 		}
 	}
 	return ""
+}
+
+// skipBeforeEscape is what RunsAsShell skips before an escape: white
+// space, control and format characters.
+func skipBeforeEscape(r rune) bool {
+	return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
 }
 
 // DefaultShellEscape is the shell escape of a kind that names none and is
@@ -568,6 +580,96 @@ func claudeExitDialog(screen string) (string, string, []string) {
 	return name, "", nil
 }
 
+// screenLines are the screen's lines, without the blank ones at its end.
+func screenLines(screen string) []string {
+	return strings.Split(strings.TrimRight(screen, " \t\r\n"), "\n")
+}
+
+// claudeShellDraft names Claude Code's bash mode. Claude Code 2.1.310's
+// prompt box is the lines between the screen's last two rules of ─
+// (U+2500). A "!" typed or pasted first puts it in bash mode: "!" takes
+// the place of the ❯ that starts the box, and the footer below the box is
+// the line "! for shell mode". A "!" after white space stays in the
+// prompt, and Claude does not run it (the sandbox, nhm-mowp). The box's
+// first character decides; without it (a box taller than the lines read),
+// the footer does. Its "?" shortcuts panel names "! for shell mode" among
+// other keys, with ❯ in the box.
+func claudeShellDraft(screen string) string {
+	const name = `Claude Code's bash mode (a "!" draft)`
+	lines := screenLines(screen)
+	var rules []int
+	for i := len(lines) - 1; i >= 0 && len(rules) < 2; i-- {
+		if rule := strings.TrimSpace(lines[i]); rule != "" && strings.Trim(rule, "─") == "" {
+			rules = append(rules, i)
+		}
+	}
+	if len(rules) == 0 {
+		return ""
+	}
+	if len(rules) == 2 && rules[1]+1 < rules[0] {
+		switch first := lines[rules[1]+1]; {
+		case strings.HasPrefix(first, "!"):
+			return name
+		case strings.HasPrefix(first, "❯"):
+			return ""
+		}
+	}
+	for _, l := range lines[rules[0]+1:] {
+		if strings.TrimSpace(l) == "! for shell mode" {
+			return name
+		}
+	}
+	return ""
+}
+
+// codexShellDraft names Codex's shell mode. Codex 0.164.0 says "Shell
+// mode" in its footer, the screen's last line, when its composer starts
+// with "!", typed or pasted, after white space too. The composer is the
+// last line that starts with › (U+203A), or with the "!" in its place
+// (the sandbox, nhm-mowp).
+func codexShellDraft(screen string) string {
+	const name = `Codex's shell mode (a "!" draft)`
+	lines := screenLines(screen)
+	if strings.Contains(lines[len(lines)-1], "Shell mode") {
+		return name
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if rest, ok := strings.CutPrefix(lines[i], "›"); ok || strings.HasPrefix(lines[i], "!") {
+			if strings.HasPrefix(strings.TrimLeftFunc(rest, skipBeforeEscape), "!") {
+				return name
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// piStatusSeparator is the separator of pi's status bar (U+E0B0).
+const piStatusSeparator = rune(0xe0b0)
+
+// piShellDraft names a draft in pi's input box that starts with "!",
+// white space before it aside: pi 0.8.0 shows no shell mode. Its input
+// box is the lines between its status bar, the last line that holds the
+// bar's separator, and its footer, the screen's last line (the sandbox,
+// nhm-mowp). With no bar on the screen, the box is the line above the
+// footer.
+func piShellDraft(screen string) string {
+	lines := screenLines(screen)
+	box := lines[max(0, len(lines)-2) : len(lines)-1]
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.ContainsRune(lines[i], piStatusSeparator) {
+			if box = lines[i+1:]; len(box) > 1 {
+				box = box[:len(box)-1]
+			}
+			break
+		}
+	}
+	if strings.HasPrefix(strings.TrimLeftFunc(strings.Join(box, "\n"), skipBeforeEscape), "!") {
+		return `a "!" draft (pi shows no shell mode)`
+	}
+	return ""
+}
+
 func fromCodex(e Event, bound string, launch bool) Decision {
 	d := codex.Classify(codex.Event{HookEvent: e.HookEvent, Source: e.Source, SessionID: e.SessionID}, bound, launch)
 	return Decision{Verdict: d.Verdict, Reason: d.Reason, Compacted: d.Compacted, Resumed: d.Resumed, TakeSession: d.TakeSession}
@@ -587,7 +689,7 @@ func builtins() []Adapter {
 			NewSession: "/clear", ExitCommand: "/exit",
 			// "!" first is its bash mode: no PreToolUse or UserPromptSubmit
 			// hook sees the command (Claude Code 2.1.310, nhm-ubi).
-			ShellEscape:   "!",
+			ShellEscape: "!", ShellDraft: claudeShellDraft,
 			InterruptKeys: []string{"esc"}, QuotaPool: "claude", QuotaSource: "claude statusLine (agent_quota.sh record-claude)",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true},
 			Limit:      regexp.MustCompile(`(?i)usage limit reached|you('|’)ve (hit|reached) your ([a-z0-9-]+ )?limit|(5-hour|session|weekly|opus|sonnet) limit reached|rate_limit_error|api error: 429`),
@@ -595,7 +697,7 @@ func builtins() []Adapter {
 			GuardSettings: ".claude/settings.json", GuardSupported: true, Continue: fromClaude,
 			Nested:              func(e Event) bool { return claude.Nested(claude.Event{Entrypoint: e.Entrypoint}) },
 			SessionStartContext: true,
-			Cannot:              []string{`a "!" shell command that a person types at its prompt: Claude Code runs it in its bash mode, and no hook sees it, so dcg does not screen it (nhm send refuses one, nhm-ubi)`},
+			Cannot:              []string{`a "!" shell command that a person types at its prompt: Claude Code runs it in its bash mode, and no hook sees it, so dcg does not screen it (nhm send refuses one, nhm-ubi, and types nothing while the prompt box shows bash mode, nhm-mowp)`},
 		},
 		{
 			// --no-daemon runs Codex's hooks in its own pane (F.22, exp.3).
@@ -610,14 +712,14 @@ func builtins() []Adapter {
 			// "!" runs a local shell command: no PreToolUse (dcg's Bash
 			// matcher) or UserPromptSubmit hook sees it (Codex 0.164.0,
 			// nhm-ubi).
-			ShellEscape:   "!",
+			ShellEscape: "!", ShellDraft: codexShellDraft,
 			InterruptKeys: []string{"esc"}, QuotaPool: "codex", QuotaSource: "codex session logs",
 			Hooks:      Hooks{SessionStart: true, Stop: true, PostToolUse: true, Trust: true},
 			Limit:      regexp.MustCompile(`(?i)you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit reached|429 too many requests`),
 			Transcript: Transcript{Dir: ".codex/sessions", Format: "codex-jsonl"}, CodeReview: false,
 			GuardSettings: ".codex/hooks.json", GuardSupported: true, Continue: fromCodex,
 			Cannot: []string{"what Codex does with a SessionStart hook's output",
-				`a "!" shell command that a person types at its prompt: Codex runs it at once, and no hook sees it, so dcg does not screen it (nhm send refuses one, nhm-ubi)`},
+				`a "!" shell command that a person types at its prompt: Codex runs it at once, and no hook sees it, so dcg does not screen it (nhm send refuses one, nhm-ubi, and types nothing while the composer shows shell mode, nhm-mowp)`},
 		},
 		{
 			// agy-real 1.4.6 (nhm-gb0): a pasted "!" goes to the model, but
@@ -630,7 +732,8 @@ func builtins() []Adapter {
 			CodeReview:  true, GuardSettings: ".gemini/config/hooks.json", GuardSupported: true,
 			Cannot: []string{"its usage (no quota source)", "its interrupt key", "a SessionStart hook, so a name is not restored after a compaction",
 				"its model: agy-locked pins it", "its session resume",
-				`a "!" shell command that a person types at its prompt: agy runs it in its bash mode, and no hook was seen to fire, so dcg may not screen it (nhm send refuses a prompt that starts with "!" or holds a control character, nhm-gb0)`},
+				`a "!" shell command that a person types at its prompt: agy runs it in its bash mode, and no hook was seen to fire, so dcg may not screen it (nhm send refuses a prompt that starts with "!" or holds a control character, nhm-gb0)`,
+				`a "!" that a person leaves in its input box: herdr types nhm's next prompt after it, and agy may run that as a shell command; nhm does not read agy's shell mode on the screen (nhm-mowp)`},
 		},
 		{
 			// pi 0.7.1 (pi_agent_rust): --model, --thinking, /exit and /new
@@ -646,13 +749,14 @@ func builtins() []Adapter {
 			Name: "pi", NTMType: "pi", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
 			SettingsFlag: "-e", SettingsArgs: []string{"--extension-policy", "permissive"},
 			GuardEnv:   map[string]string{"PI_EXTENSION_HOOKS_FAIL_CLOSED": "1"},
-			NewSession: "/new", ExitCommand: "/exit", InterruptKeys: []string{"esc"}, ShellEscape: "!",
+			NewSession: "/new", ExitCommand: "/exit", InterruptKeys: []string{"esc"}, ShellEscape: "!", ShellDraft: piShellDraft,
 			QuotaPool: "pi", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"rch: pi's tool_call hook cannot change a command, so nhm's pi guard does not offload builds (rch's cargo shim can)",
 				"the Agent Mail stop hook: Agent Mail installs none for pi",
 				"pi's hub, debug and subagent tools, and a tool that xdev runs (but bash and pi's tools that start no program): they may start programs that dcg cannot screen, so nhm's pi guard blocks them",
 				"a tool from an MCP server or another extension: nhm's pi guard screens bash only, as Claude's guard screens Bash",
-				"a \"!\" shell command that a person types at pi's prompt: pi runs it with no approval question and no hook that can stop it (nhm send refuses one, nhm-ubi)",
+				"a \"!\" shell command that a person types at pi's prompt: pi runs it with no approval question and no hook that can stop it (nhm send refuses one, nhm-ubi, and types nothing while the input box starts with \"!\", nhm-mowp)",
+				"a \"!\" draft in pi's input box when the screen does not show pi 0.8.0's layout (its status bar, the box, a footer line): nhm then reads only the line above the last one, so it can miss a draft of more lines, or refuse a send for a reply line that starts with \"!\" (nhm-mowp)",
 				"the commands of pi's language servers (its lsp tool's code actions): dcg does not screen them",
 				"other extensions: --extension-policy permissive, pi 0.8.0's default, lets every extension that pi loads run commands, and it overrides a stricter policy in pi's settings (only pi's settings file can grant exec to one extension, and nhm does not write it)",
 				"a pi in a pane that nhm did not create (adopted, or spawned before nhm-dyr): the pane lacks PI_EXTENSION_HOOKS_FAIL_CLOSED, so nhm's pi guard does not load and pi does not start (its recycle stops at the start)",
@@ -676,7 +780,8 @@ func builtins() []Adapter {
 			ShellEscape: "!", ExtraEscapes: []string{"$"},
 			InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"its guard settings file", "its usage", "its session resume",
-				`a "!" shell command or a "$" Python line that a person types at its prompt: omp runs it at once, and nhm installs no omp guard (nhm send refuses a prompt that starts with either, or holds a control character, nhm-gb0)`},
+				`a "!" shell command or a "$" Python line that a person types at its prompt: omp runs it at once, and nhm installs no omp guard (nhm send refuses a prompt that starts with either, or holds a control character, nhm-gb0)`,
+				`a "!" or "$" that a person leaves in its input box: herdr types nhm's next prompt after it, and omp may run that as a shell command or Python; nhm does not read omp's input box on the screen (nhm-mowp)`},
 		},
 		{
 			// ntm's robot outputs type opencode as oc (nhm-i3k). ntm's
@@ -689,7 +794,8 @@ func builtins() []Adapter {
 			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, ModelFlag: "--model", ShellEscape: "!",
 			QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
 			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume",
-				`a "!" shell command that a person types at its prompt: opencode runs it in its shell mode, and no plugin hook sees the command (nhm send refuses a prompt that starts with "!" or holds a control character, nhm-gb0)`},
+				`a "!" shell command that a person types at its prompt: opencode runs it in its shell mode, and no plugin hook sees the command (nhm send refuses a prompt that starts with "!" or holds a control character, nhm-gb0)`,
+				`a "!" that a person leaves in its input box: herdr types nhm's next prompt after it, and opencode may run that as a shell command; nhm does not read opencode's shell mode on the screen (nhm-mowp)`},
 		},
 		{
 			// ntm's launch (DefaultAgentTemplates' Grok): --model and

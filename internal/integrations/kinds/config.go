@@ -175,12 +175,15 @@ func (c kindConfig) adapter(name string) (Adapter, error) {
 		case esc == "":
 			return Adapter{}, fmt.Errorf("kinds.%s.shell_escape: empty; a kind from config keeps %q, and an escape it names is "+
 				"one more (only a built-in kind that the sandbox proved has none)", name, DefaultShellEscape)
-		case strings.IndexFunc(esc, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0:
+		case strings.IndexFunc(esc, skipBeforeEscape) >= 0:
 			return Adapter{}, fmt.Errorf("kinds.%s.shell_escape: %q holds white space, a control or a format character", name, esc)
 		case esc != DefaultShellEscape:
 			a.ExtraEscapes = []string{esc}
 		}
 	}
+	// nhm reads the input box of no kind from config (nhm-mowp).
+	a.Cannot = append(slices.Clip(a.Cannot), `a shell escape ("!", or its shell_escape) that a person leaves in its input box: `+
+		`herdr types nhm's next prompt after it, and the agent may run that as a shell command; nhm reads the input box of no kind from config (nhm-mowp)`)
 	a.InterruptKeys = slices.Clone(a.InterruptKeys)
 	for i, k := range a.InterruptKeys {
 		if oldCtrlKey.MatchString(k) {

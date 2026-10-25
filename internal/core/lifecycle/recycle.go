@@ -180,6 +180,14 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	case agent.Agent != "" && agent.Agent != b.Kind:
 		return fail(StageCheck, fmt.Errorf("pane %s holds a %s agent; the binding is %s", b.PaneID, agent.Agent, b.Kind))
 	}
+	// A "!" that a person left in the input box would make the exit
+	// command a shell command: refuse before the claim and the handoff,
+	// and read the box again right before the stop (nhm-mowp).
+	if !exited {
+		if _, why := send.ShellDraft(ctx, env.Herdr, b.PaneID, a); why != "" {
+			return fail(StageCheck, fmt.Errorf("%s was not stopped, and nothing started: %s", b.MailName, why))
+		}
+	}
 	// The agent's beads as they are after the wait, read at most once:
 	// the kickoff's bead_* placeholders (without --bead) and the handoff
 	// take the same bead.
@@ -249,6 +257,11 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	// alias. An agent that already exited needs no stop.
 	res.Stage = StageStop
 	if !exited {
+		// A "!" that a person left in the input box would make the exit
+		// command a shell command (nhm-mowp).
+		if _, why := send.ShellDraft(ctx, env.Herdr, b.PaneID, a); why != "" {
+			return fail(StageStop, fmt.Errorf("%s was not stopped, and nothing started: %s", b.MailName, why))
+		}
 		if _, err := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: b.PaneID, Text: a.ExitCommand}); err != nil &&
 			herdr.ErrorCode(err) != herdr.CodeAgentPromptStalled {
 			return fail(StageStop, fmt.Errorf("typing %s: %w", a.ExitCommand, err))

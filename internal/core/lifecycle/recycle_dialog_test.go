@@ -54,6 +54,10 @@ type dialogPane struct {
 	keys        [][]string
 	reads       int
 	starts      int
+	// screens, when set, are the screens of the first reads in turn (the
+	// last one stays); readErr fails every read.
+	screens []string
+	readErr bool
 }
 
 func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialogPane, *herdr.Client) {
@@ -111,8 +115,15 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 			return nil, &herdrtest.Error{Code: "invalid_request", Message: fmt.Sprintf("read %s %d", q.Source, q.Lines)}
 		}
 		p.reads++
+		if p.readErr {
+			return nil, &herdrtest.Error{Code: "internal", Message: "read failed"}
+		}
+		text := p.screen
+		if len(p.screens) > 0 {
+			text = p.screens[min(p.reads, len(p.screens))-1]
+		}
 		return map[string]any{"type": "pane_read", "read": map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
-			"source": "recent", "format": "text", "revision": 1, "text": p.screen, "truncated": false}}, nil
+			"source": "recent", "format": "text", "revision": 1, "text": text, "truncated": false}}, nil
 	})
 	s.Handle("agent.send_keys", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var q struct{ Keys []string }
@@ -238,6 +249,49 @@ func TestRecycleIgnoresAQuotedExitDialog(t *testing.T) {
 	}
 	if p.reads < 2 || len(p.keys) != 0 || p.starts != 1 || slices.ContainsFunc(res.Warnings, func(s string) bool { return strings.Contains(s, "dialog") }) {
 		t.Fatalf("reads %d, keys %v, starts %d, warnings %q", p.reads, p.keys, p.starts, res.Warnings)
+	}
+}
+
+// A "!" that a person left in Claude's prompt box would make /exit a
+// shell command (nhm-mowp). Recycle reads the box before its claim and
+// again right before the stop: either read fails the recycle, names
+// why, types nothing and starts nothing. So does a read that fails.
+func TestRecycleTypesNoExitCommandIntoAShellDraft(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	draft := rule + "\n! ls\n" + rule + "\n  ! for shell mode\n"
+	why := `the input box shows Claude Code's bash mode (a "!" draft): herdr types nhm's text after what a person left there, ` +
+		"so the agent would run it as a shell command that no guard such as dcg screens; clear the input box in pane w1:p1"
+	for _, c := range []struct {
+		name    string
+		screens []string
+		readErr bool
+		stage   string
+		want    string
+	}{
+		{"before the claim", []string{draft}, false, StageCheck, "IcyKnoll was not stopped, and nothing started: " + why},
+		{"before the stop", []string{"❯ \n", draft}, false, StageStop, "IcyKnoll was not stopped, and nothing started: " + why},
+		{"a read that fails", nil, true, StageCheck, "IcyKnoll was not stopped, and nothing started: nhm could not read the agent's input box"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			b := bindKind(t, w, "claude")
+			p, h := newDialogPane(t, "claude", "", nil)
+			p.screens, p.readErr = c.screens, c.readErr
+			w.env.Herdr = h
+			res, err := Recycle(context.Background(), w.env, RecycleRequest{Target: "IcyKnoll", Prompt: "x"})
+			if err == nil || res.Stage != c.stage || !strings.HasPrefix(res.Error, c.want) {
+				t.Fatalf("recycle = %+v %v", res, err)
+			}
+			if (res.OperationID == "") != (c.stage == StageCheck) {
+				t.Fatalf("operation %q at %s", res.OperationID, res.Stage)
+			}
+			if len(p.prompts) != 0 || len(p.keys) != 0 || p.starts != 0 {
+				t.Fatalf("prompts %v, keys %v, starts %d", p.prompts, p.keys, p.starts)
+			}
+			if nb, _ := w.env.Bindings.Get(context.Background(), b.ID); nb.Generation != b.Generation {
+				t.Fatal("the generation moved")
+			}
+		})
 	}
 }
 

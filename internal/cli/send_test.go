@@ -24,6 +24,8 @@ type sendHerdr struct {
 	status  map[string]string
 	seq     map[string]int
 	prompts []string
+	// screens are the panes' last lines (none: an empty screen).
+	screens map[string]string
 }
 
 func newSendInstance(t *testing.T) (*herdrtest.Server, store.Instance, *sendHerdr) {
@@ -66,6 +68,16 @@ func newSendInstance(t *testing.T) (*herdrtest.Server, store.Instance, *sendHerd
 		h.seq[p.Target]++
 		return map[string]any{"type": "agent_prompted", "agent": agent(p.Target)}, nil
 	})
+	s.Handle("agent.read", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var p struct {
+			Target string `json:"target"`
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return map[string]any{"type": "pane_read", "read": map[string]any{"pane_id": p.Target, "tab_id": "w1:t1", "workspace_id": "w1",
+			"source": "recent", "format": "text", "revision": 1, "text": h.screens[p.Target], "truncated": false}}, nil
+	})
 	return s, inst, h
 }
 
@@ -80,6 +92,33 @@ func (h *sendHerdr) sent() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.prompts...)
+}
+
+// A "!" that a person left in an agent's input box refuses that target
+// (nhm-mowp): the send says why, --robot-send lists it as failed, and
+// the other agent gets its prompt.
+func TestSendRefusesATargetWithAShellDraft(t *testing.T) {
+	s, inst, h := newSendInstance(t)
+	ownNhm(t, inst)
+	rule := strings.Repeat("─", 40)
+	h.screens = map[string]string{"w1:p1": rule + "\n!\n" + rule + "\n  ! for shell mode\n"}
+	why := `the input box shows Claude Code's bash mode (a "!" draft): herdr types nhm's text after what a person left there, ` +
+		"so the agent would run it as a shell command that no guard such as dcg screens; clear the input box in pane w1:p1"
+	code, out, errOut := run("send", "swarm", "hello", "--socket", s.SocketPath)
+	if code != 1 || !strings.Contains(out, "IcyKnoll (0.1): refused (ready): "+why) || !strings.Contains(out, "BlueLake (1.1): submitted") {
+		t.Fatalf("send = %d %s %s", code, out, errOut)
+	}
+	rout, rcode := robotJSON(t, "--robot-send=swarm", "--socket="+s.SocketPath, "--msg=hello again")
+	failed, _ := rout["failed"].([]any)
+	if rcode != 1 || rout["success"] != false || rout["blocked"] != false || len(failed) != 1 {
+		t.Fatalf("robot send = %d %v", rcode, rout)
+	}
+	if first, _ := failed[0].(map[string]any); first["pane"] != "0.1" || first["error"] != "shell_draft: "+why {
+		t.Fatalf("robot send failed = %v", failed)
+	}
+	if got := h.sent(); len(got) != 2 || got[0] != "w1:p2=hello" || got[1] != "w1:p2=hello again" {
+		t.Fatalf("prompts = %v", got)
+	}
 }
 
 func ownNhm(t *testing.T, inst store.Instance) {
