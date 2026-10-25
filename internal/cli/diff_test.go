@@ -49,11 +49,15 @@ func diffServer(t *testing.T) (*herdrtest.Server, func() []int) {
 // nhm diff is ntm's diff on herdr: the two panes' last 1000 lines,
 // without control sequences, compared by ntm's ComputeDiff, in ntm's
 // words (the operator's ruling, nhm-k9d, 2026-10-23).
+// nhm diff is ntm's diff on herdr: the two panes' last 1000 lines,
+// without control sequences, compared by ntm's ComputeDiff, in ntm's
+// words. A pane without a herdr label is titled with ntm's name,
+// <session>__<type>_<n> (IcyKnoll's Claude is swarm__cc_1).
 func TestDiffComparesTwoAgents(t *testing.T) {
 	s, asked := diffServer(t)
 	one, two := stripControl(diffTexts["w1:p1"]), stripControl(diffTexts["w1:p2"])
-	want := panediff.ComputeDiff("IcyKnoll", one, "BlueLake", two)
-	head := fmt.Sprintf("Comparing IcyKnoll vs BlueLake:\n  Lines: 6 vs 6\n  Similarity: %.1f%%\n", want.Similarity*100)
+	want := panediff.ComputeDiff("swarm__cc_1", one, "swarm__cod_1", two)
+	head := fmt.Sprintf("Comparing swarm__cc_1 vs swarm__cod_1:\n  Lines: 6 vs 6\n  Similarity: %.1f%%\n", want.Similarity*100)
 	code, out, errOut := run("diff", "swarm", "IcyKnoll", "BlueLake", "--socket", s.SocketPath)
 	if code != 0 || out != head {
 		t.Fatalf("diff = %d %q %q, want %q", code, out, errOut, head)
@@ -61,43 +65,75 @@ func TestDiffComparesTwoAgents(t *testing.T) {
 	if got := asked(); fmt.Sprint(got) != "[1000 1000]" {
 		t.Errorf("lines read = %v", got)
 	}
-	// -u adds the patch text; a kind and a pane id name panes too, and a
-	// bound pane shows its agent's name.
-	code, out, _ = run("diff", "swarm", "cc", "w1:p2", "-u", "--socket", s.SocketPath)
-	if code != 0 || out != head+"\nDiff:\n"+want.UnifiedDiff+"\n" {
+	// -u adds the patch text.
+	if code, out, _ := run("diff", "swarm", "cc_1", "cod_1", "-u", "--socket", s.SocketPath); code != 0 || out != head+"\nDiff:\n"+want.UnifiedDiff+"\n" {
 		t.Fatalf("diff -u = %d %q", code, out)
 	}
-	// --code-only compares the fenced blocks, as "// <language>" and
-	// the content.
+	// --code-only compares the fenced blocks, as "// <language>" and the
+	// content; --json is ntm's bare DiffResult.
 	code, out, _ = run("diff", "swarm", "IcyKnoll", "BlueLake", "--code-only", "--json", "--socket", s.SocketPath)
-	res := envelopeOf(t, out)["result"].(map[string]any)
-	cw := panediff.ComputeDiff("IcyKnoll", "// go\nfmt.Println(1)\n\n", "BlueLake", "// golang\nfmt.Println(2)\n\n")
-	if code != 0 || res["pane1"] != "IcyKnoll" || res["pane2"] != "BlueLake" || res["lines1"] != float64(cw.LineCount1) ||
-		res["similarity"] != cw.Similarity || res["diff"] != cw.UnifiedDiff {
-		t.Fatalf("diff --code-only --json = %d %s, want %+v", code, out, cw)
-	}
-	// Without a session: the calling pane's workspace.
-	t.Setenv("HERDR_WORKSPACE_ID", "w1")
-	if code, out, _ := run("diff", "IcyKnoll", "BlueLake", "--socket", s.SocketPath); code != 0 || out != head {
-		t.Fatalf("diff without a session = %d %q", code, out)
+	cw := panediff.ComputeDiff("swarm__cc_1", "// go\nfmt.Println(1)\n\n", "swarm__cod_1", "// golang\nfmt.Println(2)\n\n")
+	wantJSON, _ := json.MarshalIndent(cw, "", "  ")
+	if code != 0 || out != string(wantJSON)+"\n" {
+		t.Fatalf("diff --code-only --json = %d %s, want %s", code, out, wantJSON)
 	}
 	asked()
+}
+
+// ntm's pane forms (index, title, the end of the title, pane id) on
+// herdr, beside nhm's slot, name and kind; ntm's session resolution.
+func TestDiffNTMPaneForms(t *testing.T) {
+	s, asked := diffServer(t)
+	head := "Comparing swarm__cc_1 vs swarm__cod_1:\n"
+	for _, pair := range [][2]string{
+		{"cc_1", "cod_1"}, {"swarm__cc_1", "swarm__cod_1"}, {"1", "w1:p2"}, {"0.1", "1.1"}, {"cc", "codex"}, {"icyknoll", "bluelake"},
+	} {
+		code, out, errOut := run("diff", "swarm", pair[0], pair[1], "--socket", s.SocketPath)
+		if code != 0 || !strings.HasPrefix(out, head) {
+			t.Errorf("diff %v = %d %q %q", pair, code, out, errOut)
+		}
+	}
+	// Without a session: the only one; a unique prefix names it.
+	for _, args := range [][]string{{"cc_1", "cod_1"}, {"sw", "cc_1", "cod_1"}} {
+		if code, out, _ := run(append(append([]string{"diff"}, args...), "--socket", s.SocketPath)...); code != 0 || !strings.HasPrefix(out, head) {
+			t.Errorf("diff %v = %d %q", args, code, out)
+		}
+	}
+	asked()
+}
+
+// Every error is the root's, as in ntm: "Error: <msg>", or the robot
+// error envelope under --json; exit 1.
+func TestDiffNTMErrors(t *testing.T) {
+	s, asked := diffServer(t)
 	for _, c := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"swarm", "1", "2"}, "tmux pane indexes"},
-		{[]string{"swarm", "IcyKnoll", "NoSuchAgent"}, "NoSuchAgent"},
-		{[]string{"nosuch", "IcyKnoll", "BlueLake"}, "no such workspace"},
-		{[]string{"IcyKnoll"}, "Usage: nhm diff"},
-		{[]string{"a", "b", "c", "d"}, "Usage: nhm diff"},
+		{[]string{"swarm", "IcyKnoll", "NoSuchAgent"}, "Error: pane 'NoSuchAgent' not found in session 'swarm'\n"},
+		{[]string{"swarm", "%3", "cc_1"}, "Error: pane '%3' not found in session 'swarm'\n"},
+		{[]string{"IcyKnoll"}, "Error: accepts between 2 and 3 arg(s), received 1\n"},
+		{[]string{"a", "b", "c", "d"}, "Error: accepts between 2 and 3 arg(s), received 4\n"},
 	} {
-		code, _, errOut := run(append(append([]string{"diff"}, c.args...), "--socket", s.SocketPath)...)
-		if code != exitRefused || !strings.Contains(errOut, c.want) {
-			t.Errorf("diff %v = %d %q, want %q", c.args, code, errOut, c.want)
+		code, out, errOut := run(append(append([]string{"diff"}, c.args...), "--socket", s.SocketPath)...)
+		if code != 1 || out != "" || errOut != c.want {
+			t.Errorf("diff %v = %d %q %q, want %q", c.args, code, out, errOut, c.want)
 		}
 	}
-	if got := asked(); len(got) > 1 {
+	if code, _, errOut := run("diff", "nosuch", "a", "b", "--socket", s.SocketPath); code != 1 || !strings.HasPrefix(errOut, `Error: session "nosuch" not found`) {
+		t.Errorf("unknown session = %d %q", code, errOut)
+	}
+	code, out, _ := run("diff", "swarm", "IcyKnoll", "NoSuchAgent", "--socket", s.SocketPath, "--json")
+	if code != 1 || !strings.HasPrefix(out, `{"success":false,`) || !strings.Contains(out, "pane 'NoSuchAgent' not found") || strings.Count(out, "\n") != 1 {
+		t.Errorf("--json error = %d %q", code, out)
+	}
+	if got := asked(); len(got) > 2 {
 		t.Errorf("refused diffs read panes: %v", got)
+	}
+	s.Handle("pane.read", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return nil, &herdrtest.Error{Code: "pane_not_found", Message: "no such pane"}
+	})
+	if code, _, errOut := run("diff", "swarm", "cc_1", "cod_1", "--socket", s.SocketPath); code != 1 || !strings.HasPrefix(errOut, "Error: capturing pane 1: ") {
+		t.Errorf("failed read = %d %q", code, errOut)
 	}
 }

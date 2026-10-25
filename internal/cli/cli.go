@@ -43,7 +43,7 @@ Usage:
   nhm view [session] [--json]   (also tile, v)
                          ntm's view: the zoom off in every tab of a session, then focus it
   nhm diff [session] <pane1> <pane2> [-u] [--code-only] [--json]
-                         compare two agents' output, as ntm's diff
+                         compare two panes' output, as ntm's diff
   nhm copy [session[:pane]] [-l N] [-p RE] [--code] [--all|--cc|--cod|--gmi|--agy] [-o FILE] [--json]
                          a pane's recent output to the clipboard, as ntm's copy (also cp, yank)
   nhm grep <pattern> [session] [-i] [-v] [-C N] [-A N] [-B N] [-n N] [-l] [--all] [--cc|--cod|--gmi|--agy] [--json]

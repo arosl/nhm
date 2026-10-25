@@ -280,7 +280,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "recycle", run: runRecycle},
 		{name: "reap", run: runReap},
 		{name: "attach", run: runAttach},
-		{name: "diff", run: runDiff},
 		{name: "new", run: runNew},
 		{name: "admin", run: runAdmin},
 		{name: "status", run: runStatus},
@@ -423,7 +422,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		defaultHelp(c, args)
 	})
 	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd(), newKillCmd(), newWaitCmd())
-	cmd.AddCommand(newDoctorCmd(), newCopyCmd(), newGrepCmd(), newErrorsCmd(), newGetAllSessionTextCmd(), newSwitchAgentCmd(), newExtractCmd(), newListCmd(), newSaveCmd(), newZoomCmd(), newViewCmd())
+	cmd.AddCommand(newDoctorCmd(), newCopyCmd(), newGrepCmd(), newErrorsCmd(), newGetAllSessionTextCmd(), newSwitchAgentCmd(), newExtractCmd(), newListCmd(), newSaveCmd(), newZoomCmd(), newViewCmd(), newDiffCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}
