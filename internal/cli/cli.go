@@ -141,6 +141,8 @@ Usage:
                          ntm's robot spawn, ntm's SpawnOutput
   nhm --robot-agent-names=S [--spawn-names=a,b]
                          a NATO name for each pane, ntm's AgentNamesOutput
+  nhm --robot-dialogs=S [--panes=P]
+                         each agent pane's dialog and its options, ntm's DialogsOutput
   nhm --robot-logs=S [--logs-panes=1,2] [--logs-limit=N] | --robot-pane-address=S
                          each agent's last lines, ntm's LogsOutput; each pane's addresses
   nhm --robot-watch-bead=S --bead=ID [--panes=P] [--lines=N] [--interval=D]
