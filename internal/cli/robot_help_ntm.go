@@ -93,7 +93,7 @@ API Design Principles:
 1. Global commands: bool flags (--robot-status, --robot-snapshot)
 2. Session-scoped: =SESSION syntax (--robot-send=myproj, --robot-tail=myproj)
 3. Modifiers: unprefixed global flags (--limit, --offset, and shared flags like --lines and --type)
-4. Output: JSON (--robot-format=json; auto is JSON)
+4. Output: JSON by default, TOON for token-efficient (--robot-format=toon)
 `)
 	for _, s := range robotHelpSections {
 		b.WriteString(s.title + ":\n" + strings.Repeat("-", len(s.title)+1) + "\n")
@@ -119,6 +119,7 @@ API Design Principles:
 Output Formats:
 ---------------
 --robot-format=json     Full JSON (default; auto is JSON)
+--robot-format=toon     TOON format (toon_rust's tru, else a pure Go encoder)
 --robot-verbosity=V     terse (short keys), default, or debug (adds _debug)
 
 Common Modifiers:

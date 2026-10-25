@@ -122,7 +122,7 @@ Command failures and their hints are inside the answer.`,
 				Body: `1. Global commands use bool flags: --robot-status, --robot-snapshot
 2. Session-scoped commands use =SESSION syntax: --robot-send=myproj
 3. Modifiers use unprefixed flags: --lines, --panes, --type, --limit, --offset
-4. Output is JSON (auto and json); --robot-verbosity=terse shortens its keys`,
+4. Output is JSON by default, with TOON format for token efficiency`,
 			},
 			{
 				Heading: "First Steps",

@@ -32,8 +32,8 @@ const robotFormatHint = "Use json, toon, or auto"
 // resolveRobotFormat is the format of a robot call: flag (the flag's
 // value, "" when not given), else the environment, else, when useConfig
 // is true, the config's [robot.output] format, else auto. auto and json
-// write JSON, as ntm's auto does; toon is refused until nhm writes TOON
-// (nhm-2p6.2.11). A value ntm does not know is ntm's error.
+// write JSON, as ntm's auto does; toon writes TOON (robotWrite,
+// nhm-2p6.2.11). A value ntm does not know is ntm's error.
 func resolveRobotFormat(flag string, useConfig bool) (string, error) {
 	v := flag
 	for _, name := range robotFormatEnv {
@@ -47,16 +47,11 @@ func resolveRobotFormat(flag string, useConfig bool) (string, error) {
 	switch v {
 	case "", "auto":
 		return "auto", nil
-	case "json":
-		return "json", nil
-	case "toon":
-		return "", errRobotTOON
+	case "json", "toon":
+		return v, nil
 	}
 	return "", fmt.Errorf("invalid robot format %q: must be json, toon, or auto", v)
 }
-
-// errRobotTOON refuses --robot-format=toon, which nhm does not write yet.
-var errRobotTOON = errors.New("--robot-format=toon: nhm writes json only")
 
 // --robot-verbosity is resolved as the format is (ntm's
 // resolveRobotVerbosity): the flag, then NHM_ROBOT_VERBOSITY (ntm's

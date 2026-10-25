@@ -295,7 +295,7 @@ func TestRobotAssignRefusals(t *testing.T) {
 			"Ensure the target session has a resolvable project directory"},
 		{[]string{"--robot-assign=swarm", "--strategy=fastest"}, robot.ErrCodeInvalidFlag, "invalid strategy 'fastest'",
 			"Valid strategies: simple, balanced, speed, quality, dependency"},
-		{[]string{"--robot-assign=swarm", "--robot-format=toon"}, robot.ErrCodeInvalidFlag, "json only", "use --robot-format=json"},
+		{[]string{"--robot-assign=swarm", "--robot-format=xml"}, robot.ErrCodeInvalidFlag, `invalid robot format "xml"`, "Use json, toon, or auto"},
 	} {
 		out, code := robotJSON(t, append(tc.args, sock)...)
 		if code != robotError || out["success"] != false || out["error_code"] != tc.code || !strings.Contains(out["error"].(string), tc.says) ||

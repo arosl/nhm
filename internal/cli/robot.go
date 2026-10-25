@@ -411,11 +411,22 @@ func robotCategory(flagName string) string {
 // robotWrite writes a robot answer. A successful one (code robotOK, as
 // ntm's exit code is 0 only for success) gets the call's verbosity, as
 // ntm's encodeJSON applies it; an error envelope never does. A successful
-// answer is indented, as ntm's JSONRenderer writes it; an error envelope
-// is one line, as ntm's encodeRobotFailureJSON writes it.
+// answer is indented, as ntm's JSONRenderer writes it, or TOON in the
+// toon format, as ntm's TOONRenderer writes it (nhm-2p6.2.11); an error
+// envelope is one line of JSON, as ntm's encodeRobotFailureJSON writes it.
 func robotWrite(stdout io.Writer, v any, code int) int {
 	if code == robotOK && robotOut.verbosity != robot.VerbosityDefault {
 		v = robot.ApplyVerbosity(v, robotOut.verbosity, robotOut.format)
+	}
+	if code == robotOK && robotOut.format == "toon" {
+		out, err := robot.RenderTOON(v)
+		if err != nil {
+			return robotFail(stdout, robot.ErrCodeInternalError, "toon: "+err.Error(), "use --robot-format=json", "toon", robotError, time.Now())
+		}
+		if _, err := io.WriteString(stdout, out); err != nil {
+			return robotError
+		}
+		return code
 	}
 	enc := json.NewEncoder(stdout)
 	if code == robotOK {

@@ -70,7 +70,7 @@ func TestRobotFormatResolutionOrder(t *testing.T) {
 
 // --robot-output-format is --robot-format's alias. A format from the flag
 // or the environment that ntm does not know is ntm's INVALID_FLAG, with
-// ntm's hint; toon is refused until nhm writes TOON (nhm-2p6.2.11).
+// ntm's hint (toon: robot_toon_test.go).
 func TestRobotFormatAliasAndRefusals(t *testing.T) {
 	clearRobotFormatEnv(t)
 	t.Setenv("HERDR_SOCKET_PATH", "")
@@ -85,8 +85,6 @@ func TestRobotFormatAliasAndRefusals(t *testing.T) {
 		{[]string{"--robot-version", "--robot-format=xml"}, "", `invalid robot format "xml": must be json, toon, or auto`, "Use json, toon, or auto"},
 		{[]string{"--robot-capabilities", "--robot-output-format=xml"}, "", `invalid robot format "xml"`, "Use json, toon, or auto"},
 		{[]string{"--robot-version"}, "xml", `invalid robot format "xml"`, "Use json, toon, or auto"},
-		{[]string{"--robot-version", "--robot-output-format=toon"}, "", "nhm writes json only", "use --robot-format=json"},
-		{[]string{"--robot-version"}, "toon", "nhm writes json only", "use --robot-format=json"},
 	} {
 		t.Setenv("NHM_ROBOT_FORMAT", c.env)
 		env, code := robotRun(t, c.args...)

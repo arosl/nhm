@@ -523,9 +523,9 @@ func TestRobotCapabilities(t *testing.T) {
 }
 
 func TestRobotFormat(t *testing.T) {
-	env, code := robotRun(t, "--robot-capabilities", "--robot-format=toon")
+	env, code := robotRun(t, "--robot-capabilities", "--robot-format=xml")
 	if code != 1 || env.ErrorCode != "INVALID_FLAG" {
-		t.Fatalf("toon = %d %+v", code, env)
+		t.Fatalf("xml = %d %+v", code, env)
 	}
 	// The hint is the inventory row's disposition: --robot-route's names
 	// its bead (nhm-syq).

@@ -101,8 +101,8 @@ func TestRobotPalette(t *testing.T) {
 	if p := decodePalette(t, out); code != 0 || len(p.Commands) != 1 || p.Commands[0].Key != "git_commit" {
 		t.Fatalf("--search = %d %+v", code, p)
 	}
-	if code, out, _ := run("--robot-palette", "--robot-format=toon"); code != robotError || !strings.Contains(out, "INVALID_FLAG") {
-		t.Fatalf("toon = %d %q", code, out)
+	if code, out, _ := run("--robot-palette", "--robot-format=xml"); code != robotError || !strings.Contains(out, "INVALID_FLAG") {
+		t.Fatalf("xml = %d %q", code, out)
 	}
 }
 

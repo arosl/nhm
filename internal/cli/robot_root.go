@@ -150,10 +150,7 @@ func applyRobotRoot(o *robotOptions, now time.Time) (code int, done bool) {
 		return code, true
 	}
 	format, err := resolveRobotFormat(o.format, !o.noConfig)
-	switch {
-	case errors.Is(err, errRobotTOON):
-		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), "use --robot-format=json", "auto", robotError, now), true
-	case err != nil:
+	if err != nil {
 		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), robotFormatHint, "auto", robotError, now), true
 	}
 	o.format = format
