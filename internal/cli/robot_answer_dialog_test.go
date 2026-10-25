@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
 	"github.com/arosl/nhm/internal/integrations/kinds/dialogs"
 	"github.com/arosl/nhm/internal/robot"
@@ -56,6 +59,13 @@ func answerServer(t *testing.T, screens map[string]string, onKey func(pane, key,
 		}
 		return map[string]any{"type": "ok"}, nil
 	})
+	// The keys go only while nhm owns the instance.
+	ie, err := openInstance(s.SocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownNhm(t, ie.inst)
+	_ = ie.db.Close()
 	return s, d
 }
 
@@ -198,6 +208,26 @@ func TestRobotAnswerDialogNeedsOnePane(t *testing.T) {
 	}
 	if k := d.sent(); len(k) != 0 {
 		t.Fatalf("keys sent: %v", k)
+	}
+}
+
+// While ACFS's Bash owns the instance, nhm types no key: NOT_OWNER.
+func TestRobotAnswerDialogNeedsNhmOwner(t *testing.T) {
+	s, d := answerServer(t, map[string]string{"w1:p1": answerTrust}, clearOnEnter)
+	ie, err := openInstance(s.SocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.SwitchOwner(context.Background(), ie.inst.Dir, core.OwnerBash, time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = ie.db.Close()
+	code, out, _ := run("--robot-answer-dialog=swarm", "--panes=0.1", "--choice=decline", "--socket", s.SocketPath)
+	if got := answerOut(t, out); code != 1 || got.ErrorCode != robot.ErrCodeNotOwner || len(got.KeysSent) != 0 || got.Before.Class != dialogs.TrustPrompt {
+		t.Errorf("not owner = %d %s", code, out)
+	}
+	if k := d.sent(); len(k) != 0 {
+		t.Errorf("keys sent: %v", k)
 	}
 }
 

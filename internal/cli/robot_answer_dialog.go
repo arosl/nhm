@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/core"
 	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/integrations/kinds/dialogs"
@@ -125,13 +126,27 @@ func runRobotAnswerDialog(args []string, stdout io.Writer) int {
 		}
 		return nil
 	}
-	sent, err := send.Keys(ctx, send.KeysEnv{Herdr: ie.herdr, Bindings: bindings.NewStore(ie.db), InstanceDir: ie.inst.Dir},
-		send.KeysRequest{PaneID: p.PaneID, Binding: p.Binding, Keys: herdrKeys, Gap: answerKeyGap, Before: verify})
+	// The keys act on an agent, so they go only while nhm owns the
+	// instance, as every nhm mutation does.
+	sent := 0
+	lctx, lcancel := context.WithTimeout(ctx, lockWait)
+	err = core.WithOwnerShared(lctx, ie.inst.Dir, func(o core.Owner) error {
+		if err := core.RequireOwner(o, core.OwnerNhm); err != nil {
+			return err
+		}
+		var kerr error
+		sent, kerr = send.Keys(ctx, send.KeysEnv{Herdr: ie.herdr, Bindings: bindings.NewStore(ie.db), InstanceDir: ie.inst.Dir},
+			send.KeysRequest{PaneID: p.PaneID, Binding: p.Binding, Keys: herdrKeys, Gap: answerKeyGap, Before: verify})
+		return kerr
+	})
+	lcancel()
 	out.KeysSent = keys[:sent]
 	if err != nil {
 		var stop *answerStop
 		var ke *send.KeyError
 		switch {
+		case errors.Is(err, core.ErrNotOwner):
+			return fail(robot.ErrCodeNotOwner, err.Error(), "")
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			return fail(robot.ErrCodeTimeout, err.Error(), "Retry after the cancellation clears")
 		case errors.As(err, &stop):
