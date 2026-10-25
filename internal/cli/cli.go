@@ -44,6 +44,8 @@ Usage:
                          take the zoom off in every tab of a workspace, then focus it
   nhm diff [session] <pane1> <pane2> [-u] [--code-only] [--json]
                          compare two agents' output, as ntm's diff
+  nhm copy [session[:pane]] [-l N] [-p RE] [--code] [--all|--cc|--cod|--gmi|--agy] -o FILE [--json]
+                         a pane's recent output to a file, as ntm's copy (also cp, yank)
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm admin takeover (--dry-run | --yes)
