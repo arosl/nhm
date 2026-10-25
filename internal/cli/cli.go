@@ -58,6 +58,8 @@ Usage:
                          the code blocks in the panes' output, as ntm's extract
   nhm save [session] [-o DIR] [-l N] [--all|--cc|--cod|--gmi|--agy]   (also dump, export)
                          each pane's recent output to a file, as ntm's save
+  nhm summary [session] [--since D] [--format F] [--all] [--recent] [--regenerate]
+                         what each agent did, from its output and git, as ntm's summary
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm admin takeover (--dry-run | --yes)

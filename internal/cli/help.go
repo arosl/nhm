@@ -39,6 +39,7 @@ var verbUsage = map[string]string{
 	"save":          saveUsage,
 	"dump":          saveUsage,
 	"export":        saveUsage,
+	"summary":       summaryUsage,
 	"spawn":         spawnUsage,
 	"add":           spawnUsage,
 	"new":           newUsage,
