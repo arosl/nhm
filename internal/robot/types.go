@@ -3,9 +3,10 @@
 // internal/robot/registry.go at commit 9d5ed977; see LICENSE in this
 // directory and PROVENANCE.md. Local changes: only the types of the read
 // surfaces nhm serves (--robot-status, --robot-snapshot, --robot-activity,
-// --robot-tail, --robot-capabilities), each with ntm's JSON keys and with
-// the optional fields nhm cannot fill left out; NHM fields hold nhm's
-// extras under "_nhm"; NewResponse takes the output format.
+// --robot-tail, --robot-capabilities, --robot-version), each with ntm's
+// JSON keys and with the optional fields nhm cannot fill left out; NHM
+// fields hold nhm's extras under "_nhm"; NewResponse takes the output
+// format.
 
 // Package robot holds ntm's robot output types, which nhm's --robot-*
 // flags return (plan-v8 2.12). The JSON keys and the meaning of every
@@ -77,6 +78,13 @@ type SystemInfo struct {
 	OS        string `json:"os"`
 	Arch      string `json:"arch"`
 	TmuxOK    bool   `json:"tmux_available"`
+}
+
+// VersionOutput is --robot-version: ntm's (internal/robot/robot.go).
+type VersionOutput struct {
+	RobotResponse
+	System SystemInfo `json:"system"`
+	NHM    any        `json:"_nhm,omitempty"`
 }
 
 // StatusOutput is --robot-status.

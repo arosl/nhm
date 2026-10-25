@@ -740,6 +740,8 @@ func watchWait(last time.Duration, delivered bool, lived time.Duration) time.Dur
 	return min(max(2*last, watchBackoffMin), watchBackoffMax)
 }
 
+// buildInfo is the build of --robot-status and --robot-version: as ntm's,
+// build_date is the build's Date (nhm-2p6.2.1).
 func buildInfo() snapshot.BuildInfo {
-	return snapshot.BuildInfo{Version: Version, Commit: Commit}
+	return snapshot.BuildInfo{Version: Version, Commit: Commit, BuildDate: Date}
 }

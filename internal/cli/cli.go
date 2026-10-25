@@ -102,7 +102,7 @@ Usage:
   nhm compatibility status [--json]
                          the ntm forms implemented, deferred, waived
   nhm --robot-status | --robot-snapshot | --robot-activity=S |
-      --robot-tail=S [--lines N] | --robot-capabilities
+      --robot-tail=S [--lines N] | --robot-capabilities | --robot-version
                          ntm's robot read flags, ntm's types
   nhm --robot-send=S --panes=P --type=K (--msg=M | --msg-file=-) --op-id=ID |
       --robot-send-receipt=OP | --robot-ack=S [--op-id=ID] [--timeout=D]

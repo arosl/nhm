@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -70,6 +71,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	status := fs.Bool("robot-status", false, "")
 	snap := fs.Bool("robot-snapshot", false, "")
 	caps := fs.Bool("robot-capabilities", false, "")
+	version := fs.Bool("robot-version", false, "")
 	activity := fs.String("robot-activity", "", "")
 	tail := fs.String("robot-tail", "", "")
 	health := fs.String("robot-health", "", "")
@@ -99,7 +101,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 			"use --robot-format=json", "json", robotError, now)
 	}
 	chosen := 0
-	for _, b := range []bool{*status, *snap, *caps, *activity != "", *tail != "", *health != ""} {
+	for _, b := range []bool{*status, *snap, *caps, *version, *activity != "", *tail != "", *health != ""} {
 		if b {
 			chosen++
 		}
@@ -109,6 +111,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	}
 	if *caps {
 		return robotWrite(stdout, robotCapabilities(*format, now), robotOK)
+	}
+	if *version {
+		return robotWrite(stdout, robotVersion(*format, now), robotOK)
 	}
 	if *lines <= 0 {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "--lines must be positive", "", *format, robotError, now)
@@ -234,7 +239,7 @@ func robotKinds(types []string) []string {
 // parse.
 func unknownRobotFlag(args []string) string {
 	known := map[string]bool{"--robot-status": true, "--robot-snapshot": true, "--robot-capabilities": true,
-		"--robot-activity": true, "--robot-tail": true, "--robot-health": true, "--robot-format": true,
+		"--robot-activity": true, "--robot-tail": true, "--robot-health": true, "--robot-format": true, "--robot-version": true,
 		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true, "--robot-spawn": true}
 	for _, a := range args {
 		name, _, _ := strings.Cut(a, "=")
@@ -280,6 +285,17 @@ func robotCapabilities(format string, now time.Time) robot.CapabilitiesOutput {
 		out.Commands = append(out.Commands, cmd)
 	}
 	return out
+}
+
+// robotVersion is ntm's GetVersion: the build and the Go runtime, with
+// tmux_available false as in ntm, which never sets it here. nhm's extras,
+// the ntm commit it tracks and the herdr protocol, are under _nhm.
+func robotVersion(format string, now time.Time) robot.VersionOutput {
+	b := buildInfo()
+	return robot.VersionOutput{RobotResponse: robot.NewResponse(true, format, now),
+		System: robot.SystemInfo{Version: b.Version, Commit: b.Commit, BuildDate: b.BuildDate,
+			GoVersion: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH},
+		NHM: map[string]any{"ntm_commit": NTMCommit, "herdr_protocol": herdr.Protocol}}
 }
 
 func robotCategory(flagName string) string {
