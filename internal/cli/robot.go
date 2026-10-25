@@ -83,6 +83,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotFlag(args, "--robot-answer-dialog") {
 		return runRobotAnswerDialog(args, stdout)
 	}
+	if hasRobotFlag(args, "--robot-exit-cli") {
+		return runRobotExitCLI(args, stdout)
+	}
 	if hasRobotFlag(args, "--robot-palette") {
 		return runRobotPalette(args, stdout)
 	}

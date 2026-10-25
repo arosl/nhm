@@ -286,46 +286,13 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	// Start the successor in the same pane, under the same name, in a
 	// fresh context, and bump the generation.
 	res.Stage = StageStart
-	argv := spawn.LaunchArgv(a, b.Model, b.Effort, env.LaunchSettings[a.Name])
-	ms := readyWait.Milliseconds()
-	alias := b.HerdrAlias
-	if alias == "" {
-		alias = strings.ToLower(b.MailName)
-	}
-	if _, err := env.Herdr.AgentStart(ctx, herdr.AgentStartParams{Name: alias, Kind: a.Name, PaneID: b.PaneID, Args: argv[1:], TimeoutMS: &ms}); err != nil {
-		return fail(StageStart, err)
-	}
-	info, err := env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: b.PaneID,
-		Until: []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusBlocked}, TimeoutMS: &ms})
-	if herdr.ErrorCode(err) == herdr.CodeTimeout && a.Dialog != nil {
-		err = spawn.NamedDialog(ctx, env.Herdr, b.PaneID, a, err)
-	}
+	nb, marks, err := startInPlace(ctx, env, b, a, bindings.Evidence{Kind: "recycle", Detail: "successor of generation " + fmt.Sprint(b.Generation)})
 	if err != nil {
 		return fail(StageStart, err)
-	}
-	if info.AgentStatus == herdr.StatusBlocked {
-		return fail(StageStart, fmt.Errorf("the successor waits at a dialog in pane %s; answer it there", b.PaneID))
-	}
-	occ := bindings.Occupant{WorkspaceID: b.WorkspaceID, TabID: b.TabID, PaneID: b.PaneID, HerdrAlias: alias, Kind: b.Kind,
-		Model: b.Model, Effort: b.Effort, LaunchID: b.LaunchID, Evidence: []bindings.Evidence{{Kind: "recycle", Detail: "successor of generation " + fmt.Sprint(b.Generation)}}}
-	if info.AgentSession != nil {
-		s := info.AgentSession
-		occ.NativeSession = &bindings.NativeSession{Source: s.Source, Agent: s.Agent, Kind: s.Kind, Value: s.Value}
-	}
-	if p, err := env.Herdr.PaneProcessInfo(ctx, b.PaneID); err == nil && len(p.ForegroundProcesses) > 0 {
-		occ.ForegroundPID = int64(p.ForegroundProcesses[0].PID)
-		if env.ProcStart != nil {
-			occ.ForegroundStart, _ = env.ProcStart(occ.ForegroundPID)
-		}
-	}
-	nb, err := env.Bindings.Occupy(ctx, b.ID, b.Generation, occ)
-	if err != nil {
-		return fail(StageStart, fmt.Errorf("binding: %w", err))
 	}
 	res.Generation = nb.Generation
-	// The predecessor's marks may never have been set (a spawn that
-	// stopped at a dialog, nhm-hae).
-	res.Warnings = append(res.Warnings, keepMarks(ctx, env, nb)...)
+	res.Warnings = append(res.Warnings, marks...)
+	alias := nb.HerdrAlias
 	unlock()
 	locked = false
 
@@ -348,6 +315,53 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	}
 	res.Stage = StageDone
 	return res, env.DB.SetOperationStatus(ctx, res.OperationID, "done", true, env.now())
+}
+
+// startInPlace starts b's kind again in b's pane, under b's herdr name,
+// in a fresh context, and records the new occupant, so the generation
+// bumps: recycle's start stage, which --robot-exit-cli --relaunch shares.
+// The caller holds the target lock and has seen the pane at its shell.
+// ev is the occupant's evidence; the warnings are keepMarks'.
+func startInPlace(ctx context.Context, env Env, b bindings.Binding, a kinds.Adapter, ev bindings.Evidence) (bindings.Binding, []string, error) {
+	argv := spawn.LaunchArgv(a, b.Model, b.Effort, env.LaunchSettings[a.Name])
+	ms := readyWait.Milliseconds()
+	alias := b.HerdrAlias
+	if alias == "" {
+		alias = strings.ToLower(b.MailName)
+	}
+	if _, err := env.Herdr.AgentStart(ctx, herdr.AgentStartParams{Name: alias, Kind: a.Name, PaneID: b.PaneID, Args: argv[1:], TimeoutMS: &ms}); err != nil {
+		return b, nil, err
+	}
+	info, err := env.Herdr.AgentWait(ctx, herdr.AgentWaitParams{Target: b.PaneID,
+		Until: []herdr.AgentStatus{herdr.StatusIdle, herdr.StatusDone, herdr.StatusBlocked}, TimeoutMS: &ms})
+	if herdr.ErrorCode(err) == herdr.CodeTimeout && a.Dialog != nil {
+		err = spawn.NamedDialog(ctx, env.Herdr, b.PaneID, a, err)
+	}
+	if err != nil {
+		return b, nil, err
+	}
+	if info.AgentStatus == herdr.StatusBlocked {
+		return b, nil, fmt.Errorf("the successor waits at a dialog in pane %s; answer it there", b.PaneID)
+	}
+	occ := bindings.Occupant{WorkspaceID: b.WorkspaceID, TabID: b.TabID, PaneID: b.PaneID, HerdrAlias: alias, Kind: b.Kind,
+		Model: b.Model, Effort: b.Effort, LaunchID: b.LaunchID, Evidence: []bindings.Evidence{ev}}
+	if info.AgentSession != nil {
+		s := info.AgentSession
+		occ.NativeSession = &bindings.NativeSession{Source: s.Source, Agent: s.Agent, Kind: s.Kind, Value: s.Value}
+	}
+	if p, err := env.Herdr.PaneProcessInfo(ctx, b.PaneID); err == nil && len(p.ForegroundProcesses) > 0 {
+		occ.ForegroundPID = int64(p.ForegroundProcesses[0].PID)
+		if env.ProcStart != nil {
+			occ.ForegroundStart, _ = env.ProcStart(occ.ForegroundPID)
+		}
+	}
+	nb, err := env.Bindings.Occupy(ctx, b.ID, b.Generation, occ)
+	if err != nil {
+		return b, nil, fmt.Errorf("binding: %w", err)
+	}
+	// The predecessor's marks may never have been set (a spawn that
+	// stopped at a dialog, nhm-hae).
+	return nb, keepMarks(ctx, env, nb), nil
 }
 
 // keepMarks gives the pane of b's new occupant the marks it lacks

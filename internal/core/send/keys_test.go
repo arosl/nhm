@@ -93,7 +93,7 @@ func TestKeysRefuses(t *testing.T) {
 		{"moved pane", KeysRequest{PaneID: "w1:p2", Binding: &b, Keys: []string{"1"}}, "the binding changed since selection"},
 		{"another kind", KeysRequest{PaneID: "w1:p1", Binding: &codex, Keys: []string{"1"}}, "the pane holds a claude agent; the binding is codex"},
 		{"a shell", KeysRequest{PaneID: "w1:p3", Keys: []string{"1"}}, "the pane holds no agent: w1:p3"},
-		{"no pane", KeysRequest{PaneID: "w1:p9", Keys: []string{"1"}}, herdr.CodeAgentNotFound},
+		{"no agent", KeysRequest{PaneID: "w1:p9", Keys: []string{"1"}}, "the pane holds no agent: w1:p9"},
 	} {
 		sent, err := Keys(ctx, env, c.req)
 		if sent != 0 || err == nil || !strings.Contains(err.Error(), c.want) {
@@ -119,6 +119,23 @@ func TestKeysRefuses(t *testing.T) {
 	if sent, err := Keys(ctx, env, KeysRequest{PaneID: "w1:p1", Binding: &b, Keys: []string{"bogus"}}); sent != 0 ||
 		!errors.As(err, &ke) || ke.Index != 0 || herdr.ErrorCode(err) != herdr.CodeInvalidParams {
 		t.Errorf("herdr's refusal = %d, %v", sent, err)
+	}
+}
+
+// Pauses gives each key its own pause before it.
+func TestKeysPauses(t *testing.T) {
+	w, h, env := keysWorld(t)
+	w.fake.add("w1:p4", "omp", "", herdr.StatusIdle, 1)
+	var at []time.Duration
+	start := time.Now()
+	sent, err := Keys(context.Background(), env, KeysRequest{PaneID: "w1:p4", Keys: []string{"esc", "ctrl+c", "ctrl+d"},
+		Gap: time.Hour, Pauses: []time.Duration{time.Hour, 30 * time.Millisecond, 60 * time.Millisecond},
+		Before: func(int) error { at = append(at, time.Since(start)); return nil }})
+	if err != nil || sent != 3 || !reflect.DeepEqual(h.sent, []string{"w1:p4 esc", "w1:p4 ctrl+c", "w1:p4 ctrl+d"}) {
+		t.Fatalf("Keys = %d, %v, %v", sent, err, h.sent)
+	}
+	if at[0] > 20*time.Millisecond || at[1] < 30*time.Millisecond || at[2] < 90*time.Millisecond {
+		t.Errorf("the keys went at %v", at)
 	}
 }
 

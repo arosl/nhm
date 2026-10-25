@@ -38,8 +38,10 @@ type KeysRequest struct {
 	Binding *bindings.Binding
 	// Keys are herdr's key names, sent one at a time.
 	Keys []string
-	// Gap is the pause between two keys.
-	Gap time.Duration
+	// Gap is the pause between two keys. Pauses, when set, gives the
+	// pause before each key instead (Pauses[0] is not used).
+	Gap    time.Duration
+	Pauses []time.Duration
 	// Before runs before key i is sent, after the gap; an error stops the
 	// sequence there, and Keys returns it.
 	Before func(i int) error
@@ -85,6 +87,8 @@ func Keys(ctx context.Context, env KeysEnv, req KeysRequest) (sent int, err erro
 	}
 	a, err := env.Herdr.AgentGet(ctx, req.PaneID)
 	switch {
+	case herdr.ErrorCode(err) == herdr.CodeAgentNotFound:
+		return 0, fmt.Errorf("%w: %s", ErrNoAgent, req.PaneID)
 	case err != nil:
 		return 0, err
 	case a.Agent == "":
@@ -93,8 +97,15 @@ func Keys(ctx context.Context, env KeysEnv, req KeysRequest) (sent int, err erro
 		return 0, fmt.Errorf("%w: the pane holds a %s agent; the binding is %s", ErrNoAgent, a.Agent, req.Binding.Kind)
 	}
 	for i, key := range req.Keys {
-		if i > 0 && req.Gap > 0 {
-			timer := time.NewTimer(req.Gap)
+		pause := req.Gap
+		if req.Pauses != nil {
+			pause = 0
+			if i < len(req.Pauses) {
+				pause = req.Pauses[i]
+			}
+		}
+		if i > 0 && pause > 0 {
+			timer := time.NewTimer(pause)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
