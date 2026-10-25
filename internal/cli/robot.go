@@ -86,6 +86,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	defer root.undo()
 	status := fs.Bool("robot-status", false, "")
 	snap := fs.Bool("robot-snapshot", false, "")
+	help := fs.Bool("robot-help", false, "")
 	caps := fs.Bool("robot-capabilities", false, "")
 	version := fs.Bool("robot-version", false, "")
 	docs := fs.String("robot-docs", "", "")
@@ -107,7 +108,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		}
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
-	root.noConfig = *caps || *version
+	root.noConfig = *help || *caps || *version
 	if code, done := applyRobotRoot(root, now); done {
 		return code
 	}
@@ -116,13 +117,21 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	docsGiven := false
 	fs.Visit(func(f *flag.Flag) { docsGiven = docsGiven || f.Name == "robot-docs" })
 	chosen := 0
-	for _, b := range []bool{*status, *snap, *caps, *version, docsGiven, *activity != "", *tail != "", *health != ""} {
+	for _, b := range []bool{*help, *status, *snap, *caps, *version, docsGiven, *activity != "", *tail != "", *health != ""} {
 		if b {
 			chosen++
 		}
 	}
 	if chosen != 1 {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "give exactly one --robot-* flag", "nhm --robot-capabilities lists them", *format, robotError, now)
+	}
+	if *help {
+		// ntm's help is plain text, whatever the format; only a bad format
+		// or verbosity failed it first, as JSON (applyRobotRoot).
+		if _, err := io.WriteString(stdout, renderRobotHelp()); err != nil {
+			return robotError
+		}
+		return robotOK
 	}
 	if *caps {
 		return robotWrite(stdout, robotCapabilities(*format, now), robotOK)
