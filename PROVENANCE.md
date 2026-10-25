@@ -294,6 +294,13 @@ The same rules apply to code from pt and dcg.
 | `internal/cli/errors_ntm.go` | `internal/cli/errors.go` (in part) | provenance header; ntm's errors on nhm's cobra root; a session is a herdr workspace and its panes are the workspace's (`core/session.Panes`), a pane without an agent being ntm's user pane; no service panes on herdr; a `--panes` index is a pane index (the 2026-10-24 ruling); herdr's `pane.read`; the agent type is the pane's ntm type; times in UTC; the pattern table is in `core/panediff`; without ntm's colours; output to cobra's writers (nhm-2p6.8.4) |
 | `internal/core/panediff/errors_ntm.go` | `internal/cli/errors.go` (in part: `errorsCommandPatterns`, `isErrorLine`) | provenance header; the package; `isErrorLine` exported as `IsErrorLine` (nhm-2p6.8.4) |
 | `internal/core/panediff/errors_ntm_test.go` | `internal/cli/errors_test.go` (in part: `TestIsErrorLine`) | provenance header; the package; the cases as one table, without subtests or logging (nhm-2p6.8.4) |
+| `internal/cli/gast_ntm.go` | `internal/cli/get_all_session_text.go` | provenance header; the sessions are herdr's workspaces, by name, and their panes the workspaces' (`core/session.Panes`), a pane without an agent being ntm's user pane; herdr's `pane.read`; a pane's index is its slot's M; the short type from `ui/tui/agent`; the state words from `core/panestate`; "tmux" and "NTM" in the texts read "herdr" and "NHM"; output to cobra's writer (nhm-2p6.8.6) |
+| `internal/cli/text_ntm.go` | `internal/util/text.go` (in part: `Truncate`) | provenance header; the package; `Truncate` is `truncateText` (nhm-2p6.8.6) |
+| `internal/core/panestate/LICENSE` | `LICENSE` | none |
+| `internal/core/panestate/errsig_ntm.go` | `internal/errsig/errsig.go` | provenance header; the package (nhm's panestate); the package comment shortened to this file's (nhm-2p6.8.6) |
+| `internal/core/panestate/errsig_ntm_test.go` | `internal/errsig/errsig_test.go`, `errsig_helpers_test.go` | provenance header; the package; the helpers' compiled patterns local to the tests that use them (nhm-2p6.8.6) |
+| `internal/core/panestate/patterns_ntm.go` | `internal/robot/patterns.go`, `internal/robot/robot.go` (`ResolveAgentType`, `normalizeAgentType`) (in part) | provenance header; the package (nhm's panestate); errsig is this package's; ntm's aliases from `ui/tui/agent`; the library's editing and listing methods and `HasIdlePattern` left out (nhm-2p6.8.6) |
+| `internal/core/panestate/patterns_ntm_test.go` | `internal/robot/patterns_test.go` (in part) | provenance header; the package; the tests of what `patterns_ntm.go` keeps, as tables without subtests (nhm-2p6.8.6) |
 
 ## Files from herdr
 

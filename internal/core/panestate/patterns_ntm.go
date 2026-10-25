@@ -1,0 +1,468 @@
+// Ported in part from ntm (github.com/Dicklesworthstone/ntm)
+// internal/robot/patterns.go and internal/robot/robot.go (ResolveAgentType,
+// normalizeAgentType) at commit 9d5ed977; see LICENSE in this directory and
+// PROVENANCE.md. Local changes: the package (nhm's panestate); errsig is
+// this package's errsig_ntm.go; ResolveAgentType takes ntm's aliases
+// from nhm's ui/tui/agent (ntm's internal/agent); the library's editing
+// and listing methods (AddPattern, GetPatterns, GetPatternsByCategory,
+// GetPatternsByAgent, PatternCount) and HasIdlePattern are left out.
+
+// Package panestate holds ntm's text-pattern library for agent states: what
+// ntm's verbs say an agent is doing from the text on its screen.
+package panestate
+
+import (
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/arosl/nhm/internal/ui/tui/agent"
+)
+
+// AgentState represents the detected state of an agent.
+type AgentState string
+
+const (
+	// StateGenerating indicates agent is actively producing output (high velocity).
+	StateGenerating AgentState = "GENERATING"
+
+	// StateWaiting indicates agent is idle and ready for input.
+	StateWaiting AgentState = "WAITING"
+
+	// StateThinking indicates agent is processing (low velocity, thinking indicator).
+	StateThinking AgentState = "THINKING"
+
+	// StateError indicates an error condition was detected.
+	StateError AgentState = "ERROR"
+
+	// StateStalled indicates no output when activity was expected.
+	StateStalled AgentState = "STALLED"
+
+	// StateUnknown indicates insufficient signals to classify state.
+	StateUnknown AgentState = "UNKNOWN"
+)
+
+// PatternCategory categorizes patterns for organization and filtering.
+type PatternCategory string
+
+const (
+	CategoryIdle       PatternCategory = "idle"       // Idle/prompt patterns
+	CategoryError      PatternCategory = "error"      // Error conditions
+	CategoryThinking   PatternCategory = "thinking"   // Processing indicators
+	CategoryCompletion PatternCategory = "completion" // Task completion signals
+)
+
+// Pattern represents a single pattern for detecting agent states.
+type Pattern struct {
+	Name        string          `json:"name" toml:"name"`
+	Regex       *regexp.Regexp  `json:"-"` // Compiled regex (not serialized)
+	RegexStr    string          `json:"regex" toml:"regex"`
+	Agent       string          `json:"agent" toml:"agent"`       // "claude", "codex", "gemini", "*" for all
+	State       AgentState      `json:"state" toml:"state"`       // Target state if matched
+	Category    PatternCategory `json:"category" toml:"category"` // Pattern category
+	Priority    int             `json:"priority" toml:"priority"` // Higher = checked first
+	Description string          `json:"description" toml:"description"`
+}
+
+// PatternLibrary manages a collection of patterns for state detection.
+type PatternLibrary struct {
+	Version  string    `json:"version" toml:"pattern_version"`
+	Patterns []Pattern `json:"patterns" toml:"patterns"`
+	compiled bool
+	mu       sync.RWMutex
+}
+
+// NewPatternLibrary creates a new pattern library with default patterns.
+func NewPatternLibrary() *PatternLibrary {
+	lib := &PatternLibrary{
+		Version:  "1.0",
+		Patterns: defaultPatterns(),
+	}
+	_ = lib.Compile()
+	return lib
+}
+
+// defaultPatterns returns the built-in default pattern set.
+func defaultPatterns() []Pattern {
+	return []Pattern{
+		// ==================
+		// IDLE PROMPTS (agent ready for input)
+		// ==================
+		// Claude patterns
+		{Name: "claude_prompt", RegexStr: `(?i)claude\s*>?\s*$`, Agent: "claude", State: StateWaiting, Category: CategoryIdle, Priority: 100, Description: "Claude prompt"},
+		{Name: "claude_code_prompt", RegexStr: `(?i)claude\s+code\s*>?\s*$`, Agent: "claude", State: StateWaiting, Category: CategoryIdle, Priority: 101, Description: "Claude Code prompt"},
+		{Name: "claude_arrow_prompt", RegexStr: `╰─>\s*$`, Agent: "claude", State: StateWaiting, Category: CategoryIdle, Priority: 99, Description: "Claude arrow prompt"},
+		// Claude Code TUI indicators (welcome screen)
+		// NOTE: "bypass permissions on" was removed — it matches the permanent status bar,
+		// causing agents to always appear idle even while actively working.
+		{Name: "claude_code_version", RegexStr: `(?i)claude\s+code\s+v[\d.]+`, Agent: "claude", State: StateWaiting, Category: CategoryIdle, Priority: 102, Description: "Claude Code version banner"},
+		{Name: "claude_welcome", RegexStr: `(?i)welcome\s+back`, Agent: "claude", State: StateWaiting, Category: CategoryIdle, Priority: 102, Description: "Claude Code welcome message"},
+		{Name: "claude_try_prompt", RegexStr: `❯\s*Try\s+"`, Agent: "claude", State: StateWaiting, Category: CategoryIdle, Priority: 102, Description: "Claude Code try prompt"},
+		{Name: "claude_unicode_prompt", RegexStr: `(?m)❯[\s\x{00a0}]*$`, Agent: "claude", State: StateWaiting, Category: CategoryIdle, Priority: 101, Description: "Claude Code unicode angle prompt (multiline, NBSP-aware)"},
+
+		// Claude Code spinner detection (active work indicators)
+		{Name: "claude_spinner_timing", RegexStr: `\S+…\s+\(`, Agent: "claude", State: StateThinking, Category: CategoryThinking, Priority: 110, Description: "Claude Code timing spinner (e.g. Bunning… (3s))"},
+		{Name: "claude_spinner_thinking", RegexStr: `·\s*thinking`, Agent: "claude", State: StateThinking, Category: CategoryThinking, Priority: 110, Description: "Claude Code thinking indicator"},
+		{Name: "claude_spinner_thought", RegexStr: `·\s*thought\s+for`, Agent: "claude", State: StateThinking, Category: CategoryThinking, Priority: 110, Description: "Claude Code thought duration"},
+		{Name: "claude_spinner_running", RegexStr: `Running…`, Agent: "claude", State: StateThinking, Category: CategoryThinking, Priority: 110, Description: "Claude Code running spinner"},
+		{Name: "claude_spinner_past", RegexStr: `\S+\s+for\s+\d+[ms]\b`, Agent: "claude", State: StateGenerating, Category: CategoryCompletion, Priority: 95, Description: "Claude Code completed spinner (e.g. Bunned for 3s)"},
+
+		// Codex patterns
+		{Name: "codex_prompt", RegexStr: `(?i)codex\s*>?\s*$`, Agent: "codex", State: StateWaiting, Category: CategoryIdle, Priority: 100, Description: "Codex prompt"},
+		{Name: "codex_context_left", RegexStr: `(?i)\b\d{1,3}%\s*context\s*left\b`, Agent: "codex", State: StateWaiting, Category: CategoryIdle, Priority: 96, Description: "Codex context status line"},
+		{Name: "codex_chevron_prompt", RegexStr: `(?m)^\s*[›»]\s*.*$`, Agent: "codex", State: StateWaiting, Category: CategoryIdle, Priority: 92, Description: "Codex chevron prompt (\"»\" at effort ultra, GH#273)"},
+
+		// Codex active-work indicators. These must outrank codex_context_left /
+		// codex_chevron_prompt because codex keeps rendering its status bar and
+		// input chevron in the scrollback even while the agent is busy — the
+		// idle-prompt patterns above would otherwise mask a working agent.
+		// NOTE: these patterns are only evaluated against the *live tail* of
+		// the capture by StateClassifier.classifyInternal. Codex leaves
+		// historical "• Working (Xm Xs)" bullets in scrollback after tool
+		// calls finish, so matching them anywhere in the buffer would flip a
+		// long-idle pane into THINKING. See filterThinkingToLive().
+		{Name: "codex_working", RegexStr: `(?m)^\s*[•·◐◑◒◓⬤]\s*Working\b`, Agent: "codex", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "Codex Working spinner (active tool/model call)"},
+		{Name: "codex_waiting_background", RegexStr: `(?m)^\s*[•·◐◑◒◓⬤]\s*Waiting\s+for\s+background\b`, Agent: "codex", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "Codex waiting-for-background spinner (active background tool call)"},
+		// codex_esc_interrupt tolerates TUI line truncation: codex shortens
+		// the hint to "esc to i…" or "esc to in…" etc. when the pane is too
+		// narrow for the full word. \S* prevents matching across whitespace
+		// so we can't accidentally catch unrelated prose like "esc to i made
+		// a mistake".
+		{Name: "codex_esc_interrupt", RegexStr: `(?i)esc\s+to\s+i(?:nterrupt\b|\S*…|\S*\.\.\.)`, Agent: "codex", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "Codex esc-to-interrupt hint, tolerant of TUI truncation (only shown during active work)"},
+		{Name: "codex_thinking_bullet", RegexStr: `(?m)^\s*[•·◐◑◒◓⬤]\s*Thinking\b`, Agent: "codex", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "Codex Thinking bullet (extended reasoning)"},
+
+		// Gemini patterns
+		{Name: "gemini_prompt", RegexStr: `(?i)gemini\s*>?\s*$`, Agent: "gemini", State: StateWaiting, Category: CategoryIdle, Priority: 100, Description: "Gemini prompt"},
+		{Name: "gemini_triple_arrow", RegexStr: `>>>\s*$`, Agent: "gemini", State: StateWaiting, Category: CategoryIdle, Priority: 90, Description: "Gemini triple arrow prompt"},
+
+		// Antigravity (agy) first-run workspace-trust dialog: the pane is
+		// alive but permanently stalled on a menu waiting for a keystroke.
+		// Without these, health reported such panes as OK — the worst
+		// unattended failure mode: green but doing nothing (GH#230 /
+		// ntm-jhd6). Classified as ERROR so health/is-working/wait surface
+		// the pane as needing attention; the CategoryError live-window
+		// filter keeps stale scrollback quotes from re-triggering it.
+		{Name: "agy_trust_prompt", RegexStr: `(?i)do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+project`, Agent: "antigravity", State: StateError, Category: CategoryError, Priority: 210, Description: "Antigravity workspace-trust dialog question (pane blocked on keystroke)"},
+		{Name: "agy_trust_option", RegexStr: `(?i)yes,\s+i\s+trust\s+this\s+folder`, Agent: "antigravity", State: StateError, Category: CategoryError, Priority: 209, Description: "Antigravity workspace-trust dialog option line (pane blocked on keystroke)"},
+		{Name: "agy_esc_cancel", RegexStr: `(?i)\besc\s+to\s+cancel\b`, Agent: "antigravity", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "Antigravity in-flight cancel hint"},
+		{Name: "agy_bare_prompt", RegexStr: `(?m)^\s*>\s*$`, Agent: "antigravity", State: StateWaiting, Category: CategoryIdle, Priority: 100, Description: "Antigravity bare composer prompt"},
+		{Name: "agy_shortcuts_footer", RegexStr: `(?i)\?\s+for\s+shortcuts`, Agent: "antigravity", State: StateWaiting, Category: CategoryIdle, Priority: 96, Description: "Antigravity idle shortcuts footer"},
+
+		// Grok Build patterns (GH#251 phase 2), derived from live captures of
+		// grok 1.0.5. The braille-spinner activity line ("⠹ Waiting for
+		// response… 0.7s" / "⠸ Thinking… 0.0s" / "⠙ Responding… 1.7s") and the
+		// "Esc:cancel" footer hint render ONLY while a turn is in flight, so
+		// they outrank the permanent composer chrome the same way the codex
+		// working patterns outrank codex_chevron_prompt.
+		{Name: "grok_spinner_phase", RegexStr: `(?m)^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*(?:Waiting for response|Thinking|Responding)…`, Agent: "grok", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "Grok Build live activity line (spinner + phase verb, only during an in-flight turn)"},
+		{Name: "grok_esc_cancel", RegexStr: `Esc:cancel`, Agent: "grok", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "Grok Build Esc:cancel footer hint (only shown during active work)"},
+		{Name: "grok_worked_for", RegexStr: `(?m)^\s*Worked\s+for\s+\d`, Agent: "grok", State: StateWaiting, Category: CategoryCompletion, Priority: 95, Description: "Grok Build turn-ended summary (Worked for 12s)"},
+		{Name: "grok_turn_cancelled", RegexStr: `Turn cancelled by user`, Agent: "grok", State: StateWaiting, Category: CategoryCompletion, Priority: 95, Description: "Grok Build post-interrupt acknowledgement"},
+		{Name: "grok_composer_prompt", RegexStr: `(?m)^\s*│\s*❯`, Agent: "grok", State: StateWaiting, Category: CategoryIdle, Priority: 92, Description: "Grok Build bordered composer line (permanent chrome; outranked by the in-flight patterns above)"},
+		{Name: "grok_welcome_banner", RegexStr: `(?i)grok\s+build\s+\d+\.\d+`, Agent: "grok", State: StateWaiting, Category: CategoryIdle, Priority: 96, Description: "Grok Build welcome banner (fresh spawn readiness)"},
+
+		// Oh My Pi (omp) patterns, derived from live captures of omp v18.2.3
+		// across its nerd/unicode/ascii symbol presets. omp keeps a bordered
+		// composer box pinned to the bottom at all times; while a turn is in
+		// flight the box's top border swaps its status icon for a spinner +
+		// elapsed timer ("╭── ⠧ 1s   Union Alpha" / "+-- \ 5s > [M]"), an
+		// activity line opening with the Esc interrupt hint sits directly
+		// above it ("󱊷 Working…" / "⎋ Working…" / "esc Working…"), and a
+		// mid-turn message waits in a "Steering · N" block. Those outrank
+		// the empty-composer idle chrome the same way the grok patterns do.
+		{Name: "omp_status_timer", RegexStr: `(?m)^\s*(?:╭──|\+--)\s+\S\s+\d+[smh]\b`, Agent: "omp", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "omp composer top border carrying the in-flight spinner + elapsed timer"},
+		{Name: "omp_esc_hint", RegexStr: `(?m)^\s*(?:󱊷|⎋|esc)\s+\S`, Agent: "omp", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "omp activity line opening with the Esc interrupt hint (only during an in-flight turn)"},
+		{Name: "omp_steering", RegexStr: `(?m)^\s*Steering\s+·\s+\d+\s*$`, Agent: "omp", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "omp pending-steering block (a message submitted mid-turn, not yet consumed)"},
+		{Name: "omp_subagents", RegexStr: `(?m)^\s*Subagents\s*\n\s*(?:[├└]─|[|\\+` + "`" + `]-)\s+[•*]\s+\S`, Agent: "omp", State: StateThinking, Category: CategoryThinking, Priority: 115, Description: "omp running-subagents panel (header plus at least one listed subagent) in the HUD above the composer"},
+		{Name: "omp_provider_error", RegexStr: `(?m)^\s*Dismissed when you send your next message\.`, Agent: "omp", State: StateError, Category: CategoryError, Priority: 180, Description: "omp provider error block footer (e.g. 401 Invalid API Key)"},
+		{Name: "omp_interrupted", RegexStr: `(?m)^\s*(?:\S\s+)?F5 to Retry\s*$`, Agent: "omp", State: StateWaiting, Category: CategoryCompletion, Priority: 95, Description: "omp retry hint (F5 re-runs the turn) above the idle composer after an interrupt or failure; nerd preset prefixes a glyph"},
+		{Name: "omp_empty_composer", RegexStr: `(?m)^\s*(?:╰─|\+-)\s*(?:─╯|-\+)\s*$`, Agent: "omp", State: StateWaiting, Category: CategoryIdle, Priority: 92, Description: "omp empty composer bottom border (permanent chrome; outranked by the in-flight patterns above)"},
+
+		// Generic shell prompts (user/fallback)
+		{Name: "shell_dollar", RegexStr: `\$\s*$`, Agent: "*", State: StateWaiting, Category: CategoryIdle, Priority: 20, Description: "Shell dollar prompt"},
+		{Name: "shell_percent", RegexStr: `%\s*$`, Agent: "*", State: StateWaiting, Category: CategoryIdle, Priority: 20, Description: "Shell percent prompt"},
+		{Name: "shell_hash", RegexStr: `#\s*$`, Agent: "*", State: StateWaiting, Category: CategoryIdle, Priority: 20, Description: "Shell hash prompt"},
+		{Name: "generic_angle", RegexStr: `>\s*$`, Agent: "*", State: StateWaiting, Category: CategoryIdle, Priority: 10, Description: "Generic angle prompt"},
+
+		// ==================
+		// ERROR PATTERNS (something went wrong)
+		// ==================
+		// Rate limits.
+		//
+		// Rate-limit evidence must be a banner, not a mention. "Rate limit"
+		// anchored at the start of a line is a provider banner; mid-sentence it
+		// needs an explicit limit verb. A bare "429" is not evidence at all —
+		// it occurs inside hashes and IDs, and treating it as authoritative
+		// walled off healthy agents (ntm#299).
+		{Name: "rate_limit_text", RegexStr: Anchored(`(?i:rate[\s_-]?limit)`) + `|(?i)\brate[\s_-]?limits?\s+(?:exceeded|reached)\b|(?i)\brate_limit_error\b|(?i)\b(?:hit|hitting|reached)\s+(?:the\s+|a\s+|your\s+)?rate[\s_-]?limit\b`, Agent: "*", State: StateError, Category: CategoryError, Priority: 200, Description: "Rate limit banner (anchored, or with an explicit limit verb)"},
+		{Name: "http_429", RegexStr: HTTPStatus("429", "too many requests", "rate limit"), Agent: "*", State: StateError, Category: CategoryError, Priority: 200, Description: "HTTP 429 status in a structured position"},
+		{Name: "too_many_requests", RegexStr: `(?i)too\s+many\s+requests`, Agent: "*", State: StateError, Category: CategoryError, Priority: 200, Description: "Too many requests"},
+		{Name: "quota_exceeded", RegexStr: `(?i)quota\s+exceeded`, Agent: "*", State: StateError, Category: CategoryError, Priority: 200, Description: "Quota exceeded"},
+		{Name: "usage_limit_hit", RegexStr: `(?i)(?:hit|reached)\s+your\s+usage\s+limit`, Agent: "*", State: StateError, Category: CategoryError, Priority: 200, Description: "Provider usage-limit banner (hit/reached your usage limit)"},
+		{Name: "usage_limit_reached", RegexStr: `(?i)(?:usage|plan)\s+limits?\s+(?:reached|exceeded)`, Agent: "*", State: StateError, Category: CategoryError, Priority: 200, Description: "Usage/plan limit reached banner"},
+
+		// API errors. Anchored: a runtime prints "Error: ..." at the start of a
+		// line (possibly behind TUI decoration), whereas prose that merely
+		// discusses an error does not — and prose used to be enough to mark a
+		// healthy agent degraded (ntm#299).
+		{Name: "api_error", RegexStr: Anchored(`(?i:(?:[\w.-]+\s+)?[\w.-]*error)\s*:\s*\S`), Agent: "*", State: StateError, Category: CategoryError, Priority: 180, Description: "API/runtime error line"},
+		{Name: "exception", RegexStr: Anchored(`(?i:[\w.]*exception)\s*:\s*\S`), Agent: "*", State: StateError, Category: CategoryError, Priority: 180, Description: "Raised exception line"},
+		{Name: "traceback", RegexStr: Anchored(`(?i:traceback)\b`), Agent: "*", State: StateError, Category: CategoryError, Priority: 180, Description: "Traceback header"},
+		// failed_text is the pattern that turned a successful handoff sentence
+		// ("it failed naming exactly the seven…") into an active agent error
+		// (ntm#297). It now requires a failure *report*: a line that starts
+		// with "Failed to/with/:", or a short status line that ends in
+		// "failed". Prose that merely contains the word never qualifies.
+		{Name: "failed_text", RegexStr: Anchored(`(?i:failed)\b(?:\s+to\b|\s+with\b|\s*[:.]|\s*$)|[^\n]{0,60}?\b(?i:failed)[.!]?[ \t]*$`), Agent: "*", State: StateError, Category: CategoryError, Priority: 150, Description: "Failure report line"},
+		{Name: "nonzero_exit", RegexStr: NonzeroExitPattern, Agent: "*", State: StateError, Category: CategoryError, Priority: 150, Description: "Nonzero process exit"},
+
+		// Crashes
+		{Name: "panic", RegexStr: Anchored(`(?i:panic):\s`), Agent: "*", State: StateError, Category: CategoryError, Priority: 250, Description: "Go panic"},
+		{Name: "sigsegv", RegexStr: FatalSignalPattern, Agent: "*", State: StateError, Category: CategoryError, Priority: 250, Description: "Fatal POSIX signal"},
+		{Name: "sigkill", RegexStr: Anchored(`(?i:killed)\b`) + `|(?i)\bsignal:\s*killed\b`, Agent: "*", State: StateError, Category: CategoryError, Priority: 250, Description: "Process killed"},
+		{Name: "process_exited", RegexStr: Anchored(`(?i:(?:process|agent)\s+(?:exited|terminated|crashed))`), Agent: "*", State: StateError, Category: CategoryError, Priority: 240, Description: "Process exited"},
+
+		// Auth
+		{Name: "unauthorized", RegexStr: Anchored(`(?i:unauthorized)\b`) + `|` + HTTPStatus("401", "unauthorized"), Agent: "*", State: StateError, Category: CategoryError, Priority: 190, Description: "Unauthorized"},
+		{Name: "invalid_key", RegexStr: `(?i)\binvalid\s+(?:api[\s_-]?)?key\b`, Agent: "*", State: StateError, Category: CategoryError, Priority: 190, Description: "Invalid API key"},
+		{Name: "auth_failed", RegexStr: `(?i)authentication\s+(?:failed|error)`, Agent: "*", State: StateError, Category: CategoryError, Priority: 190, Description: "Authentication failed"},
+
+		// Connection errors
+		{Name: "connection_refused", RegexStr: `(?i)connection\s+refused`, Agent: "*", State: StateError, Category: CategoryError, Priority: 170, Description: "Connection refused"},
+		{Name: "timeout_error", RegexStr: `(?i)(?:connection|request)\s+timed?\s*out`, Agent: "*", State: StateError, Category: CategoryError, Priority: 170, Description: "Timeout error"},
+		{Name: "network_error", RegexStr: `(?i)network\s+error`, Agent: "*", State: StateError, Category: CategoryError, Priority: 170, Description: "Network error"},
+
+		// ==================
+		// THINKING INDICATORS (processing)
+		// ==================
+		// Spinners (braille pattern characters)
+		{Name: "braille_spinner", RegexStr: `[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 80, Description: "Braille spinner"},
+		{Name: "dots_spinner", RegexStr: `\.{3,}$`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 70, Description: "Dots spinner"},
+
+		// Text indicators
+		{Name: "thinking_text", RegexStr: `(?i)thinking\.{0,3}$`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 85, Description: "Thinking text"},
+		{Name: "processing_text", RegexStr: `(?i)processing\.{0,3}$`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 85, Description: "Processing text"},
+		{Name: "analyzing_text", RegexStr: `(?i)analyzing\.{0,3}$`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 85, Description: "Analyzing text"},
+		{Name: "extended_thinking", RegexStr: `(?i)(?:thinking\s+deeply|extended\s+thinking)`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 90, Description: "Extended thinking"},
+
+		// Loading indicators
+		{Name: "loading_text", RegexStr: `(?i)loading\.{0,3}$`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 75, Description: "Loading text"},
+		{Name: "waiting_text", RegexStr: `(?i)(?:please\s+)?wait(?:ing)?\.{0,3}$`, Agent: "*", State: StateThinking, Category: CategoryThinking, Priority: 75, Description: "Waiting text"},
+
+		// ==================
+		// COMPLETION SIGNALS (task finished)
+		// ==================
+		{Name: "done_text", RegexStr: `(?i)(?:^|\s)done[.!]?\s*$`, Agent: "*", State: StateWaiting, Category: CategoryCompletion, Priority: 60, Description: "Done text"},
+		{Name: "complete_text", RegexStr: `(?i)(?:^|\s)(?:completed?|finished)[.!]?\s*$`, Agent: "*", State: StateWaiting, Category: CategoryCompletion, Priority: 60, Description: "Complete/Finished text"},
+		{Name: "checkmark", RegexStr: `[✓✔]\s*$`, Agent: "*", State: StateWaiting, Category: CategoryCompletion, Priority: 65, Description: "Checkmark symbol"},
+		{Name: "summary_header", RegexStr: `(?i)^(?:summary|changes\s+made):`, Agent: "*", State: StateWaiting, Category: CategoryCompletion, Priority: 55, Description: "Summary header"},
+	}
+}
+
+// Compile compiles all regex patterns in the library.
+// Returns an error if any pattern fails to compile.
+func (lib *PatternLibrary) Compile() error {
+	lib.mu.Lock()
+	defer lib.mu.Unlock()
+
+	for i := range lib.Patterns {
+		if lib.Patterns[i].Regex == nil && lib.Patterns[i].RegexStr != "" {
+			compiled, err := regexp.Compile(lib.Patterns[i].RegexStr)
+			if err != nil {
+				return err
+			}
+			lib.Patterns[i].Regex = compiled
+		}
+	}
+
+	// Sort by priority (higher first)
+	sort.Slice(lib.Patterns, func(i, j int) bool {
+		return lib.Patterns[i].Priority > lib.Patterns[j].Priority
+	})
+
+	lib.compiled = true
+	return nil
+}
+
+// Match tests a string against all applicable patterns and returns matches.
+// agentType filters patterns; use "*" or empty string for all patterns.
+func (lib *PatternLibrary) Match(content string, agentType string) []PatternMatch {
+	lib.mu.RLock()
+	defer lib.mu.RUnlock()
+
+	agentType = normalizeAgentType(agentType)
+
+	var matches []PatternMatch
+
+	for _, p := range lib.Patterns {
+		// Skip patterns for other agents (unless pattern is for all agents)
+		if p.Agent != "*" && p.Agent != "" && agentType != "" && p.Agent != agentType {
+			continue
+		}
+
+		// A plain shell prompt in a known-agent pane usually means the agent exited
+		// back to the shell, not that it is idle at its own prompt.
+		if p.Agent == "*" && isGenericShellIdlePattern(p.Name) && isKnownAgentPatternType(agentType) {
+			continue
+		}
+
+		if p.Regex != nil && p.Regex.MatchString(content) {
+			matches = append(matches, PatternMatch{
+				Pattern:  p.Name,
+				State:    p.State,
+				Category: p.Category,
+				Priority: p.Priority,
+			})
+		}
+	}
+
+	return matches
+}
+
+// MatchFirst returns the first (highest priority) matching pattern.
+// Returns nil if no patterns match.
+func (lib *PatternLibrary) MatchFirst(content string, agentType string) *PatternMatch {
+	matches := lib.Match(content, agentType)
+	if len(matches) == 0 {
+		return nil
+	}
+	return &matches[0]
+}
+
+// MatchByCategory returns matches filtered by category.
+func (lib *PatternLibrary) MatchByCategory(content string, agentType string, category PatternCategory) []PatternMatch {
+	lib.mu.RLock()
+	defer lib.mu.RUnlock()
+
+	agentType = normalizeAgentType(agentType)
+
+	var matches []PatternMatch
+
+	for _, p := range lib.Patterns {
+		if p.Category != category {
+			continue
+		}
+
+		// Skip patterns for other agents
+		if p.Agent != "*" && p.Agent != "" && agentType != "" && p.Agent != agentType {
+			continue
+		}
+
+		// Keep shell fallback prompts out of known-agent panes; they indicate an
+		// exited agent rather than an idle agent prompt.
+		if p.Agent == "*" && isGenericShellIdlePattern(p.Name) && isKnownAgentPatternType(agentType) {
+			continue
+		}
+
+		if p.Regex != nil && p.Regex.MatchString(content) {
+			matches = append(matches, PatternMatch{
+				Pattern:  p.Name,
+				State:    p.State,
+				Category: p.Category,
+				Priority: p.Priority,
+			})
+		}
+	}
+
+	return matches
+}
+
+// HasError checks if content contains any error pattern.
+func (lib *PatternLibrary) HasError(content string, agentType string) bool {
+	matches := lib.MatchByCategory(content, agentType, CategoryError)
+	return len(matches) > 0
+}
+
+// HasIdlePrompt checks if content contains an idle prompt pattern.
+func (lib *PatternLibrary) HasIdlePrompt(content string, agentType string) bool {
+	matches := lib.MatchByCategory(content, agentType, CategoryIdle)
+	return len(matches) > 0
+}
+
+// HasThinkingIndicator checks if content contains a thinking indicator.
+func (lib *PatternLibrary) HasThinkingIndicator(content string, agentType string) bool {
+	matches := lib.MatchByCategory(content, agentType, CategoryThinking)
+	return len(matches) > 0
+}
+
+// HasCompletionSignal checks if content contains a completion signal.
+func (lib *PatternLibrary) HasCompletionSignal(content string, agentType string) bool {
+	matches := lib.MatchByCategory(content, agentType, CategoryCompletion)
+	return len(matches) > 0
+}
+
+// PatternMatch represents a successful pattern match.
+type PatternMatch struct {
+	Pattern  string          `json:"pattern"`
+	State    AgentState      `json:"state"`
+	Category PatternCategory `json:"category"`
+	Priority int             `json:"priority"`
+}
+
+// DefaultLibrary is the shared default pattern library.
+var DefaultLibrary = NewPatternLibrary()
+
+// MatchFirstPattern returns the first matching pattern from the default library.
+func MatchFirstPattern(content string, agentType string) *PatternMatch {
+	return DefaultLibrary.MatchFirst(content, agentType)
+}
+
+func isGenericShellIdlePattern(name string) bool {
+	switch name {
+	case "shell_dollar", "shell_percent", "shell_hash":
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownAgentPatternType(agentType string) bool {
+	switch normalizeAgentType(agentType) {
+	case "claude", "codex", "gemini", "antigravity", "grok", "cursor", "windsurf", "aider", "oc", "omp", "ollama":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeAgentType(t string) string {
+	return ResolveAgentType(t)
+}
+
+// ResolveAgentType maps agent type aliases to canonical names.
+// For example: "cc" -> "claude", "cod" -> "codex"
+func ResolveAgentType(t string) string {
+	trimmed := strings.TrimSpace(t)
+
+	switch agent.AgentType(trimmed).Canonical() {
+	case agent.AgentTypeClaudeCode:
+		return "claude"
+	case agent.AgentTypeCodex:
+		return "codex"
+	case agent.AgentTypeGemini:
+		return "gemini"
+	case agent.AgentTypeAntigravity:
+		return "antigravity"
+	case agent.AgentTypeGrok:
+		return "grok"
+	case agent.AgentTypeCursor:
+		return "cursor"
+	case agent.AgentTypeWindsurf:
+		return "windsurf"
+	case agent.AgentTypeAider:
+		return "aider"
+	case agent.AgentTypeOpencode:
+		return "oc"
+	case agent.AgentTypeOmp:
+		return "omp"
+	case agent.AgentTypeOllama:
+		return "ollama"
+	case agent.AgentTypeUser:
+		return "user"
+	case agent.AgentTypeUnknown:
+		return "unknown"
+	default:
+		return strings.ToLower(trimmed)
+	}
+}

@@ -48,7 +48,8 @@ func TestEveryLeafHelpPrintsUsageAndRunsNothing(t *testing.T) {
 		{"admin", "recover", "resume"}, {"admin", "restore"}, {"admin", "export"}, {"admin", "import"},
 		{"admin", "takeover"}}
 	_, help, _ := run("help")
-	for _, m := range regexp.MustCompile(`(?m)^  nhm ([a-z]+)`).FindAllStringSubmatch(help, -1) {
+	// A verb's name may hold hyphens (get-all-session-text).
+	for _, m := range regexp.MustCompile(`(?m)^  nhm ([a-z][a-z-]*)`).FindAllStringSubmatch(help, -1) {
 		if m[1] != "help" {
 			leaves = append(leaves, []string{m[1]})
 		}

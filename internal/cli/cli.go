@@ -50,6 +50,8 @@ Usage:
                          search the panes' recent output, as ntm's grep
   nhm errors [session] [--panes N,…] [-C N] [-n N] [--cc|--cod|--gmi|--agy] [--json]
                          the error lines in the agents' recent output, as ntm's errors
+  nhm get-all-session-text [--lines N] [--compact]   (also gast, swarm-status)
+                         every session's panes as a markdown table, as ntm's
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm admin takeover (--dry-run | --yes)

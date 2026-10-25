@@ -74,6 +74,11 @@ var verbUsage = map[string]string{
 	"modes":         modesUsage,
 	"template":      templateUsage,
 	"ensemble":      ensembleUsage,
+
+	// ntm's get-all-session-text and its aliases.
+	"get-all-session-text": gastUsage,
+	"gast":                 gastUsage,
+	"swarm-status":         gastUsage,
 }
 
 // adminUsage is the usage text of the admin verb that args (after
