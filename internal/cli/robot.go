@@ -88,6 +88,7 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	snap := fs.Bool("robot-snapshot", false, "")
 	caps := fs.Bool("robot-capabilities", false, "")
 	version := fs.Bool("robot-version", false, "")
+	docs := fs.String("robot-docs", "", "")
 	activity := fs.String("robot-activity", "", "")
 	tail := fs.String("robot-tail", "", "")
 	health := fs.String("robot-health", "", "")
@@ -110,8 +111,12 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if code, done := applyRobotRoot(root, now); done {
 		return code
 	}
+	// --robot-docs counts when given, empty too (ntm's Changed): an empty
+	// topic is the topic index.
+	docsGiven := false
+	fs.Visit(func(f *flag.Flag) { docsGiven = docsGiven || f.Name == "robot-docs" })
 	chosen := 0
-	for _, b := range []bool{*status, *snap, *caps, *version, *activity != "", *tail != "", *health != ""} {
+	for _, b := range []bool{*status, *snap, *caps, *version, docsGiven, *activity != "", *tail != "", *health != ""} {
 		if b {
 			chosen++
 		}
@@ -124,6 +129,13 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	}
 	if *version {
 		return robotWrite(stdout, robotVersion(*format, now), robotOK)
+	}
+	if docsGiven {
+		out := robot.GetDocs(*docs, Version, robotDocsCommands(), *format, now)
+		if !out.Success {
+			return robotWrite(stdout, out, robotError)
+		}
+		return robotWrite(stdout, out, robotOK)
 	}
 	var page robot.PaginationOptions
 	if *status || *snap {
@@ -323,6 +335,46 @@ func robotCapabilities(format string, now time.Time) robot.CapabilitiesOutput {
 		out.Commands = append(out.Commands, cmd)
 	}
 	return out
+}
+
+// robotDocsCommands is the commands topic of --robot-docs: each robot row
+// of the inventory that nhm implements, its form as the row gives it,
+// under ntm's headings, so the docs never name a flag that nhm refuses.
+func robotDocsCommands() []robot.DocsSection {
+	headings := []string{"State Inspection", "Agent Control", "Session Management", "Utilities"}
+	bodies := map[string][]string{}
+	for _, r := range compat.Rows() {
+		flagName := robotRowFlag(r.Form)
+		if flagName == "" || r.Disposition != "implemented" {
+			continue
+		}
+		heading, ok := robotDocsHeading[flagName]
+		if !ok {
+			heading = "State Inspection"
+		}
+		// The form is the row's first code span; a note after it is the
+		// inventory's, not the command's.
+		form, _, _ := strings.Cut(strings.TrimPrefix(r.Form, "`"), "`")
+		bodies[heading] = append(bodies[heading], strings.ReplaceAll(form, `\|`, "|"))
+	}
+	var out []robot.DocsSection
+	for _, h := range headings {
+		if len(bodies[h]) > 0 {
+			out = append(out, robot.DocsSection{Heading: h, Body: strings.Join(bodies[h], "\n")})
+		}
+	}
+	return out
+}
+
+// robotDocsHeading is the heading that ntm's commands topic lists a
+// robot flag under; any other flag is State Inspection.
+var robotDocsHeading = map[string]string{
+	"--robot-send": "Agent Control", "--robot-send-receipt": "Agent Control", "--robot-ack": "Agent Control",
+	"--robot-interrupt": "Agent Control", "--robot-wait": "Agent Control", "--robot-assign": "Agent Control",
+	"--robot-spawn": "Session Management", "--robot-capabilities": "Utilities", "--robot-docs": "Utilities",
+	"--robot-version": "Utilities", "--robot-help": "Utilities", "--robot-schema": "Utilities",
+	"--robot-format": "Utilities", "--robot-output-format": "Utilities", "--robot-verbosity": "Utilities",
+	"--robot-limit": "Utilities", "--robot-offset": "Utilities",
 }
 
 // robotVersion is ntm's GetVersion: the build and the Go runtime, with

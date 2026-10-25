@@ -114,7 +114,8 @@ Usage:
   nhm compatibility status [--json]
                          the ntm forms implemented, deferred, waived
   nhm --robot-status | --robot-snapshot | --robot-activity=S |
-      --robot-tail=S [--lines N] | --robot-capabilities | --robot-version
+      --robot-tail=S [--lines N] | --robot-capabilities | --robot-version |
+      --robot-docs=TOPIC
                          ntm's robot read flags, ntm's types
   nhm --robot-status | --robot-snapshot [--robot-limit=N] [--robot-offset=N]
                          a page of the sessions, ntm's pagination
