@@ -1,7 +1,8 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/icons/icons.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
 // Local changes: this header; the import path of ntm's agent types
-// (internal/ui/tui/agent).
+// (internal/ui/tui/agent); nhm's environment names NHM_USE_ICONS and
+// NHM_ICONS in place of ntm's NTM_* names (nhm-2p6.28.3).
 
 package icons
 
@@ -328,10 +329,10 @@ func (i IconSet) WithFallback(fallback IconSet) IconSet {
 // HasNerdFonts detects if the terminal likely supports Nerd Fonts
 func HasNerdFonts() bool {
 	// Explicit user preference
-	if os.Getenv("NTM_USE_ICONS") == "1" || os.Getenv("NERD_FONTS") == "1" {
+	if os.Getenv("NHM_USE_ICONS") == "1" || os.Getenv("NERD_FONTS") == "1" {
 		return true
 	}
-	if os.Getenv("NTM_USE_ICONS") == "0" || os.Getenv("NERD_FONTS") == "0" {
+	if os.Getenv("NHM_USE_ICONS") == "0" || os.Getenv("NERD_FONTS") == "0" {
 		return false
 	}
 
@@ -398,7 +399,7 @@ func HasUnicode() bool {
 // Detect returns the appropriate icon set for the current terminal
 func Detect() IconSet {
 	// Explicit preference via env var
-	switch os.Getenv("NTM_ICONS") {
+	switch os.Getenv("NHM_ICONS") {
 	case "nerd", "nerdfonts":
 		return NerdFonts.WithFallback(Unicode).WithFallback(ASCII)
 	case "unicode":
@@ -414,8 +415,8 @@ func Detect() IconSet {
 		}
 	}
 
-	// Legacy: NTM_USE_ICONS or NERD_FONTS env vars (explicit opt-in)
-	if os.Getenv("NTM_USE_ICONS") == "1" || os.Getenv("NERD_FONTS") == "1" {
+	// Legacy: NHM_USE_ICONS or NERD_FONTS env vars (explicit opt-in)
+	if os.Getenv("NHM_USE_ICONS") == "1" || os.Getenv("NERD_FONTS") == "1" {
 		return NerdFonts.WithFallback(Unicode).WithFallback(ASCII)
 	}
 

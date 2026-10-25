@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/components/spring_manager_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header only.
+// Local changes: this header; nhm's NHM_* environment names in place of
+// ntm's NTM_* (nhm-2p6.28.3).
 
 package components
 
@@ -66,9 +67,9 @@ func TestSpringManagerDeadZone(t *testing.T) {
 }
 
 func TestSpringManagerReducedMotion(t *testing.T) {
-	// Clear NTM_ANIMATIONS so NTM_REDUCE_MOTION takes precedence
-	t.Setenv("NTM_ANIMATIONS", "")
-	t.Setenv("NTM_REDUCE_MOTION", "1")
+	// Clear NHM_ANIMATIONS so NHM_REDUCE_MOTION takes precedence
+	t.Setenv("NHM_ANIMATIONS", "")
+	t.Setenv("NHM_REDUCE_MOTION", "1")
 	t.Setenv("CI", "")
 	t.Setenv("TMUX", "")
 

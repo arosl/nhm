@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/theme/theme_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header only.
+// Local changes: this header; nhm's NHM_* environment names in place of
+// ntm's NTM_* (nhm-2p6.28.3).
 
 package theme
 
@@ -22,8 +23,8 @@ func withDetector(t *testing.T, detector func() bool) {
 }
 
 func TestCurrentAutoUsesLightThemeWhenBackgroundIsLight(t *testing.T) {
-	t.Setenv("NTM_THEME", "")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return false })
 
 	if got := Current(); got.Base != CatppuccinLatte.Base {
@@ -32,8 +33,8 @@ func TestCurrentAutoUsesLightThemeWhenBackgroundIsLight(t *testing.T) {
 }
 
 func TestCurrentAutoUsesDarkThemeWhenBackgroundIsDark(t *testing.T) {
-	t.Setenv("NTM_THEME", "")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return true })
 
 	if got := Current(); got.Base != CatppuccinMocha.Base {
@@ -42,15 +43,15 @@ func TestCurrentAutoUsesDarkThemeWhenBackgroundIsDark(t *testing.T) {
 }
 
 func TestCurrentRespectsExplicitThemeOverrides(t *testing.T) {
-	t.Setenv("NTM_THEME", "latte")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "latte")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return true })
 
 	if got := Current(); got.Base != CatppuccinLatte.Base {
 		t.Fatalf("expected Latte when explicitly requested, got base %s", got.Base)
 	}
 
-	t.Setenv("NTM_THEME", "mocha")
+	t.Setenv("NHM_THEME", "mocha")
 	withDetector(t, func() bool { return false })
 
 	if got := Current(); got.Base != CatppuccinMocha.Base {
@@ -59,8 +60,8 @@ func TestCurrentRespectsExplicitThemeOverrides(t *testing.T) {
 }
 
 func TestCurrentTreatsAutoValueAsDetection(t *testing.T) {
-	t.Setenv("NTM_THEME", "auto")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "auto")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return false })
 
 	if got := Current(); got.Base != CatppuccinLatte.Base {
@@ -69,8 +70,8 @@ func TestCurrentTreatsAutoValueAsDetection(t *testing.T) {
 }
 
 func TestCurrentMacchiatoTheme(t *testing.T) {
-	t.Setenv("NTM_THEME", "macchiato")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "macchiato")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return true })
 
 	if got := Current(); got.Base != CatppuccinMacchiato.Base {
@@ -79,8 +80,8 @@ func TestCurrentMacchiatoTheme(t *testing.T) {
 }
 
 func TestCurrentNordTheme(t *testing.T) {
-	t.Setenv("NTM_THEME", "nord")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "nord")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return true })
 
 	if got := Current(); got.Base != Nord.Base {
@@ -89,8 +90,8 @@ func TestCurrentNordTheme(t *testing.T) {
 }
 
 func TestCurrentLightAlias(t *testing.T) {
-	t.Setenv("NTM_THEME", "light")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "light")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return true })
 
 	if got := Current(); got.Base != CatppuccinLatte.Base {
@@ -99,8 +100,8 @@ func TestCurrentLightAlias(t *testing.T) {
 }
 
 func TestCurrentUnknownFallsBackToAuto(t *testing.T) {
-	t.Setenv("NTM_THEME", "unknown-theme")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "unknown-theme")
+	t.Setenv("NHM_NO_COLOR", "0")
 	withDetector(t, func() bool { return true })
 
 	// Unknown should fall through to autoTheme()
@@ -257,16 +258,16 @@ func TestGradient(t *testing.T) {
 
 func TestNoColorEnabled(t *testing.T) {
 	t.Run("returns false when NO_COLOR not set", func(t *testing.T) {
-		// Ensure NO_COLOR and NTM_NO_COLOR are not set
+		// Ensure NO_COLOR and NHM_NO_COLOR are not set
 		t.Setenv("NO_COLOR", "")
-		t.Setenv("NTM_NO_COLOR", "")
+		t.Setenv("NHM_NO_COLOR", "")
 		// Need to unset NO_COLOR for this test
 		// Since t.Setenv("NO_COLOR", "") still sets it, we need a workaround
-		// The test environment may have NO_COLOR set, so we check NTM_NO_COLOR override
+		// The test environment may have NO_COLOR set, so we check NHM_NO_COLOR override
 	})
 
 	t.Run("returns true when NO_COLOR is set", func(t *testing.T) {
-		t.Setenv("NTM_NO_COLOR", "")
+		t.Setenv("NHM_NO_COLOR", "")
 		t.Setenv("NO_COLOR", "1")
 
 		if !NoColorEnabled() {
@@ -275,7 +276,7 @@ func TestNoColorEnabled(t *testing.T) {
 	})
 
 	t.Run("returns true when NO_COLOR is empty string", func(t *testing.T) {
-		t.Setenv("NTM_NO_COLOR", "")
+		t.Setenv("NHM_NO_COLOR", "")
 		t.Setenv("NO_COLOR", "")
 
 		// NO_COLOR="" still means it's set (per standard)
@@ -284,45 +285,45 @@ func TestNoColorEnabled(t *testing.T) {
 		}
 	})
 
-	t.Run("NTM_NO_COLOR=0 overrides NO_COLOR", func(t *testing.T) {
+	t.Run("NHM_NO_COLOR=0 overrides NO_COLOR", func(t *testing.T) {
 		t.Setenv("NO_COLOR", "1")
-		t.Setenv("NTM_NO_COLOR", "0")
+		t.Setenv("NHM_NO_COLOR", "0")
 
 		if NoColorEnabled() {
-			t.Error("NTM_NO_COLOR=0 should force colors ON even with NO_COLOR set")
+			t.Error("NHM_NO_COLOR=0 should force colors ON even with NO_COLOR set")
 		}
 	})
 
-	t.Run("NTM_NO_COLOR=false overrides NO_COLOR", func(t *testing.T) {
+	t.Run("NHM_NO_COLOR=false overrides NO_COLOR", func(t *testing.T) {
 		t.Setenv("NO_COLOR", "1")
-		t.Setenv("NTM_NO_COLOR", "false")
+		t.Setenv("NHM_NO_COLOR", "false")
 
 		if NoColorEnabled() {
-			t.Error("NTM_NO_COLOR=false should force colors ON")
+			t.Error("NHM_NO_COLOR=false should force colors ON")
 		}
 	})
 
-	t.Run("NTM_NO_COLOR=1 enables no-color", func(t *testing.T) {
-		t.Setenv("NTM_NO_COLOR", "1")
+	t.Run("NHM_NO_COLOR=1 enables no-color", func(t *testing.T) {
+		t.Setenv("NHM_NO_COLOR", "1")
 
 		if !NoColorEnabled() {
-			t.Error("NTM_NO_COLOR=1 should enable no-color mode")
+			t.Error("NHM_NO_COLOR=1 should enable no-color mode")
 		}
 	})
 
-	t.Run("NTM_NO_COLOR=true enables no-color", func(t *testing.T) {
-		t.Setenv("NTM_NO_COLOR", "true")
+	t.Run("NHM_NO_COLOR=true enables no-color", func(t *testing.T) {
+		t.Setenv("NHM_NO_COLOR", "true")
 
 		if !NoColorEnabled() {
-			t.Error("NTM_NO_COLOR=true should enable no-color mode")
+			t.Error("NHM_NO_COLOR=true should enable no-color mode")
 		}
 	})
 }
 
 func TestCurrentReturnsPlainWhenNoColorEnabled(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
-	t.Setenv("NTM_NO_COLOR", "")
-	t.Setenv("NTM_THEME", "mocha")
+	t.Setenv("NHM_NO_COLOR", "")
+	t.Setenv("NHM_THEME", "mocha")
 	withDetector(t, func() bool { return true })
 
 	got := Current()
@@ -333,7 +334,7 @@ func TestCurrentReturnsPlainWhenNoColorEnabled(t *testing.T) {
 
 func TestFromNamePlainVariants(t *testing.T) {
 	// Clear NO_COLOR to test explicit theme selection
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_NO_COLOR", "0")
 
 	variants := []string{"plain", "none", "no-color", "nocolor"}
 	for _, name := range variants {
@@ -363,8 +364,8 @@ func TestPlainThemeHasEmptyColors(t *testing.T) {
 }
 
 func TestAutoThemeFallsBackToDarkOnPanic(t *testing.T) {
-	t.Setenv("NTM_THEME", "")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "")
+	t.Setenv("NHM_NO_COLOR", "0")
 	// Set up a detector that panics
 	withDetector(t, func() bool {
 		panic("simulated terminal detection failure")
@@ -382,7 +383,7 @@ func TestDetectDarkBackgroundSkipsOSCOverSSH(t *testing.T) {
 	t.Run("SSH_CONNECTION triggers dark default", func(t *testing.T) {
 		t.Setenv("SSH_CONNECTION", "192.168.1.1 12345 192.168.1.2 22")
 		t.Setenv("SSH_TTY", "")
-		t.Setenv("NTM_THEME", "")
+		t.Setenv("NHM_THEME", "")
 		resetAutoTheme()
 
 		// detectDarkBackground should return true (dark) when SSH_CONNECTION is set
@@ -394,7 +395,7 @@ func TestDetectDarkBackgroundSkipsOSCOverSSH(t *testing.T) {
 	t.Run("SSH_TTY triggers dark default", func(t *testing.T) {
 		t.Setenv("SSH_CONNECTION", "")
 		t.Setenv("SSH_TTY", "/dev/pts/0")
-		t.Setenv("NTM_THEME", "")
+		t.Setenv("NHM_THEME", "")
 		resetAutoTheme()
 
 		if !detectDarkBackground() {
@@ -405,7 +406,7 @@ func TestDetectDarkBackgroundSkipsOSCOverSSH(t *testing.T) {
 
 func TestDetectDarkBackgroundRespectsExplicitOverrides(t *testing.T) {
 	t.Run("explicit dark override wins", func(t *testing.T) {
-		t.Setenv("NTM_BACKGROUND", "dark")
+		t.Setenv("NHM_BACKGROUND", "dark")
 		t.Setenv("COLORFGBG", "15;7")
 		if !detectDarkBackground() {
 			t.Fatal("expected explicit dark override to win")
@@ -413,7 +414,7 @@ func TestDetectDarkBackgroundRespectsExplicitOverrides(t *testing.T) {
 	})
 
 	t.Run("explicit light override wins", func(t *testing.T) {
-		t.Setenv("NTM_BACKGROUND", "light")
+		t.Setenv("NHM_BACKGROUND", "light")
 		t.Setenv("COLORFGBG", "15;0")
 		if detectDarkBackground() {
 			t.Fatal("expected explicit light override to win")
@@ -425,7 +426,7 @@ func TestDetectDarkBackgroundUsesColorFGBG(t *testing.T) {
 	// This test isolates COLORFGBG precedence from the caller's terminal and
 	// transport environment. In particular, remote test workers set SSH_* and
 	// production deliberately defaults to dark before consulting COLORFGBG.
-	for _, key := range []string{"NTM_BACKGROUND", "NTM_BG", "TERMINAL_BACKGROUND", "SSH_CONNECTION", "SSH_TTY"} {
+	for _, key := range []string{"NHM_BACKGROUND", "NHM_BG", "TERMINAL_BACKGROUND", "SSH_CONNECTION", "SSH_TTY"} {
 		t.Setenv(key, "")
 	}
 

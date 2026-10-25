@@ -1,7 +1,8 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/styles/styles_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
 // Local changes: this header; TestAnimationsEnabledAutoDisablesInHerdr
-// is nhm's.
+// is nhm's; nhm's NHM_* environment names in place of ntm's NTM_*
+// (nhm-2p6.28.3).
 
 package styles
 
@@ -122,8 +123,8 @@ func TestGradientText(t *testing.T) {
 }
 
 func TestShimmer(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "1")
-	t.Setenv("NTM_REDUCE_MOTION", "0")
+	t.Setenv("NHM_ANIMATIONS", "1")
+	t.Setenv("NHM_REDUCE_MOTION", "0")
 	t.Setenv("TMUX", "")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")
@@ -170,8 +171,8 @@ func TestShimmer(t *testing.T) {
 	})
 
 	t.Run("reduced motion produces stable output", func(t *testing.T) {
-		t.Setenv("NTM_ANIMATIONS", "")
-		t.Setenv("NTM_REDUCE_MOTION", "1")
+		t.Setenv("NHM_ANIMATIONS", "")
+		t.Setenv("NHM_REDUCE_MOTION", "1")
 
 		r1 := Shimmer("hello", 0, "#ff0000", "#0000ff")
 		r2 := Shimmer("hello", 50, "#ff0000", "#0000ff")
@@ -182,8 +183,8 @@ func TestShimmer(t *testing.T) {
 }
 
 func TestPulse(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "1")
-	t.Setenv("NTM_REDUCE_MOTION", "0")
+	t.Setenv("NHM_ANIMATIONS", "1")
+	t.Setenv("NHM_REDUCE_MOTION", "0")
 	t.Setenv("TMUX", "")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")
@@ -204,8 +205,8 @@ func TestPulse(t *testing.T) {
 	}
 
 	t.Run("reduced motion disables pulsing", func(t *testing.T) {
-		t.Setenv("NTM_ANIMATIONS", "")
-		t.Setenv("NTM_REDUCE_MOTION", "1")
+		t.Setenv("NHM_ANIMATIONS", "")
+		t.Setenv("NHM_REDUCE_MOTION", "1")
 
 		want := lipgloss.Color("#ff0000")
 		c1 := Pulse("#ff0000", 0)
@@ -217,8 +218,8 @@ func TestPulse(t *testing.T) {
 }
 
 func TestAnimationsEnabledAutoDisablesInTmux(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "")
-	t.Setenv("NTM_REDUCE_MOTION", "")
+	t.Setenv("NHM_ANIMATIONS", "")
+	t.Setenv("NHM_REDUCE_MOTION", "")
 	t.Setenv("TMUX", "/tmp/tmux-123/default,1,0")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")
@@ -237,8 +238,8 @@ func TestAnimationsEnabledAutoDisablesInTmux(t *testing.T) {
 func TestAnimationsEnabledAutoDisablesInHerdr(t *testing.T) {
 	for _, env := range []string{"HERDR_ENV", "HERDR_SOCKET_PATH"} {
 		t.Run(env, func(t *testing.T) {
-			t.Setenv("NTM_ANIMATIONS", "")
-			t.Setenv("NTM_REDUCE_MOTION", "")
+			t.Setenv("NHM_ANIMATIONS", "")
+			t.Setenv("NHM_REDUCE_MOTION", "")
 			t.Setenv("TMUX", "")
 			t.Setenv("STY", "")
 			t.Setenv("CI", "")
@@ -256,8 +257,8 @@ func TestAnimationsEnabledAutoDisablesInHerdr(t *testing.T) {
 }
 
 func TestAnimationsEnabledExplicitOverride(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "1")
-	t.Setenv("NTM_REDUCE_MOTION", "")
+	t.Setenv("NHM_ANIMATIONS", "1")
+	t.Setenv("NHM_REDUCE_MOTION", "")
 	t.Setenv("TMUX", "/tmp/tmux-123/default,1,0")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")
@@ -265,7 +266,7 @@ func TestAnimationsEnabledExplicitOverride(t *testing.T) {
 	t.Setenv("COLORTERM", "truecolor")
 
 	if !AnimationsEnabled() {
-		t.Fatal("expected NTM_ANIMATIONS=1 to force-enable animations")
+		t.Fatal("expected NHM_ANIMATIONS=1 to force-enable animations")
 	}
 	if ReducedMotionEnabled() {
 		t.Fatal("expected reduced motion to stay disabled when animations are forced on")

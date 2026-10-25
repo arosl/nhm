@@ -3,7 +3,9 @@
 // Local changes: this header; the import paths; AnimationsEnabled is
 // also false inside herdr (HERDR_ENV or HERDR_SOCKET_PATH set), as ntm
 // has it inside tmux and screen: herdr is a multiplexer too, and nhm
-// defers animations (plan-v4 section 9).
+// defers animations (plan-v4 section 9); nhm's environment names
+// NHM_ANIMATIONS, NHM_REDUCE_MOTION and NHM_NO_COLOR in place of ntm's
+// NTM_* names (nhm-2p6.28.3).
 
 // Package styles provides advanced styling primitives for stunning TUI effects
 package styles
@@ -43,13 +45,13 @@ func envBool(name string) (bool, bool) {
 // We bias toward stability in multiplexers and limited terminals because repeated
 // full-frame ANSI repaints are the main source of visible flashing/tearing.
 func AnimationsEnabled() bool {
-	if enabled, ok := envBool("NTM_ANIMATIONS"); ok {
+	if enabled, ok := envBool("NHM_ANIMATIONS"); ok {
 		return enabled
 	}
-	if reduced, ok := envBool("NTM_REDUCE_MOTION"); ok && reduced {
+	if reduced, ok := envBool("NHM_REDUCE_MOTION"); ok && reduced {
 		return false
 	}
-	if noColor, ok := envBool("NTM_NO_COLOR"); ok && noColor {
+	if noColor, ok := envBool("NHM_NO_COLOR"); ok && noColor {
 		return false
 	}
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {

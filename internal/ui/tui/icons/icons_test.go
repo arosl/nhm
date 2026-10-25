@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/icons/icons_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header only.
+// Local changes: this header; nhm's NHM_* environment names in place of
+// ntm's NTM_* (nhm-2p6.28.3).
 
 package icons
 
@@ -46,8 +47,8 @@ func assertMaxIconWidth(t *testing.T, icons IconSet, maxWidth int) {
 
 func TestDetectDefaults(t *testing.T) {
 	// Clear env vars
-	os.Unsetenv("NTM_ICONS")
-	os.Unsetenv("NTM_USE_ICONS")
+	os.Unsetenv("NHM_ICONS")
+	os.Unsetenv("NHM_USE_ICONS")
 	os.Unsetenv("NERD_FONTS")
 
 	// Should default to ASCII
@@ -58,8 +59,8 @@ func TestDetectDefaults(t *testing.T) {
 }
 
 func TestDetectExplicit(t *testing.T) {
-	os.Setenv("NTM_ICONS", "unicode")
-	defer os.Unsetenv("NTM_ICONS")
+	os.Setenv("NHM_ICONS", "unicode")
+	defer os.Unsetenv("NHM_ICONS")
 
 	icons := Detect()
 	if icons.Session != "◆" { // Unicode session
@@ -68,7 +69,7 @@ func TestDetectExplicit(t *testing.T) {
 	assertNoEmptyIcons(t, icons)
 	assertMaxIconWidth(t, icons, 2)
 
-	os.Setenv("NTM_ICONS", "ascii")
+	os.Setenv("NHM_ICONS", "ascii")
 	icons = Detect()
 	if icons.Session != "[]" {
 		t.Errorf("Expected ASCII, got session=%q", icons.Session)
@@ -77,11 +78,11 @@ func TestDetectExplicit(t *testing.T) {
 }
 
 func TestDetectAuto(t *testing.T) {
-	os.Setenv("NTM_ICONS", "auto")
-	defer os.Unsetenv("NTM_ICONS")
-	os.Setenv("NTM_USE_ICONS", "0")
+	os.Setenv("NHM_ICONS", "auto")
+	defer os.Unsetenv("NHM_ICONS")
+	os.Setenv("NHM_USE_ICONS", "0")
 	os.Setenv("NERD_FONTS", "0")
-	defer os.Unsetenv("NTM_USE_ICONS")
+	defer os.Unsetenv("NHM_USE_ICONS")
 	defer os.Unsetenv("NERD_FONTS")
 
 	// This depends on environment, but should return something valid
@@ -252,13 +253,13 @@ func TestSetDefaultAndCurrent(t *testing.T) {
 
 func TestDetectNerdFonts(t *testing.T) {
 	// Save and restore env
-	for _, key := range []string{"NTM_ICONS", "NTM_USE_ICONS", "NERD_FONTS"} {
+	for _, key := range []string{"NHM_ICONS", "NHM_USE_ICONS", "NERD_FONTS"} {
 		old := os.Getenv(key)
 		defer os.Setenv(key, old)
 	}
 
-	os.Setenv("NTM_ICONS", "nerd")
-	os.Unsetenv("NTM_USE_ICONS")
+	os.Setenv("NHM_ICONS", "nerd")
+	os.Unsetenv("NHM_USE_ICONS")
 	os.Unsetenv("NERD_FONTS")
 
 	icons := Detect()
@@ -270,18 +271,18 @@ func TestDetectNerdFonts(t *testing.T) {
 }
 
 func TestDetectLegacyEnvVar(t *testing.T) {
-	for _, key := range []string{"NTM_ICONS", "NTM_USE_ICONS", "NERD_FONTS"} {
+	for _, key := range []string{"NHM_ICONS", "NHM_USE_ICONS", "NERD_FONTS"} {
 		old := os.Getenv(key)
 		defer os.Setenv(key, old)
 	}
 
-	os.Unsetenv("NTM_ICONS")
-	os.Setenv("NTM_USE_ICONS", "1")
+	os.Unsetenv("NHM_ICONS")
+	os.Setenv("NHM_USE_ICONS", "1")
 	os.Unsetenv("NERD_FONTS")
 
 	icons := Detect()
 	assertNoEmptyIcons(t, icons)
-	// Legacy NTM_USE_ICONS=1 should return NerdFonts
+	// Legacy NHM_USE_ICONS=1 should return NerdFonts
 	if icons.Claude != NerdFonts.Claude {
 		t.Errorf("Expected NerdFonts with legacy env, got Claude=%q", icons.Claude)
 	}

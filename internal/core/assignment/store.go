@@ -5,7 +5,9 @@
 // StorageDir is under nhm's state root (store.StateRoot) in place of
 // ~/.ntm, and nhm names a store "<instance id>.<workspace id>" (one
 // directory level, as the outcome scan reads), so one ledger serves one
-// herdr workspace of one enrolled instance (ACFS acfs-f2mc.2, nhm-i85).
+// herdr workspace of one enrolled instance (ACFS acfs-f2mc.2, nhm-i85);
+// the two E2E failpoints read nhm's NHM_TEST_* names in place of ntm's
+// NTM_TEST_* (nhm-2p6.28.3).
 
 // Package assignment provides assignment tracking for bead-to-agent mappings.
 package assignment
@@ -48,12 +50,12 @@ const (
 	// assignmentSaveFailAfterBackupEnv is an E2E-only failpoint. Its value is a
 	// bead ID; the save fails after publishing a snapshot containing that bead's
 	// delivery receipt to the backup, but before replacing the primary.
-	assignmentSaveFailAfterBackupEnv = "NTM_TEST_ASSIGNMENT_SAVE_FAIL_AFTER_BACKUP"
+	assignmentSaveFailAfterBackupEnv = "NHM_TEST_ASSIGNMENT_SAVE_FAIL_AFTER_BACKUP"
 
 	// completionAckFailOnceEnv is an E2E-only failpoint. Its value is a bead ID;
 	// the first acknowledgement attempt for that bead fails before persistence,
 	// while later attempts in the same process proceed normally.
-	completionAckFailOnceEnv = "NTM_TEST_COMPLETION_ACK_FAIL_ONCE"
+	completionAckFailOnceEnv = "NHM_TEST_COMPLETION_ACK_FAIL_ONCE"
 )
 
 var completionAckFailures sync.Map

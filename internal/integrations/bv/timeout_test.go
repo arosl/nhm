@@ -1,6 +1,8 @@
 // Taken in part from ntm (github.com/Dicklesworthstone/ntm)
 // internal/bv/timeout_test.go at commit 9d5ed977; see LICENSE in this
-// directory and PROVENANCE.md. Local changes: this header; imports. Kept:
+// directory and PROVENANCE.md. Local changes: this header; imports; the
+// env name is nhm's NHM_BV_TIMEOUT, and ntm's NTM_BV_TIMEOUT has no effect
+// (nhm-2p6.28.3). Kept:
 // resetConfiguredTimeout, TestCommandTimeoutPrecedence. Left out:
 // TestGetInsightsHonorsEnvTimeoutWithSlowBV and
 // TestBVChildInheritsCallerBVEnvVars, which run bv through GetInsights
@@ -44,6 +46,12 @@ func TestCommandTimeoutPrecedence(t *testing.T) {
 		t.Fatalf("CommandTimeout() after invalid ConfigureCommandTimeout = %v, want 7s", got)
 	}
 
+	// ntm's name is not nhm's.
+	t.Setenv("NTM_BV_TIMEOUT", "3")
+	if got := CommandTimeout(); got != 7*time.Second {
+		t.Fatalf("CommandTimeout() with NTM_BV_TIMEOUT=3 = %v, want configured 7s", got)
+	}
+
 	// Env wins over config.
 	t.Setenv(BVTimeoutEnvVar, "3")
 	if got := CommandTimeout(); got != 3*time.Second {
@@ -54,7 +62,7 @@ func TestCommandTimeoutPrecedence(t *testing.T) {
 	for _, raw := range []string{"abc", "0", "-2", "2.5"} {
 		t.Setenv(BVTimeoutEnvVar, raw)
 		if got := CommandTimeout(); got != 7*time.Second {
-			t.Fatalf("CommandTimeout() with NTM_BV_TIMEOUT=%q = %v, want configured 7s", raw, got)
+			t.Fatalf("CommandTimeout() with NHM_BV_TIMEOUT=%q = %v, want configured 7s", raw, got)
 		}
 	}
 }

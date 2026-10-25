@@ -1,7 +1,8 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/theme/theme.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header only. ntm's environment names (NTM_THEME,
-// NTM_NO_COLOR, NTM_BACKGROUND) stay: a user of ntm sets them already.
+// Local changes: this header; nhm's environment names NHM_THEME,
+// NHM_NO_COLOR, NHM_BACKGROUND and NHM_BG in place of ntm's NTM_* names
+// (nhm-2p6.28.3; the operator, 2026-10-24: never ntm's names).
 
 package theme
 
@@ -313,12 +314,12 @@ var Default = CatppuccinMocha
 // NoColorEnabled returns true if color output should be disabled.
 // Respects the NO_COLOR standard (https://no-color.org/):
 // - If NO_COLOR exists in environment (any value), colors are disabled
-// - NTM_NO_COLOR=1 also disables colors
-// - NTM_NO_COLOR=0 forces colors ON (overrides NO_COLOR)
+// - NHM_NO_COLOR=1 also disables colors
+// - NHM_NO_COLOR=0 forces colors ON (overrides NO_COLOR)
 func NoColorEnabled() bool {
-	// NTM-specific override takes precedence
-	ntmNoColor := strings.TrimSpace(os.Getenv("NTM_NO_COLOR"))
-	switch strings.ToLower(ntmNoColor) {
+	// NHM-specific override takes precedence
+	nhmNoColor := strings.TrimSpace(os.Getenv("NHM_NO_COLOR"))
+	switch strings.ToLower(nhmNoColor) {
 	case "0", "false", "no", "off":
 		return false // Force colors on
 	case "1", "true", "yes", "on":
@@ -361,7 +362,7 @@ var configuredTheme struct {
 }
 
 // SetConfigured records the theme name from configuration. Current falls
-// back to it whenever NTM_THEME is unset, so every caller that builds
+// back to it whenever NHM_THEME is unset, so every caller that builds
 // styles from Current - panels, overlays, lipgloss defaults - agrees with
 // the config without each of them threading the name through.
 func SetConfigured(name string) {
@@ -370,10 +371,10 @@ func SetConfigured(name string) {
 	configuredTheme.Unlock()
 }
 
-// Current returns the theme in effect: an explicit NTM_THEME wins, then the
+// Current returns the theme in effect: an explicit NHM_THEME wins, then the
 // configured theme, then auto-detection.
 func Current() Theme {
-	if env := strings.TrimSpace(os.Getenv("NTM_THEME")); env != "" {
+	if env := strings.TrimSpace(os.Getenv("NHM_THEME")); env != "" {
 		return FromName(env)
 	}
 	configuredTheme.RLock()
@@ -404,7 +405,7 @@ func ApplyLipGlossDefaults(t Theme) {
 }
 
 func explicitDarkBackground() (bool, bool) {
-	for _, key := range []string{"NTM_BACKGROUND", "NTM_BG", "TERMINAL_BACKGROUND"} {
+	for _, key := range []string{"NHM_BACKGROUND", "NHM_BG", "TERMINAL_BACKGROUND"} {
 		switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
 		case "dark":
 			return true, true

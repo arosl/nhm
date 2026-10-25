@@ -188,18 +188,20 @@ func TestRootErrorUnderJSON(t *testing.T) {
 }
 
 // A pass-through verb gets its arguments as given, root flags taken out,
-// except --json and the root flags its own parser defines.
+// except --json and the root flags its own parser defines. --no-color sets
+// nhm's NHM_NO_COLOR, never ntm's NTM_NO_COLOR (nhm-2p6.28.3).
 func TestPassThroughVerbArguments(t *testing.T) {
 	var got []string
-	var noColor string
+	var noColor, ntmNoColor string
 	probe := func(own []string) func(o *rootOptions, stdout, stderr io.Writer) *cobra.Command {
 		return func(o *rootOptions, stdout, stderr io.Writer) *cobra.Command {
 			return legacyVerb{name: "probe", run: func(args []string, _, _ io.Writer) int {
-				got, noColor = args, os.Getenv("NTM_NO_COLOR")
+				got, noColor, ntmNoColor = args, os.Getenv("NHM_NO_COLOR"), os.Getenv("NTM_NO_COLOR")
 				return exitOK
 			}, own: own}.command(o, stdout, stderr)
 		}
 	}
+	t.Setenv("NHM_NO_COLOR", "")
 	t.Setenv("NTM_NO_COLOR", "")
 	for _, c := range []struct {
 		own, args, want []string
@@ -215,11 +217,12 @@ func TestPassThroughVerbArguments(t *testing.T) {
 	} {
 		got, noColor = nil, "unset"
 		code, _, errOut := runWith(probe(c.own), c.args...)
-		if code != 0 || !slices.Equal(got, c.want) || noColor != c.noColor {
-			t.Errorf("own %v, %v: exit %d, args %q, NTM_NO_COLOR %q, stderr %q", c.own, c.args, code, got, noColor, errOut)
+		if code != 0 || !slices.Equal(got, c.want) || noColor != c.noColor || ntmNoColor != "" {
+			t.Errorf("own %v, %v: exit %d, args %q, NHM_NO_COLOR %q, NTM_NO_COLOR %q, stderr %q",
+				c.own, c.args, code, got, noColor, ntmNoColor, errOut)
 		}
-		if v := os.Getenv("NTM_NO_COLOR"); v != "" {
-			t.Errorf("%v: NTM_NO_COLOR outlived the run: %q", c.args, v)
+		if v := os.Getenv("NHM_NO_COLOR"); v != "" {
+			t.Errorf("%v: NHM_NO_COLOR outlived the run: %q", c.args, v)
 		}
 	}
 	// A legacy verb's code passes through as it is (nhm-2p6.1.4 maps it).

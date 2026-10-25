@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/icons/env_detection_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header only.
+// Local changes: this header; nhm's NHM_* environment names in place of
+// ntm's NTM_* (nhm-2p6.28.3).
 
 package icons
 
@@ -13,15 +14,15 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestHasNerdFonts_ExplicitEnable(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "1")
+	t.Setenv("NHM_USE_ICONS", "1")
 	t.Setenv("NERD_FONTS", "")
 	if !HasNerdFonts() {
-		t.Error("expected true with NTM_USE_ICONS=1")
+		t.Error("expected true with NHM_USE_ICONS=1")
 	}
 }
 
 func TestHasNerdFonts_NerdFontsEnv(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "1")
 	if !HasNerdFonts() {
 		t.Error("expected true with NERD_FONTS=1")
@@ -29,15 +30,15 @@ func TestHasNerdFonts_NerdFontsEnv(t *testing.T) {
 }
 
 func TestHasNerdFonts_ExplicitDisable(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "0")
+	t.Setenv("NHM_USE_ICONS", "0")
 	t.Setenv("NERD_FONTS", "")
 	if HasNerdFonts() {
-		t.Error("expected false with NTM_USE_ICONS=0")
+		t.Error("expected false with NHM_USE_ICONS=0")
 	}
 }
 
 func TestHasNerdFonts_NerdFontsDisable(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "0")
 	if HasNerdFonts() {
 		t.Error("expected false with NERD_FONTS=0")
@@ -47,7 +48,7 @@ func TestHasNerdFonts_NerdFontsDisable(t *testing.T) {
 func TestHasNerdFonts_TerminalPrograms(t *testing.T) {
 	for _, prog := range []string{"iTerm.app", "WezTerm", "Alacritty", "kitty", "Hyper"} {
 		t.Run(prog, func(t *testing.T) {
-			t.Setenv("NTM_USE_ICONS", "")
+			t.Setenv("NHM_USE_ICONS", "")
 			t.Setenv("NERD_FONTS", "")
 			t.Setenv("TERM_PROGRAM", prog)
 			t.Setenv("KITTY_WINDOW_ID", "")
@@ -60,7 +61,7 @@ func TestHasNerdFonts_TerminalPrograms(t *testing.T) {
 }
 
 func TestHasNerdFonts_KittyWindowID(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "")
 	t.Setenv("TERM_PROGRAM", "")
 	t.Setenv("KITTY_WINDOW_ID", "42")
@@ -70,7 +71,7 @@ func TestHasNerdFonts_KittyWindowID(t *testing.T) {
 }
 
 func TestHasNerdFonts_WezTermPane(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "")
 	t.Setenv("TERM_PROGRAM", "")
 	t.Setenv("KITTY_WINDOW_ID", "")
@@ -81,7 +82,7 @@ func TestHasNerdFonts_WezTermPane(t *testing.T) {
 }
 
 func TestHasNerdFonts_VSCode(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "")
 	t.Setenv("TERM_PROGRAM", "vscode")
 	t.Setenv("KITTY_WINDOW_ID", "")
@@ -92,7 +93,7 @@ func TestHasNerdFonts_VSCode(t *testing.T) {
 }
 
 func TestHasNerdFonts_256Color(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "")
 	t.Setenv("TERM_PROGRAM", "")
 	t.Setenv("KITTY_WINDOW_ID", "")
@@ -103,7 +104,7 @@ func TestHasNerdFonts_256Color(t *testing.T) {
 }
 
 func TestHasNerdFonts_PlainTerminal(t *testing.T) {
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "")
 	t.Setenv("TERM_PROGRAM", "")
 	t.Setenv("KITTY_WINDOW_ID", "")
@@ -186,8 +187,8 @@ func TestHasUnicode_DefaultTrue(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDetect_AutoWithUnicode(t *testing.T) {
-	t.Setenv("NTM_ICONS", "auto")
-	t.Setenv("NTM_USE_ICONS", "")
+	t.Setenv("NHM_ICONS", "auto")
+	t.Setenv("NHM_USE_ICONS", "")
 	t.Setenv("NERD_FONTS", "")
 	t.Setenv("TERM_PROGRAM", "")
 	t.Setenv("KITTY_WINDOW_ID", "")

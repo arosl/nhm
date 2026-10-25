@@ -2,7 +2,9 @@
 // internal/assignment/atomic_e2e_test.go at commit 9d5ed977; see LICENSE
 // in this directory and PROVENANCE.md. Local changes: this header; the
 // assignment import path; occupant identities are nhm binding ids
-// ("bnd-" and the old tmux pane number as 16 digits) in place of %N.
+// ("bnd-" and the old tmux pane number as 16 digits) in place of %N; the
+// helper's environment names are NHM_ATOMIC_E2E_* in place of ntm's
+// NTM_ATOMIC_E2E_* (nhm-2p6.28.3).
 
 package assignment_test
 
@@ -22,7 +24,7 @@ import (
 	"github.com/arosl/nhm/internal/core/assignment"
 )
 
-const atomicHelperEnv = "NTM_ATOMIC_E2E_HELPER"
+const atomicHelperEnv = "NHM_ATOMIC_E2E_HELPER"
 
 type atomicHelperResult struct {
 	Sent                 bool                        `json:"sent"`
@@ -55,9 +57,9 @@ func TestAtomicAssignmentProcessHelper(t *testing.T) {
 		return
 	}
 
-	session := mustAtomicEnv(t, "NTM_ATOMIC_E2E_SESSION")
+	session := mustAtomicEnv(t, "NHM_ATOMIC_E2E_SESSION")
 	store, err := assignment.LoadStoreStrict(session)
-	if os.Getenv("NTM_ATOMIC_E2E_EXPECT_LOAD_FAILURE") == "1" {
+	if os.Getenv("NHM_ATOMIC_E2E_EXPECT_LOAD_FAILURE") == "1" {
 		if err == nil {
 			t.Fatal("strict helper load unexpectedly accepted unsafe recovery state")
 		}
@@ -69,9 +71,9 @@ func TestAtomicAssignmentProcessHelper(t *testing.T) {
 	}
 	atomicHelperReady(t)
 
-	switch os.Getenv("NTM_ATOMIC_E2E_OPERATION") {
+	switch os.Getenv("NHM_ATOMIC_E2E_OPERATION") {
 	case "stale-save":
-		beadID := mustAtomicEnv(t, "NTM_ATOMIC_E2E_BEAD")
+		beadID := mustAtomicEnv(t, "NHM_ATOMIC_E2E_BEAD")
 		if _, err := store.Assign(beadID, "cross-process assignment", 1, "codex", "Agent", "prompt"); err != nil {
 			t.Fatalf("save stale-baseline assignment: %v", err)
 		}
@@ -83,14 +85,14 @@ func TestAtomicAssignmentProcessHelper(t *testing.T) {
 	case "execute":
 		runAtomicExecuteHelper(t, store)
 	default:
-		t.Fatalf("unknown helper operation %q", os.Getenv("NTM_ATOMIC_E2E_OPERATION"))
+		t.Fatalf("unknown helper operation %q", os.Getenv("NHM_ATOMIC_E2E_OPERATION"))
 	}
 }
 
 func runAtomicDispatchStartHelper(t *testing.T, store *assignment.AssignmentStore) {
-	beadID := mustAtomicEnv(t, "NTM_ATOMIC_E2E_BEAD")
-	key := mustAtomicEnv(t, "NTM_ATOMIC_E2E_KEY")
-	startedAt, err := time.Parse(time.RFC3339Nano, mustAtomicEnv(t, "NTM_ATOMIC_E2E_STARTED_AT"))
+	beadID := mustAtomicEnv(t, "NHM_ATOMIC_E2E_BEAD")
+	key := mustAtomicEnv(t, "NHM_ATOMIC_E2E_KEY")
+	startedAt, err := time.Parse(time.RFC3339Nano, mustAtomicEnv(t, "NHM_ATOMIC_E2E_STARTED_AT"))
 	if err != nil {
 		t.Fatalf("parse dispatch start time: %v", err)
 	}
@@ -109,8 +111,8 @@ func runAtomicDispatchStartHelper(t *testing.T, store *assignment.AssignmentStor
 }
 
 func runAtomicStaleMutationHelper(t *testing.T, store *assignment.AssignmentStore) {
-	beadID := mustAtomicEnv(t, "NTM_ATOMIC_E2E_BEAD")
-	operation := mustAtomicEnv(t, "NTM_ATOMIC_E2E_MUTATION")
+	beadID := mustAtomicEnv(t, "NHM_ATOMIC_E2E_BEAD")
+	operation := mustAtomicEnv(t, "NHM_ATOMIC_E2E_MUTATION")
 	var mutationErr error
 	switch operation {
 	case "remove":
@@ -137,17 +139,17 @@ func runAtomicStaleMutationHelper(t *testing.T, store *assignment.AssignmentStor
 }
 
 func runAtomicExecuteHelper(t *testing.T, store *assignment.AssignmentStore) {
-	beadID := mustAtomicEnv(t, "NTM_ATOMIC_E2E_BEAD")
-	key := mustAtomicEnv(t, "NTM_ATOMIC_E2E_KEY")
-	requestedPaths := splitAtomicList(os.Getenv("NTM_ATOMIC_E2E_PATHS"))
-	requireReservation := os.Getenv("NTM_ATOMIC_E2E_REQUIRE_RESERVATION") == "1"
-	allowDiscovery := os.Getenv("NTM_ATOMIC_E2E_ALLOW_DISCOVERY") == "1"
+	beadID := mustAtomicEnv(t, "NHM_ATOMIC_E2E_BEAD")
+	key := mustAtomicEnv(t, "NHM_ATOMIC_E2E_KEY")
+	requestedPaths := splitAtomicList(os.Getenv("NHM_ATOMIC_E2E_PATHS"))
+	requireReservation := os.Getenv("NHM_ATOMIC_E2E_REQUIRE_RESERVATION") == "1"
+	allowDiscovery := os.Getenv("NHM_ATOMIC_E2E_ALLOW_DISCOVERY") == "1"
 
 	request := assignment.AtomicRequest{
 		BeadID:                    beadID,
 		BeadTitle:                 "atomic E2E assignment",
-		Target:                    atomicEnvOr("NTM_ATOMIC_E2E_TARGET", "bnd-0000000000000042"),
-		OccupancyKey:              os.Getenv("NTM_ATOMIC_E2E_OCCUPANCY_KEY"),
+		Target:                    atomicEnvOr("NHM_ATOMIC_E2E_TARGET", "bnd-0000000000000042"),
+		OccupancyKey:              os.Getenv("NHM_ATOMIC_E2E_OCCUPANCY_KEY"),
 		Pane:                      7,
 		AgentType:                 "codex",
 		AgentName:                 "AtomicAgent",
@@ -161,23 +163,23 @@ func runAtomicExecuteHelper(t *testing.T, store *assignment.AssignmentStore) {
 	}
 
 	claimer := &atomicFileClaimPort{
-		dir:          mustAtomicEnv(t, "NTM_ATOMIC_E2E_CLAIM_DIR"),
-		callLog:      mustAtomicEnv(t, "NTM_ATOMIC_E2E_CLAIM_LOG"),
-		actuationLog: mustAtomicEnv(t, "NTM_ATOMIC_E2E_CLAIM_ACTUATION_LOG"),
-		crashAt:      os.Getenv("NTM_ATOMIC_E2E_CRASH_AT"),
+		dir:          mustAtomicEnv(t, "NHM_ATOMIC_E2E_CLAIM_DIR"),
+		callLog:      mustAtomicEnv(t, "NHM_ATOMIC_E2E_CLAIM_LOG"),
+		actuationLog: mustAtomicEnv(t, "NHM_ATOMIC_E2E_CLAIM_ACTUATION_LOG"),
+		crashAt:      os.Getenv("NHM_ATOMIC_E2E_CRASH_AT"),
 	}
 	reserver := atomicReservationPort(
-		os.Getenv("NTM_ATOMIC_E2E_RESERVATION"),
-		mustAtomicEnv(t, "NTM_ATOMIC_E2E_RESERVATION_LOG"),
-		mustAtomicEnv(t, "NTM_ATOMIC_E2E_RESERVATION_ACTUATION_LOG"),
-		mustAtomicEnv(t, "NTM_ATOMIC_E2E_RESERVATION_DIR"),
-		os.Getenv("NTM_ATOMIC_E2E_CRASH_AT"),
+		os.Getenv("NHM_ATOMIC_E2E_RESERVATION"),
+		mustAtomicEnv(t, "NHM_ATOMIC_E2E_RESERVATION_LOG"),
+		mustAtomicEnv(t, "NHM_ATOMIC_E2E_RESERVATION_ACTUATION_LOG"),
+		mustAtomicEnv(t, "NHM_ATOMIC_E2E_RESERVATION_DIR"),
+		os.Getenv("NHM_ATOMIC_E2E_CRASH_AT"),
 	)
 	dispatcher := atomicDispatchPort{
-		mode:         atomicEnvOr("NTM_ATOMIC_E2E_DISPATCH", "success"),
-		callLog:      mustAtomicEnv(t, "NTM_ATOMIC_E2E_CALL_LOG"),
-		actuationLog: mustAtomicEnv(t, "NTM_ATOMIC_E2E_ACTUATION_LOG"),
-		crashAt:      os.Getenv("NTM_ATOMIC_E2E_CRASH_AT"),
+		mode:         atomicEnvOr("NHM_ATOMIC_E2E_DISPATCH", "success"),
+		callLog:      mustAtomicEnv(t, "NHM_ATOMIC_E2E_CALL_LOG"),
+		actuationLog: mustAtomicEnv(t, "NHM_ATOMIC_E2E_ACTUATION_LOG"),
+		crashAt:      os.Getenv("NHM_ATOMIC_E2E_CRASH_AT"),
 	}
 	coordinator := assignment.NewAtomicCoordinator(store, claimer, reserver, dispatcher)
 	result, executeErr := coordinator.Execute(t.Context(), request)
@@ -448,8 +450,8 @@ func atomicErrorKind(err error) string {
 
 func atomicHelperReady(t *testing.T) {
 	t.Helper()
-	readyPath := os.Getenv("NTM_ATOMIC_E2E_READY")
-	gatePath := os.Getenv("NTM_ATOMIC_E2E_GATE")
+	readyPath := os.Getenv("NHM_ATOMIC_E2E_READY")
+	gatePath := os.Getenv("NHM_ATOMIC_E2E_GATE")
 	if readyPath == "" && gatePath == "" {
 		return
 	}
@@ -479,7 +481,7 @@ func writeAtomicHelperResult(t *testing.T, result atomicHelperResult) {
 	if err != nil {
 		t.Fatalf("marshal helper result: %v", err)
 	}
-	if err := os.WriteFile(mustAtomicEnv(t, "NTM_ATOMIC_E2E_RESULT"), data, 0o600); err != nil {
+	if err := os.WriteFile(mustAtomicEnv(t, "NHM_ATOMIC_E2E_RESULT"), data, 0o600); err != nil {
 		t.Fatalf("write helper result: %v", err)
 	}
 }
@@ -522,7 +524,7 @@ func startAtomicHelper(t *testing.T, env map[string]string) *atomicHelperProcess
 	t.Helper()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	env[atomicHelperEnv] = "1"
-	env["NTM_ATOMIC_E2E_RESULT"] = resultPath
+	env["NHM_ATOMIC_E2E_RESULT"] = resultPath
 
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestAtomicAssignmentProcessHelper$", "-test.v")
 	cmd.Env = atomicHelperEnvironment(os.Environ(), env)
@@ -586,7 +588,7 @@ func atomicHelperEnvironment(base []string, overrides map[string]string) []strin
 	result := make([]string, 0, len(base)+len(overrides))
 	for _, entry := range base {
 		key, _, _ := strings.Cut(entry, "=")
-		if _, overridden := overrides[key]; !overridden && !strings.HasPrefix(key, "NTM_ATOMIC_E2E_") {
+		if _, overridden := overrides[key]; !overridden && !strings.HasPrefix(key, "NHM_ATOMIC_E2E_") {
 			result = append(result, entry)
 		}
 	}
@@ -622,18 +624,18 @@ func waitForAtomicFiles(t *testing.T, paths ...string) {
 func atomicBaseEnv(home, session, beadID, key, workDir string) map[string]string {
 	return map[string]string{
 		"HOME":                                     home,
-		"NTM_ATOMIC_E2E_OPERATION":                 "execute",
-		"NTM_ATOMIC_E2E_SESSION":                   session,
-		"NTM_ATOMIC_E2E_BEAD":                      beadID,
-		"NTM_ATOMIC_E2E_KEY":                       key,
-		"NTM_ATOMIC_E2E_CLAIM_DIR":                 filepath.Join(workDir, "claims"),
-		"NTM_ATOMIC_E2E_CLAIM_LOG":                 filepath.Join(workDir, "claim-calls.log"),
-		"NTM_ATOMIC_E2E_CLAIM_ACTUATION_LOG":       filepath.Join(workDir, "claim-actuations.log"),
-		"NTM_ATOMIC_E2E_RESERVATION_LOG":           filepath.Join(workDir, "reservation-calls.log"),
-		"NTM_ATOMIC_E2E_RESERVATION_ACTUATION_LOG": filepath.Join(workDir, "reservation-actuations.log"),
-		"NTM_ATOMIC_E2E_RESERVATION_DIR":           filepath.Join(workDir, "reservations"),
-		"NTM_ATOMIC_E2E_CALL_LOG":                  filepath.Join(workDir, "dispatch-calls.log"),
-		"NTM_ATOMIC_E2E_ACTUATION_LOG":             filepath.Join(workDir, "dispatch-actuations.log"),
+		"NHM_ATOMIC_E2E_OPERATION":                 "execute",
+		"NHM_ATOMIC_E2E_SESSION":                   session,
+		"NHM_ATOMIC_E2E_BEAD":                      beadID,
+		"NHM_ATOMIC_E2E_KEY":                       key,
+		"NHM_ATOMIC_E2E_CLAIM_DIR":                 filepath.Join(workDir, "claims"),
+		"NHM_ATOMIC_E2E_CLAIM_LOG":                 filepath.Join(workDir, "claim-calls.log"),
+		"NHM_ATOMIC_E2E_CLAIM_ACTUATION_LOG":       filepath.Join(workDir, "claim-actuations.log"),
+		"NHM_ATOMIC_E2E_RESERVATION_LOG":           filepath.Join(workDir, "reservation-calls.log"),
+		"NHM_ATOMIC_E2E_RESERVATION_ACTUATION_LOG": filepath.Join(workDir, "reservation-actuations.log"),
+		"NHM_ATOMIC_E2E_RESERVATION_DIR":           filepath.Join(workDir, "reservations"),
+		"NHM_ATOMIC_E2E_CALL_LOG":                  filepath.Join(workDir, "dispatch-calls.log"),
+		"NHM_ATOMIC_E2E_ACTUATION_LOG":             filepath.Join(workDir, "dispatch-actuations.log"),
 	}
 }
 
@@ -659,12 +661,12 @@ func TestAtomicAssignmentE2E_ProcessContentionAndStaleBaselineMerge(t *testing.T
 		session := "atomic-e2e-stale-merge"
 
 		processA := startAtomicHelper(t, map[string]string{
-			"HOME": home, "NTM_ATOMIC_E2E_OPERATION": "stale-save", "NTM_ATOMIC_E2E_SESSION": session,
-			"NTM_ATOMIC_E2E_BEAD": "ntm-process-a", "NTM_ATOMIC_E2E_READY": readyA, "NTM_ATOMIC_E2E_GATE": gate,
+			"HOME": home, "NHM_ATOMIC_E2E_OPERATION": "stale-save", "NHM_ATOMIC_E2E_SESSION": session,
+			"NHM_ATOMIC_E2E_BEAD": "ntm-process-a", "NHM_ATOMIC_E2E_READY": readyA, "NHM_ATOMIC_E2E_GATE": gate,
 		})
 		processB := startAtomicHelper(t, map[string]string{
-			"HOME": home, "NTM_ATOMIC_E2E_OPERATION": "stale-save", "NTM_ATOMIC_E2E_SESSION": session,
-			"NTM_ATOMIC_E2E_BEAD": "ntm-process-b", "NTM_ATOMIC_E2E_READY": readyB, "NTM_ATOMIC_E2E_GATE": gate,
+			"HOME": home, "NHM_ATOMIC_E2E_OPERATION": "stale-save", "NHM_ATOMIC_E2E_SESSION": session,
+			"NHM_ATOMIC_E2E_BEAD": "ntm-process-b", "NHM_ATOMIC_E2E_READY": readyB, "NHM_ATOMIC_E2E_GATE": gate,
 		})
 		waitForAtomicFiles(t, readyA, readyB)
 		if err := os.WriteFile(gate, []byte("go"), 0o600); err != nil {
@@ -694,13 +696,13 @@ func TestAtomicAssignmentE2E_ProcessContentionAndStaleBaselineMerge(t *testing.T
 		beadID := "ntm-contended"
 
 		envA := atomicBaseEnv(home, session, beadID, "contender-a", workDir)
-		envA["NTM_ATOMIC_E2E_READY"] = readyA
-		envA["NTM_ATOMIC_E2E_GATE"] = gate
-		envA["NTM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000011"
+		envA["NHM_ATOMIC_E2E_READY"] = readyA
+		envA["NHM_ATOMIC_E2E_GATE"] = gate
+		envA["NHM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000011"
 		envB := atomicBaseEnv(home, session, beadID, "contender-b", workDir)
-		envB["NTM_ATOMIC_E2E_READY"] = readyB
-		envB["NTM_ATOMIC_E2E_GATE"] = gate
-		envB["NTM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000012"
+		envB["NHM_ATOMIC_E2E_READY"] = readyB
+		envB["NHM_ATOMIC_E2E_GATE"] = gate
+		envB["NHM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000012"
 		processA := startAtomicHelper(t, envA)
 		processB := startAtomicHelper(t, envB)
 		waitForAtomicFiles(t, readyA, readyB)
@@ -754,15 +756,15 @@ func TestAtomicAssignmentE2E_ProcessContentionAndStaleBaselineMerge(t *testing.T
 		session := "atomic-e2e-same-target"
 
 		envA := atomicBaseEnv(home, session, "ntm-target-a", "target-key-a", workDir)
-		envA["NTM_ATOMIC_E2E_READY"] = readyA
-		envA["NTM_ATOMIC_E2E_GATE"] = gate
-		envA["NTM_ATOMIC_E2E_TARGET"] = "0.1"
-		envA["NTM_ATOMIC_E2E_OCCUPANCY_KEY"] = "bnd-0000000000000077"
+		envA["NHM_ATOMIC_E2E_READY"] = readyA
+		envA["NHM_ATOMIC_E2E_GATE"] = gate
+		envA["NHM_ATOMIC_E2E_TARGET"] = "0.1"
+		envA["NHM_ATOMIC_E2E_OCCUPANCY_KEY"] = "bnd-0000000000000077"
 		envB := atomicBaseEnv(home, session, "ntm-target-b", "target-key-b", workDir)
-		envB["NTM_ATOMIC_E2E_READY"] = readyB
-		envB["NTM_ATOMIC_E2E_GATE"] = gate
-		envB["NTM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000077"
-		envB["NTM_ATOMIC_E2E_OCCUPANCY_KEY"] = "bnd-0000000000000077"
+		envB["NHM_ATOMIC_E2E_READY"] = readyB
+		envB["NHM_ATOMIC_E2E_GATE"] = gate
+		envB["NHM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000077"
+		envB["NHM_ATOMIC_E2E_OCCUPANCY_KEY"] = "bnd-0000000000000077"
 
 		processA := startAtomicHelper(t, envA)
 		processB := startAtomicHelper(t, envB)
@@ -802,11 +804,11 @@ func TestAtomicAssignmentE2E_ProcessContentionAndStaleBaselineMerge(t *testing.T
 		key := "shared-idempotency-key"
 
 		envA := atomicBaseEnv(home, session, beadID, key, workDir)
-		envA["NTM_ATOMIC_E2E_READY"] = readyA
-		envA["NTM_ATOMIC_E2E_GATE"] = gate
+		envA["NHM_ATOMIC_E2E_READY"] = readyA
+		envA["NHM_ATOMIC_E2E_GATE"] = gate
 		envB := atomicBaseEnv(home, session, beadID, key, workDir)
-		envB["NTM_ATOMIC_E2E_READY"] = readyB
-		envB["NTM_ATOMIC_E2E_GATE"] = gate
+		envB["NHM_ATOMIC_E2E_READY"] = readyB
+		envB["NHM_ATOMIC_E2E_GATE"] = gate
 
 		processA := startAtomicHelper(t, envA)
 		processB := startAtomicHelper(t, envB)
@@ -872,16 +874,16 @@ func TestAtomicAssignmentE2E_StaleDestructiveProcessCannotEraseDispatchBarrier(t
 			}
 
 			staleProcess := startAtomicHelper(t, map[string]string{
-				"HOME": home, "NTM_ATOMIC_E2E_OPERATION": "stale-mutation", "NTM_ATOMIC_E2E_SESSION": session,
-				"NTM_ATOMIC_E2E_BEAD": beadID, "NTM_ATOMIC_E2E_MUTATION": mutation,
-				"NTM_ATOMIC_E2E_READY": ready, "NTM_ATOMIC_E2E_GATE": gate,
+				"HOME": home, "NHM_ATOMIC_E2E_OPERATION": "stale-mutation", "NHM_ATOMIC_E2E_SESSION": session,
+				"NHM_ATOMIC_E2E_BEAD": beadID, "NHM_ATOMIC_E2E_MUTATION": mutation,
+				"NHM_ATOMIC_E2E_READY": ready, "NHM_ATOMIC_E2E_GATE": gate,
 			})
 			waitForAtomicFiles(t, ready)
 
 			barrier := runAtomicHelper(t, map[string]string{
-				"HOME": home, "NTM_ATOMIC_E2E_OPERATION": "dispatch-start", "NTM_ATOMIC_E2E_SESSION": session,
-				"NTM_ATOMIC_E2E_BEAD": beadID, "NTM_ATOMIC_E2E_KEY": key,
-				"NTM_ATOMIC_E2E_STARTED_AT": startedAt.Format(time.RFC3339Nano),
+				"HOME": home, "NHM_ATOMIC_E2E_OPERATION": "dispatch-start", "NHM_ATOMIC_E2E_SESSION": session,
+				"NHM_ATOMIC_E2E_BEAD": beadID, "NHM_ATOMIC_E2E_KEY": key,
+				"NHM_ATOMIC_E2E_STARTED_AT": startedAt.Format(time.RFC3339Nano),
 			})
 			if barrier.DispatchState != assignment.DispatchSending || barrier.DispatchAttempts != 1 || barrier.Status != assignment.StatusWorking {
 				t.Fatalf("dispatch barrier helper result=%+v, want working/sending attempt 1", barrier)
@@ -926,9 +928,9 @@ func TestAtomicAssignmentE2E_StaleLifecycleCannotResurrectOrCrossGeneration(t *t
 			t.Fatalf("MarkWorking: %v", err)
 		}
 		stale := startAtomicHelper(t, map[string]string{
-			"HOME": home, "NTM_ATOMIC_E2E_OPERATION": "stale-mutation", "NTM_ATOMIC_E2E_SESSION": session,
-			"NTM_ATOMIC_E2E_BEAD": beadID, "NTM_ATOMIC_E2E_MUTATION": "complete",
-			"NTM_ATOMIC_E2E_READY": ready, "NTM_ATOMIC_E2E_GATE": gate,
+			"HOME": home, "NHM_ATOMIC_E2E_OPERATION": "stale-mutation", "NHM_ATOMIC_E2E_SESSION": session,
+			"NHM_ATOMIC_E2E_BEAD": beadID, "NHM_ATOMIC_E2E_MUTATION": "complete",
+			"NHM_ATOMIC_E2E_READY": ready, "NHM_ATOMIC_E2E_GATE": gate,
 		})
 		waitForAtomicFiles(t, ready)
 		remover, err := assignment.LoadStoreStrict(session)
@@ -982,9 +984,9 @@ func TestAtomicAssignmentE2E_StaleLifecycleCannotResurrectOrCrossGeneration(t *t
 			t.Fatalf("mark old working: %v", err)
 		}
 		stale := startAtomicHelper(t, map[string]string{
-			"HOME": home, "NTM_ATOMIC_E2E_OPERATION": "stale-mutation", "NTM_ATOMIC_E2E_SESSION": session,
-			"NTM_ATOMIC_E2E_BEAD": beadID, "NTM_ATOMIC_E2E_MUTATION": "complete",
-			"NTM_ATOMIC_E2E_READY": ready, "NTM_ATOMIC_E2E_GATE": gate,
+			"HOME": home, "NHM_ATOMIC_E2E_OPERATION": "stale-mutation", "NHM_ATOMIC_E2E_SESSION": session,
+			"NHM_ATOMIC_E2E_BEAD": beadID, "NHM_ATOMIC_E2E_MUTATION": "complete",
+			"NHM_ATOMIC_E2E_READY": ready, "NHM_ATOMIC_E2E_GATE": gate,
 		})
 		waitForAtomicFiles(t, ready)
 		winner, err := assignment.LoadStoreStrict(session)
@@ -1027,11 +1029,11 @@ func TestAtomicAssignmentE2E_DurableRetryReplayAndCompletionTarget(t *testing.T)
 	beadID := "ntm-retry"
 	key := "durable-attempt"
 	env := atomicBaseEnv(home, session, beadID, key, workDir)
-	env["NTM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000042"
-	env["NTM_ATOMIC_E2E_REQUIRE_RESERVATION"] = "1"
-	env["NTM_ATOMIC_E2E_PATHS"] = "internal/assignment/**;internal/completion/**"
-	env["NTM_ATOMIC_E2E_RESERVATION"] = "full"
-	env["NTM_ATOMIC_E2E_DISPATCH"] = "guaranteed"
+	env["NHM_ATOMIC_E2E_TARGET"] = "bnd-0000000000000042"
+	env["NHM_ATOMIC_E2E_REQUIRE_RESERVATION"] = "1"
+	env["NHM_ATOMIC_E2E_PATHS"] = "internal/assignment/**;internal/completion/**"
+	env["NHM_ATOMIC_E2E_RESERVATION"] = "full"
+	env["NHM_ATOMIC_E2E_DISPATCH"] = "guaranteed"
 
 	first := runAtomicHelper(t, env)
 	if first.ErrorKind != "guaranteed_no_actuation" || first.DispatchState != assignment.DispatchPending || first.DispatchAttempts != 1 {
@@ -1044,8 +1046,8 @@ func TestAtomicAssignmentE2E_DurableRetryReplayAndCompletionTarget(t *testing.T)
 		t.Fatalf("guaranteed failure actuated transport: %v", got)
 	}
 
-	env["NTM_ATOMIC_E2E_RESERVATION"] = "none"
-	env["NTM_ATOMIC_E2E_DISPATCH"] = "success"
+	env["NHM_ATOMIC_E2E_RESERVATION"] = "none"
+	env["NHM_ATOMIC_E2E_DISPATCH"] = "success"
 	second := runAtomicHelper(t, env)
 	if second.Error != "" || !second.Sent || !second.Recovered || second.Replayed {
 		t.Fatalf("restart recovery=%+v", second)
@@ -1057,7 +1059,7 @@ func TestAtomicAssignmentE2E_DurableRetryReplayAndCompletionTarget(t *testing.T)
 		t.Fatalf("recovered durable intent=%+v", second)
 	}
 
-	env["NTM_ATOMIC_E2E_DISPATCH"] = "forbidden"
+	env["NHM_ATOMIC_E2E_DISPATCH"] = "forbidden"
 	third := runAtomicHelper(t, env)
 	if third.Error != "" || !third.Sent || !third.Replayed || third.Recovered {
 		t.Fatalf("idempotent replay=%+v", third)
@@ -1131,11 +1133,11 @@ func TestAtomicAssignmentE2E_RequiredReservationMatrix(t *testing.T) {
 			home := t.TempDir()
 			workDir := t.TempDir()
 			env := atomicBaseEnv(home, fmt.Sprintf("atomic-e2e-reservation-%d", index), fmt.Sprintf("ntm-reservation-%d", index), fmt.Sprintf("reservation-key-%d", index), workDir)
-			env["NTM_ATOMIC_E2E_REQUIRE_RESERVATION"] = "1"
-			env["NTM_ATOMIC_E2E_RESERVATION"] = test.mode
-			env["NTM_ATOMIC_E2E_PATHS"] = test.paths
+			env["NHM_ATOMIC_E2E_REQUIRE_RESERVATION"] = "1"
+			env["NHM_ATOMIC_E2E_RESERVATION"] = test.mode
+			env["NHM_ATOMIC_E2E_PATHS"] = test.paths
 			if test.discovery {
-				env["NTM_ATOMIC_E2E_ALLOW_DISCOVERY"] = "1"
+				env["NHM_ATOMIC_E2E_ALLOW_DISCOVERY"] = "1"
 			}
 			result := runAtomicHelper(t, env)
 
@@ -1185,7 +1187,7 @@ func TestAtomicAssignmentE2E_AmbiguousDispatchSurvivesRestart(t *testing.T) {
 	beadID := "ntm-ambiguous"
 	key := "ambiguous-attempt"
 	env := atomicBaseEnv(home, session, beadID, key, workDir)
-	env["NTM_ATOMIC_E2E_DISPATCH"] = "ambiguous"
+	env["NHM_ATOMIC_E2E_DISPATCH"] = "ambiguous"
 
 	first := runAtomicHelper(t, env)
 	if first.ErrorKind != "dispatch_outcome_unknown" || first.DispatchState != assignment.DispatchSending || first.DispatchAttempts != 1 {
@@ -1198,7 +1200,7 @@ func TestAtomicAssignmentE2E_AmbiguousDispatchSurvivesRestart(t *testing.T) {
 		t.Fatalf("ambiguous delivery actuations=%v, want one possible delivery", got)
 	}
 
-	env["NTM_ATOMIC_E2E_DISPATCH"] = "forbidden"
+	env["NHM_ATOMIC_E2E_DISPATCH"] = "forbidden"
 	second := runAtomicHelper(t, env)
 	if second.ErrorKind != "dispatch_outcome_unknown" || second.DispatchState != assignment.DispatchSending || second.DispatchAttempts != 1 {
 		t.Fatalf("ambiguous restart result=%+v", second)
@@ -1238,15 +1240,15 @@ func TestAtomicAssignmentE2E_CrashRecoveryBoundaries(t *testing.T) {
 			home := t.TempDir()
 			workDir := t.TempDir()
 			env := atomicBaseEnv(home, fmt.Sprintf("atomic-crash-%d", index), fmt.Sprintf("ntm-crash-%d", index), fmt.Sprintf("crash-key-%d", index), workDir)
-			env["NTM_ATOMIC_E2E_CRASH_AT"] = test.boundary
+			env["NHM_ATOMIC_E2E_CRASH_AT"] = test.boundary
 			if test.reservation {
-				env["NTM_ATOMIC_E2E_REQUIRE_RESERVATION"] = "1"
-				env["NTM_ATOMIC_E2E_RESERVATION"] = "full"
-				env["NTM_ATOMIC_E2E_PATHS"] = "internal/assignment/**"
+				env["NHM_ATOMIC_E2E_REQUIRE_RESERVATION"] = "1"
+				env["NHM_ATOMIC_E2E_RESERVATION"] = "full"
+				env["NHM_ATOMIC_E2E_PATHS"] = "internal/assignment/**"
 			}
 
 			startAtomicHelper(t, env).waitForExit(t, 86)
-			delete(env, "NTM_ATOMIC_E2E_CRASH_AT")
+			delete(env, "NHM_ATOMIC_E2E_CRASH_AT")
 			result := runAtomicHelper(t, env)
 			if result.Sent != test.wantSent || result.ErrorKind != test.wantErrorKind {
 				t.Fatalf("recovery result = %+v, want sent=%v error_kind=%q", result, test.wantSent, test.wantErrorKind)
@@ -1268,7 +1270,7 @@ func TestAtomicAssignmentE2E_StrictMutatingRecoveryFailsClosed(t *testing.T) {
 		session := "atomic-e2e-torn-primary"
 		beadID := "ntm-torn-primary"
 		env := atomicBaseEnv(home, session, beadID, "torn-attempt", workDir)
-		env["NTM_ATOMIC_E2E_DISPATCH"] = "ambiguous"
+		env["NHM_ATOMIC_E2E_DISPATCH"] = "ambiguous"
 		result := runAtomicHelper(t, env)
 		if result.DispatchState != assignment.DispatchSending {
 			t.Fatalf("precondition dispatch state=%s, want sending", result.DispatchState)
@@ -1297,8 +1299,8 @@ func TestAtomicAssignmentE2E_StrictMutatingRecoveryFailsClosed(t *testing.T) {
 		}
 
 		before := atomicSideEffectCounts(t, workDir)
-		env["NTM_ATOMIC_E2E_EXPECT_LOAD_FAILURE"] = "1"
-		env["NTM_ATOMIC_E2E_DISPATCH"] = "forbidden"
+		env["NHM_ATOMIC_E2E_EXPECT_LOAD_FAILURE"] = "1"
+		env["NHM_ATOMIC_E2E_DISPATCH"] = "forbidden"
 		restarted := runAtomicHelper(t, env)
 		if restarted.ErrorKind != "strict_load" || restarted.Error == "" {
 			t.Fatalf("torn-primary helper result=%+v", restarted)
@@ -1326,7 +1328,7 @@ func TestAtomicAssignmentE2E_StrictMutatingRecoveryFailsClosed(t *testing.T) {
 		}
 
 		env := atomicBaseEnv(home, session, "ntm-orphan-backup", "orphan-attempt", workDir)
-		env["NTM_ATOMIC_E2E_EXPECT_LOAD_FAILURE"] = "1"
+		env["NHM_ATOMIC_E2E_EXPECT_LOAD_FAILURE"] = "1"
 		result := runAtomicHelper(t, env)
 		if result.ErrorKind != "strict_load" || result.Error == "" {
 			t.Fatalf("orphan-backup helper result=%+v", result)

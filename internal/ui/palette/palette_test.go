@@ -5,7 +5,8 @@
 // digits; the send tests check the request the palette hands to nhm's send
 // operation (Submitter) in place of tmux send-keys; the pin and recents
 // tests use the Store; the session selector returns workspace ids. The tests
-// after "nhm" below are nhm's (plan-v4 sections 4, 5 and 10).
+// after "nhm" below are nhm's (plan-v4 sections 4, 5 and 10). nhm's NHM_*
+// environment names in place of ntm's NTM_* (nhm-2p6.28.3).
 
 package palette
 
@@ -219,7 +220,7 @@ func TestRenderPreviewUsesAgentBadgeForNewerAgentCategories(t *testing.T) {
 }
 
 func TestUpdateAnimationTick(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "1")
+	t.Setenv("NHM_ANIMATIONS", "1")
 	t.Setenv("TMUX", "")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")
@@ -244,8 +245,8 @@ func TestUpdateAnimationTick(t *testing.T) {
 }
 
 func TestNew_DisablesAnimationInTmuxByDefault(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "")
-	t.Setenv("NTM_REDUCE_MOTION", "")
+	t.Setenv("NHM_ANIMATIONS", "")
+	t.Setenv("NHM_REDUCE_MOTION", "")
 	t.Setenv("TMUX", "/tmp/tmux-123/default,1,0")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")
@@ -838,7 +839,7 @@ func TestNewSessionSelectorEmpty(t *testing.T) {
 }
 
 func TestSessionSelectorInit(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "1")
+	t.Setenv("NHM_ANIMATIONS", "1")
 	t.Setenv("TMUX", "")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")

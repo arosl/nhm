@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/styles/styles_theme_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header; the import path.
+// Local changes: this header; the import path; nhm's NHM_* environment
+// names in place of ntm's NTM_* (nhm-2p6.28.3).
 
 package styles
 
@@ -13,8 +14,8 @@ import (
 )
 
 func TestDefaultGradientUsesCurrentThemeColors(t *testing.T) {
-	t.Setenv("NTM_THEME", "latte")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "latte")
+	t.Setenv("NHM_NO_COLOR", "0")
 
 	got := defaultGradient()
 	want := []string{
@@ -29,8 +30,8 @@ func TestDefaultGradientUsesCurrentThemeColors(t *testing.T) {
 }
 
 func TestDefaultSurface1UsesCurrentThemeColor(t *testing.T) {
-	t.Setenv("NTM_THEME", "latte")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "latte")
+	t.Setenv("NHM_NO_COLOR", "0")
 
 	got := string(defaultSurface1())
 	want := string(theme.CatppuccinLatte.Surface1)
@@ -41,8 +42,8 @@ func TestDefaultSurface1UsesCurrentThemeColor(t *testing.T) {
 }
 
 func TestDefaultGradientFollowsThemeChange(t *testing.T) {
-	t.Setenv("NTM_THEME", "mocha")
-	t.Setenv("NTM_NO_COLOR", "0")
+	t.Setenv("NHM_THEME", "mocha")
+	t.Setenv("NHM_NO_COLOR", "0")
 
 	got := defaultGradient()
 	want := []string{
@@ -59,7 +60,7 @@ func TestDefaultGradientFollowsThemeChange(t *testing.T) {
 // Ensure we don’t leak env between tests when running without -count=1.
 func TestMain(m *testing.M) {
 	code := m.Run()
-	_ = os.Unsetenv("NTM_THEME")
-	_ = os.Unsetenv("NTM_NO_COLOR")
+	_ = os.Unsetenv("NHM_THEME")
+	_ = os.Unsetenv("NHM_NO_COLOR")
 	os.Exit(code)
 }

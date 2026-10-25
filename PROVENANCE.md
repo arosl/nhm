@@ -77,27 +77,27 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/tui/agent/types.go` | `internal/agent/types.go` (in part) | provenance header; package comment; only `AgentType`, its constants, `String`, `Canonical`, `DisplayName`, `ProfileName` and `IsValid`, for the UI's colours, icons and names; ntm's detection engine (state, recommendations, parser types) and its Grok and delivery checks left out |
 | `internal/ui/tui/agent/types_test.go` | `internal/agent/types_test.go` (in part) | provenance header; the tests of the kept functions; `TestNhmKindsAreKnown` is nhm's |
 | `internal/ui/tui/theme/LICENSE` | `LICENSE` | none |
-| `internal/ui/tui/theme/theme.go` | `internal/tui/theme/theme.go` | provenance header |
+| `internal/ui/tui/theme/theme.go` | `internal/tui/theme/theme.go` | provenance header; `NHM_THEME`, `NHM_NO_COLOR`, `NHM_BACKGROUND` and `NHM_BG` in place of ntm's `NTM_*` names (nhm-2p6.28.3) |
 | `internal/ui/tui/theme/semantic.go` | `internal/tui/theme/semantic.go` | provenance header; import path |
 | `internal/ui/tui/theme/huh.go` | `internal/tui/theme/huh.go` | provenance header |
-| `internal/ui/tui/theme/theme_test.go` | `internal/tui/theme/theme_test.go` | provenance header |
+| `internal/ui/tui/theme/theme_test.go` | `internal/tui/theme/theme_test.go` | provenance header; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/tui/theme/semantic_test.go` | `internal/tui/theme/semantic_test.go` | provenance header |
 | `internal/ui/tui/theme/huh_test.go` | `internal/tui/theme/huh_test.go` | provenance header |
-| `internal/ui/tui/theme/configured_test.go` | `internal/tui/theme/configured_test.go` | provenance header |
+| `internal/ui/tui/theme/configured_test.go` | `internal/tui/theme/configured_test.go` | provenance header; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/tui/styles/LICENSE` | `LICENSE` | none |
-| `internal/ui/tui/styles/styles.go` | `internal/tui/styles/styles.go` | provenance header; import paths; behaviour: `AnimationsEnabled` is false inside herdr (`HERDR_ENV` or `HERDR_SOCKET_PATH`), as in tmux and screen |
+| `internal/ui/tui/styles/styles.go` | `internal/tui/styles/styles.go` | provenance header; import paths; behaviour: `AnimationsEnabled` is false inside herdr (`HERDR_ENV` or `HERDR_SOCKET_PATH`), as in tmux and screen; `NHM_ANIMATIONS`, `NHM_REDUCE_MOTION` and `NHM_NO_COLOR` in place of ntm's `NTM_*` names (nhm-2p6.28.3) |
 | `internal/ui/tui/styles/badges.go` | `internal/tui/styles/badges.go`, `internal/util/text.go` (`FormatBytes`) | provenance header; import paths; `util.FormatBytes` copied in as `formatBytes` |
 | `internal/ui/tui/styles/tokens.go` | `internal/tui/styles/tokens.go` | provenance header |
-| `internal/ui/tui/styles/styles_test.go` | `internal/tui/styles/styles_test.go` | provenance header; `TestAnimationsEnabledAutoDisablesInHerdr` is nhm's |
-| `internal/ui/tui/styles/styles_theme_test.go` | `internal/tui/styles/styles_theme_test.go` | provenance header; import path |
+| `internal/ui/tui/styles/styles_test.go` | `internal/tui/styles/styles_test.go` | provenance header; `TestAnimationsEnabledAutoDisablesInHerdr` is nhm's; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
+| `internal/ui/tui/styles/styles_theme_test.go` | `internal/tui/styles/styles_theme_test.go` | provenance header; import path; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/tui/styles/styles_branches_test.go` | `internal/tui/styles/styles_branches_test.go` | provenance header |
 | `internal/ui/tui/styles/badges_test.go` | `internal/tui/styles/badges_test.go` | provenance header |
 | `internal/ui/tui/styles/tokens_test.go` | `internal/tui/styles/tokens_test.go` | provenance header |
 | `internal/ui/tui/styles/tokens_extra_test.go` | `internal/tui/styles/tokens_extra_test.go` | provenance header |
 | `internal/ui/tui/icons/LICENSE` | `LICENSE` | none |
-| `internal/ui/tui/icons/icons.go` | `internal/tui/icons/icons.go` | provenance header; import path |
-| `internal/ui/tui/icons/icons_test.go` | `internal/tui/icons/icons_test.go` | provenance header |
-| `internal/ui/tui/icons/env_detection_test.go` | `internal/tui/icons/env_detection_test.go` | provenance header |
+| `internal/ui/tui/icons/icons.go` | `internal/tui/icons/icons.go` | provenance header; import path; `NHM_USE_ICONS` and `NHM_ICONS` in place of ntm's `NTM_*` names (nhm-2p6.28.3) |
+| `internal/ui/tui/icons/icons_test.go` | `internal/tui/icons/icons_test.go` | provenance header; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
+| `internal/ui/tui/icons/env_detection_test.go` | `internal/tui/icons/env_detection_test.go` | provenance header; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/tui/layout/LICENSE` | `LICENSE` | none |
 | `internal/ui/tui/layout/layout.go` | `internal/tui/layout/layout.go` | provenance header |
 | `internal/ui/tui/layout/layout_test.go` | `internal/tui/layout/layout_test.go` | provenance header |
@@ -116,13 +116,13 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/tui/components/state.go` | `internal/tui/components/state.go` | provenance header; import paths |
 | `internal/ui/tui/components/statusbar.go` | `internal/tui/components/statusbar.go` | provenance header; import paths |
 | `internal/ui/tui/components/tabbar.go` | `internal/tui/components/tabbar.go` | provenance header; import paths |
-| `internal/ui/tui/components/components_test.go` | `internal/tui/components/components_test.go` | provenance header; import paths |
+| `internal/ui/tui/components/components_test.go` | `internal/tui/components/components_test.go` | provenance header; import paths; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/tui/components/freshness_test.go` | `internal/tui/components/freshness_test.go` | provenance header; `status.StripANSI` is `ansi.Strip` (charmbracelet/x/ansi) |
 | `internal/ui/tui/components/pane_table_test.go` | `internal/tui/components/pane_table_test.go` | provenance header; import path |
-| `internal/ui/tui/components/progress_test.go` | `internal/tui/components/progress_test.go` | provenance header; import path |
+| `internal/ui/tui/components/progress_test.go` | `internal/tui/components/progress_test.go` | provenance header; import path; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/tui/components/scroll_test.go` | `internal/tui/components/scroll_test.go` | provenance header |
 | `internal/ui/tui/components/scrollable_panel_test.go` | `internal/tui/components/scrollable_panel_test.go` | provenance header |
-| `internal/ui/tui/components/spring_manager_test.go` | `internal/tui/components/spring_manager_test.go` | provenance header |
+| `internal/ui/tui/components/spring_manager_test.go` | `internal/tui/components/spring_manager_test.go` | provenance header; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/tui/components/state_test.go` | `internal/tui/components/state_test.go` | provenance header |
 | `internal/ui/tui/components/statusbar_test.go` | `internal/tui/components/statusbar_test.go` | provenance header |
 | `internal/ui/palette/LICENSE` | `LICENSE` | none |
@@ -134,7 +134,7 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/palette/keymap_test.go` | `internal/palette/keymap_test.go` | provenance header; import paths; nhm's phases and the Composer in the honesty table; nhm's target keys |
 | `internal/ui/palette/list_helpers_test.go` | `internal/palette/list_helpers_test.go` | provenance header; `TestIntsToStrings` left out with `intsToStrings` |
 | `internal/ui/palette/model_helpers_test.go` | `internal/palette/model_helpers_test.go` | provenance header; `PaletteCmd` is this package's |
-| `internal/ui/palette/palette_test.go` | `internal/palette/palette_test.go` | provenance header; the stand-in types; the target, send, pin and recents tests on nhm's kind digits, the `Submitter` and the `Store`; the selector returns ids; the tests after "nhm" are nhm's |
+| `internal/ui/palette/palette_test.go` | `internal/palette/palette_test.go` | provenance header; the stand-in types; the target, send, pin and recents tests on nhm's kind digits, the `Submitter` and the `Store`; the selector returns ids; the tests after "nhm" are nhm's; `NHM_*` names in place of `NTM_*` (nhm-2p6.28.3) |
 | `internal/ui/palette/xf_search_test.go` | `internal/palette/xf_search_test.go` | provenance header; `internal/integrations/xf`'s names; a picked result drops the draft |
 | `internal/integrations/xf/LICENSE` | `LICENSE` | none |
 | `internal/integrations/xf/xf.go` | `internal/tools/xf.go`, `internal/tools/adapter.go` (in part) | provenance header; only `Detect`, `Search` and their types, without ntm's tool registry, version, capability, health and doctor checks; names without the `XF` prefix; the binary is a field; an `io.LimitReader` in place of `LimitedBuffer` |
@@ -151,7 +151,7 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/dashboard/panels/height_helpers_test.go` | `internal/tui/dashboard/panels/height_helpers_test.go` | provenance header |
 | `internal/ui/dashboard/panels/attention.go` | `internal/tui/dashboard/panels/attention.go` | provenance header; import paths; boundary edits: a local `Actionability` with ntm's three values in place of `robot.Actionability`; `SourcePane` is a string (slot or pane id); `Cursor` is a string key, so `SelectNearestCursor` and `absInt64` are gone; an item with no time shows no age |
 | `internal/ui/dashboard/panels/attention_test.go` | `internal/tui/dashboard/panels/attention_test.go` | provenance header; the local `Actionability`; string cursors and panes; the `SelectNearestCursor` tests are gone, and two tests are nhm's (a removed selection keeps its place; an item with no time has no age) |
-| `internal/ui/dashboard/focus.go` | `internal/tui/dashboard/focus.go` | provenance header; import path; boundary edits: the board's own `PanelID` set (agents, attention, history) in `panelIDString` and `syncFocusAnimations`; `buildFocusTargets` asks the board's `visiblePanels`; without a spring manager the focused panel gets the full focus colour; `logFocusf` reads `NHM_DEBUG` and `NTM_DEBUG`; the Model methods take a pointer |
+| `internal/ui/dashboard/focus.go` | `internal/tui/dashboard/focus.go` | provenance header; import path; boundary edits: the board's own `PanelID` set (agents, attention, history) in `panelIDString` and `syncFocusAnimations`; `buildFocusTargets` asks the board's `visiblePanels`; without a spring manager the focused panel gets the full focus colour; `logFocusf` reads `NHM_DEBUG`, not ntm's `NTM_DEBUG` (nhm-2p6.28.3); the Model methods take a pointer |
 | `internal/ui/dashboard/focus_test.go` | `internal/tui/dashboard/focus_test.go` | provenance header; `TestMouseClickPaneListSetsFocus` is gone (it drives ntm's dashboard Model) |
 | `internal/ui/dashboard/panels/history.go` | `internal/tui/dashboard/panels/history.go` | provenance header; import paths (nhm's `internal/store/history`, the same `HistoryEntry`); boundary edits: `SetPanes` takes `HistoryPane` (key, label, agent type) in place of `tmux.Pane`, so `formatHistoryPaneLabel` goes; `internal/ui/tui/agent`'s agent types; the agent filter reads each entry's `AgentTypes` first, and its third value is Antigravity in place of Gemini; `now` is injectable; `PreviewOpen` is new; behaviour: prompts lose their terminal controls, the empty state and the preview hint name only what the board does, and a row's prompt and targets are cut by display width, never inside a rune |
 | `internal/ui/dashboard/panels/history_test.go` | `internal/tui/dashboard/panels/history_test.go` | provenance header; import paths; `HistoryPane` and Antigravity in the agent filter test; three tests are nhm's (the entry's own agent types; clean prompts and an injected now; cuts by display width) |
@@ -161,13 +161,13 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/forms/spawn_wizard_flow_test.go` | `internal/tui/dashboard/panels/spawn_wizard_flow_test.go` | provenance header; nhm's steps (counts, options, review); the tests from `TestSpawnWizardReviewThenSpawnOnce` on are nhm's |
 | `internal/core/assignment/LICENSE` | `LICENSE` | none |
 | `internal/core/assignment/atomic.go` | `internal/assignment/atomic.go` | provenance header; the events import path; the occupant identity is an nhm binding id (`bnd-` and 16 lowercase hex digits) in place of a tmux pane id (`isPhysicalPaneOccupancyKey`, the `PaneIdentityMigrationError` text, comments; `strconv` dropped); `DispatchRequest.Attempt` carries the persisted attempt (nhm-i85) |
-| `internal/core/assignment/store.go` | `internal/assignment/store.go` | provenance header; the events import path; `StorageDir` under `store.StateRoot` in place of `~/.ntm`; nhm names a store `<instance id>.<workspace id>` |
+| `internal/core/assignment/store.go` | `internal/assignment/store.go` | provenance header; the events import path; `StorageDir` under `store.StateRoot` in place of `~/.ntm`; nhm names a store `<instance id>.<workspace id>`; the E2E failpoints read `NHM_TEST_*` in place of `NTM_TEST_*` (nhm-2p6.28.3) |
 | `internal/core/assignment/store_lock.go` | `internal/assignment/store_lock.go` | provenance header |
 | `internal/core/assignment/store_lock_unix.go` | `internal/assignment/store_lock_unix.go` | provenance header; `store_lock_windows.go` is not taken (Linux only) |
 | `internal/core/assignment/outcomes.go` | `internal/assignment/outcomes.go` | provenance header; the agent import path (`internal/ui/tui/agent`) |
 | `internal/core/assignment/stranded.go` | `internal/assignment/stranded.go` | provenance header |
 | `internal/core/assignment/atomic_test.go` | `internal/assignment/atomic_test.go` | provenance header; binding ids in place of `%N`; the identity table keeps each refused shape in binding-id form and adds a tmux pane id, a herdr pane id and a slot |
-| `internal/core/assignment/atomic_e2e_test.go` | `internal/assignment/atomic_e2e_test.go` | provenance header; the import path; binding ids in place of `%N` |
+| `internal/core/assignment/atomic_e2e_test.go` | `internal/assignment/atomic_e2e_test.go` | provenance header; the import path; binding ids in place of `%N`; `NHM_ATOMIC_E2E_*` in place of `NTM_ATOMIC_E2E_*` (nhm-2p6.28.3) |
 | `internal/core/assignment/store_test.go` | `internal/assignment/store_test.go` | provenance header; binding ids in place of `%N`; storage paths under `~/.local/state/nhm` |
 | `internal/core/assignment/store_branch_test.go` | `internal/assignment/store_branch_test.go` | provenance header; the storage path under `~/.local/state/nhm` |
 | `internal/core/assignment/store_lock_test.go` | `internal/assignment/store_lock_test.go` | provenance header |
@@ -188,7 +188,7 @@ The same rules apply to code from pt and dcg.
 | `internal/integrations/bv/LICENSE` | `LICENSE` | none |
 | `internal/integrations/bv/bv.go` | `internal/bv/bv.go` (in part), `internal/bv/client.go` (`ErrTimeout`) | provenance header; imports; the runners, plan reader, br runner, gates, claim API, br helpers and status/details readers whole; `claimBeadForAssignmentAttempt` claims through br's engine (`br update --claim --if-unchanged`, under nhm's claim lock, ntm's validation and mutex check on one read, a write that never retries, a new read after a refused or failed write) in place of ntm's direct SQLite transaction, which leaves br 0.7.4 refusing writes after a bv read; no automatic JSONL rebuild; the direct SQLite claim/release/stale transactions, `ClaimBead`, `ReleaseBeadClaim` and the bv readers nhm does not call are not taken (nhm-i85); `GetInsightsContext` whole, for the human `spawn --assign`'s cycle check (nhm-cvw) |
 | `internal/integrations/bv/assignment_mutex.go` | `internal/bv/assignment_mutex.go` (derived) | provenance header; the error types whole; `requireAssignmentMutexes` keeps ntm's rules on the claim's read and `br list --all` in place of SQL in the transaction |
-| `internal/integrations/bv/timeout.go` | `internal/bv/timeout.go` | provenance header |
+| `internal/integrations/bv/timeout.go` | `internal/bv/timeout.go` | provenance header; `NHM_BV_TIMEOUT` in place of `NTM_BV_TIMEOUT` (nhm-2p6.28.3) |
 | `internal/integrations/bv/triage.go` | `internal/bv/triage.go` | provenance header; util and worksource import paths |
 | `internal/integrations/bv/types.go` | `internal/bv/types.go` | provenance header |
 | `internal/integrations/bv/work_source.go` | `internal/bv/work_source.go` | provenance header; the worksource import path |
@@ -198,10 +198,10 @@ The same rules apply to code from pt and dcg.
 | `internal/integrations/bv/bv_helpers_test.go` | `internal/bv/bv_helpers_test.go` (in part) | provenance header; the context test keeps its two assignment-claim cases; tests of readers not taken are left out |
 | `internal/integrations/bv/bv_pure_helpers_test.go` | `internal/bv/bv_pure_helpers_test.go` (in part) | provenance header; the markdown and client tests are left out |
 | `internal/integrations/bv/bv_test.go` | `internal/bv/bv_test.go` (in part) | provenance header; imports; tests of readers not taken are left out |
-| `internal/integrations/bv/timeout_test.go` | `internal/bv/timeout_test.go` (in part) | provenance header; imports; the two GetInsights tests are left out |
+| `internal/integrations/bv/timeout_test.go` | `internal/bv/timeout_test.go` (in part) | provenance header; imports; the two GetInsights tests are left out; `NHM_BV_TIMEOUT`, and `NTM_BV_TIMEOUT` has no effect (nhm-2p6.28.3) |
 | `internal/integrations/bv/triage_accessors_test.go` | `internal/bv/triage_accessors_test.go` (in part) | provenance header; `TestTriageAccessors_CachePrimed` is left out |
-| `internal/integrations/bv/triage_source_test.go` | `internal/bv/triage_source_test.go` | provenance header |
-| `internal/integrations/bv/triage_test.go` | `internal/bv/triage_test.go` | provenance header |
+| `internal/integrations/bv/triage_source_test.go` | `internal/bv/triage_source_test.go` | provenance header; `NHM_TRIAGE_SOURCE_*` in place of `NTM_TRIAGE_SOURCE_*` (nhm-2p6.28.3) |
+| `internal/integrations/bv/triage_test.go` | `internal/bv/triage_test.go` | provenance header; `NHM_TEST_LABEL_MARKER` in place of `NTM_TEST_LABEL_MARKER` (nhm-2p6.28.3) |
 | `internal/integrations/bv/work_source_test.go` | `internal/bv/work_source_test.go` | provenance header; the worksource import path |
 | `internal/integrations/bv/work_source_batch_test.go` | `internal/bv/work_source_batch_test.go` | provenance header |
 | `internal/integrations/bv/util/LICENSE` | `LICENSE` | none |

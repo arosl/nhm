@@ -1,6 +1,8 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm)
 // internal/bv/triage_test.go at commit 9d5ed977; see LICENSE in this
-// directory and PROVENANCE.md. Local changes: this header only.
+// directory and PROVENANCE.md. Local changes: this header; the fake br's
+// marker is NHM_TEST_LABEL_MARKER in place of ntm's NTM_TEST_LABEL_MARKER
+// (nhm-2p6.28.3).
 
 package bv
 
@@ -439,7 +441,7 @@ esac
 			brScript := `#!/bin/sh
 for arg in "$@"; do
   if [ "$arg" = "ready" ]; then
-    : > "$NTM_TEST_LABEL_MARKER"
+    : > "$NHM_TEST_LABEL_MARKER"
     exec /bin/sleep 10
   fi
 done
@@ -451,7 +453,7 @@ echo '[]'
 				}
 			}
 			t.Setenv("PATH", binDir)
-			t.Setenv("NTM_TEST_LABEL_MARKER", marker)
+			t.Setenv("NHM_TEST_LABEL_MARKER", marker)
 			InvalidateTriageCache()
 			t.Cleanup(InvalidateTriageCache)
 

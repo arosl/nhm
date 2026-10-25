@@ -103,11 +103,11 @@ func addRootFlags(fs *pflag.FlagSet, o *rootOptions) {
 }
 
 // apply refuses a root flag whose effect nhm does not have yet, and sets
-// up the others for this Run. --no-color sets NTM_NO_COLOR, as ntm does;
-// nhm's theme reads it. --config F sets NHM_CONFIG, which nhm's config
-// readers take for their path (the operator's ruling, 2026-10-24: F
-// replaces the path of nhm's config); an empty --config is none, as in
-// ntm.
+// up the others for this Run. --no-color sets NHM_NO_COLOR, where ntm sets
+// its NTM_NO_COLOR; nhm's theme reads it. --config F sets NHM_CONFIG,
+// which nhm's config readers take for their path (the operator's ruling,
+// 2026-10-24: F replaces the path of nhm's config); an empty --config is
+// none, as in ntm.
 //
 // --ssh H hands the whole call to H once it is parsed (the operator's
 // ruling, 2026-10-24), less the --ssh words that pflag took: cmd's flags
@@ -138,7 +138,7 @@ func (o *rootOptions) apply(cmd *cobra.Command) error {
 		o.verb = o.prof.StartWithPhase(cmd.Name(), "command")
 	}
 	if o.noColor {
-		o.setenv("NTM_NO_COLOR", "1")
+		o.setenv("NHM_NO_COLOR", "1")
 	}
 	if o.config != "" {
 		path, err := filepath.Abs(o.config)

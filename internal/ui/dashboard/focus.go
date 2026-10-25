@@ -6,8 +6,9 @@
 // syncFocusAnimations; buildFocusTargets asks the board's visiblePanels
 // in place of ntm's visiblePanelsForHelpVerbosity; without a spring
 // manager the focused panel gets the full focus colour; logFocusf reads
-// NHM_DEBUG, and ntm's NTM_DEBUG too; focusIntensity and
-// focusBorderColor take a pointer, as every method of the board's Model.
+// nhm's NHM_DEBUG in place of ntm's NTM_DEBUG (nhm-2p6.28.3);
+// focusIntensity and focusBorderColor take a pointer, as every method of
+// the board's Model.
 
 package dashboard
 
@@ -315,7 +316,7 @@ func focusTargetsContain(targets []FocusTarget, id string) bool {
 }
 
 func logFocusf(format string, args ...any) {
-	if os.Getenv("NHM_DEBUG") == "1" || os.Getenv("NTM_DEBUG") == "1" {
+	if os.Getenv("NHM_DEBUG") == "1" {
 		log.Printf(format, args...)
 	}
 }

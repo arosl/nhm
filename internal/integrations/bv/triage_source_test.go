@@ -1,6 +1,8 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm)
 // internal/bv/triage_source_test.go at commit 9d5ed977; see LICENSE in
-// this directory and PROVENANCE.md. Local changes: this header only.
+// this directory and PROVENANCE.md. Local changes: this header; the fake
+// bv's environment names are NHM_TRIAGE_SOURCE_* in place of ntm's
+// NTM_TRIAGE_SOURCE_* (nhm-2p6.28.3).
 
 package bv
 
@@ -34,21 +36,21 @@ func sourceBoundTriageFixture(t *testing.T) (dir, tracker, calls string) {
 	bin := t.TempDir()
 	script := `#!/bin/sh
 set -eu
-echo run >> "$NTM_TRIAGE_SOURCE_CALLS"
+echo run >> "$NHM_TRIAGE_SOURCE_CALLS"
 printf '{"triage":{"recommendations":['
-cat "$NTM_TRIAGE_SOURCE_TRACKER"
+cat "$NHM_TRIAGE_SOURCE_TRACKER"
 printf ']}}\n'
-if [ "${NTM_TRIAGE_SOURCE_MUTATE:-}" = 1 ]; then
-  printf '{"id":"new","status":"open"}\n' > "$NTM_TRIAGE_SOURCE_TRACKER"
+if [ "${NHM_TRIAGE_SOURCE_MUTATE:-}" = 1 ]; then
+  printf '{"id":"new","status":"open"}\n' > "$NHM_TRIAGE_SOURCE_TRACKER"
 fi
 `
 	if err := os.WriteFile(filepath.Join(bin, "bv"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("NTM_TRIAGE_SOURCE_TRACKER", tracker)
-	t.Setenv("NTM_TRIAGE_SOURCE_CALLS", calls)
-	t.Setenv("NTM_TRIAGE_SOURCE_MUTATE", "")
+	t.Setenv("NHM_TRIAGE_SOURCE_TRACKER", tracker)
+	t.Setenv("NHM_TRIAGE_SOURCE_CALLS", calls)
+	t.Setenv("NHM_TRIAGE_SOURCE_MUTATE", "")
 	InvalidateTriageCache()
 	t.Cleanup(InvalidateTriageCache)
 	return dir, tracker, calls
@@ -104,7 +106,7 @@ func TestTriageSourceCacheInvalidatesBeforeTTL(t *testing.T) {
 
 func TestTriageSourceDriftDuringExecutionFailsClosed(t *testing.T) {
 	dir, _, calls := sourceBoundTriageFixture(t)
-	t.Setenv("NTM_TRIAGE_SOURCE_MUTATE", "1")
+	t.Setenv("NHM_TRIAGE_SOURCE_MUTATE", "1")
 	got, err := GetTriageContext(context.Background(), dir)
 	if got != nil || !errors.Is(err, ErrStaleWorkCoordination) {
 		t.Fatalf("mixed-source result=%+v error=%v", got, err)
@@ -112,7 +114,7 @@ func TestTriageSourceDriftDuringExecutionFailsClosed(t *testing.T) {
 	if IsCacheValid() {
 		t.Fatal("mixed-source result was cached")
 	}
-	t.Setenv("NTM_TRIAGE_SOURCE_MUTATE", "")
+	t.Setenv("NHM_TRIAGE_SOURCE_MUTATE", "")
 	assertSourceTriageID(t, dir, "new")
 	if n := sourceTriageCalls(t, calls); n != 2 {
 		t.Fatalf("explicit retry ran bv %d times", n)

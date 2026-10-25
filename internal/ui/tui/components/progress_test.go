@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/components/progress_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header; the import path.
+// Local changes: this header; the import path; nhm's NHM_* environment
+// names in place of ntm's NTM_* (nhm-2p6.28.3).
 
 package components
 
@@ -136,9 +137,9 @@ func TestShimmerStability(t *testing.T) {
 }
 
 func TestProgressBarPercentReducedMotionSnaps(t *testing.T) {
-	// Clear env vars so NTM_REDUCE_MOTION takes effect
-	t.Setenv("NTM_ANIMATIONS", "")
-	t.Setenv("NTM_REDUCE_MOTION", "1")
+	// Clear env vars so NHM_REDUCE_MOTION takes effect
+	t.Setenv("NHM_ANIMATIONS", "")
+	t.Setenv("NHM_REDUCE_MOTION", "1")
 	t.Setenv("CI", "")
 	t.Setenv("TMUX", "")
 
@@ -218,8 +219,8 @@ func TestComponentsProgressBarStruct(t *testing.T) {
 
 // TestProgressBarReducedMotion verifies reduced motion disables shimmer
 func TestProgressBarReducedMotion(t *testing.T) {
-	t.Setenv("NTM_ANIMATIONS", "0")
-	t.Setenv("NTM_REDUCE_MOTION", "")
+	t.Setenv("NHM_ANIMATIONS", "0")
+	t.Setenv("NHM_REDUCE_MOTION", "")
 
 	bar1 := styles.ShimmerProgressBar(0.5, 40, "", "", 0)
 	bar2 := styles.ShimmerProgressBar(0.5, 40, "", "", 100)

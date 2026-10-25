@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/tui/components/components_test.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header; the import paths.
+// Local changes: this header; the import paths; nhm's NHM_* environment
+// names in place of ntm's NTM_* (nhm-2p6.28.3).
 
 package components
 
@@ -14,8 +15,8 @@ import (
 
 func enableAnimationsForTest(t *testing.T) {
 	t.Helper()
-	t.Setenv("NTM_ANIMATIONS", "1")
-	t.Setenv("NTM_REDUCE_MOTION", "")
+	t.Setenv("NHM_ANIMATIONS", "1")
+	t.Setenv("NHM_REDUCE_MOTION", "")
 	t.Setenv("TMUX", "")
 	t.Setenv("STY", "")
 	t.Setenv("CI", "")
