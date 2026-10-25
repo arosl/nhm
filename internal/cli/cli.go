@@ -76,8 +76,10 @@ Usage:
                          every agent's recent output, as ntm's logs (a name: nhm read)
   nhm watch [session] [name|slot ...] [--cc] [--pane P] [--bead ID] [--pattern G --command T] [--json]
                          stream the agents' output, a bead or files, as ntm's watch (also w)
-  nhm wait [session] [selector] [--until idle|done|complete|generating|healthy] [--after-op OP] [--timeout D] [--json]
-                         wait until agents reach a state, or a turn completes
+  nhm wait [session] [--until C[,…]] [--timeout D] [--pane N] [--type T] [--any [--count N]] [--exit-on-error]
+                         ntm's wait: until the agents reach a state
+  nhm wait [session] --after-op OP [--until C] [--name N]… [--json]
+                         until an operation's turn completes (nhm's result)
   nhm interrupt <session> [--tag T] [selector] [--json]
                          send each agent ntm's interrupt key (Ctrl+C; Escape for omp)
   nhm send <session> [prompt] [selector] [-t KEY] [--op-id ID] [--wait] [--dry-run] [--json]

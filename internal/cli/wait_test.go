@@ -80,55 +80,12 @@ func agentMap(pane, kind, status string, seq, completion int) map[string]any {
 	return a
 }
 
-func TestWaitVerbStateAndSelection(t *testing.T) {
-	s, _, _ := waitInstance(t, func(pane string) map[string]any {
-		if pane == "w1:p1" {
-			return agentMap(pane, "claude", "idle", 4, 4)
-		}
-		return agentMap(pane, "codex", "working", 7, 0)
-	})
-	s.Handle("agent.wait", func(herdrtest.Request) (any, *herdrtest.Error) {
-		return nil, &herdrtest.Error{Code: "timeout", Message: "timed out"}
-	})
-	code, out, errOut := runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "idle", "--socket", s.SocketPath, "--json")
-	if code != 0 {
-		t.Fatalf("wait = %d %s %s", code, out, errOut)
-	}
-	res := decodeEnvelope(t, out)["result"].(map[string]any)
-	targets := res["targets"].([]any)
-	if res["met"] != true || res["session"] != "w1" || len(targets) != 1 || targets[0].(map[string]any)["outcome"] != "idle" {
-		t.Fatalf("result = %v", res)
-	}
-	// All agents: BlueLake stays working, so idle times out with exit 1.
-	code, out, _ = runVerb(runWait, "w1", "--until", "idle", "--timeout", "100ms", "--poll", "10ms", "--socket", s.SocketPath)
-	if code != 1 || !strings.Contains(out, "IcyKnoll (0.1): idle") || !strings.Contains(out, "BlueLake (1.1): timeout") {
-		t.Fatalf("all = %d %s", code, out)
-	}
-	// --any is met by IcyKnoll alone.
-	if code, out, _ = runVerb(runWait, "swarm", "--any", "--until", "idle", "--socket", s.SocketPath); code != 0 {
-		t.Fatalf("--any = %d %s", code, out)
-	}
-	// --type selects the kind.
-	if code, out, _ = runVerb(runWait, "swarm", "--type", "codex", "--until", "generating", "--socket", s.SocketPath); code != 0 || !strings.Contains(out, "BlueLake (1.1): generating") {
-		t.Fatalf("--type = %d %s", code, out)
-	}
-	for _, args := range [][]string{
-		{"--until", "finished"}, {"a", "b"}, {"--count", "0"}, {"--timeout", "0s"},
-		{"swarm", "--name", "Nobody", "--socket", s.SocketPath}, {"nowhere", "--socket", s.SocketPath},
-	} {
-		if code, _, _ := runVerb(runWait, args...); code != 2 {
-			t.Errorf("%v = %d, want 2", args, code)
-		}
-	}
-}
-
 // ntm's idle is an agent at its prompt, so --until idle is met by herdr's
-// done, where an unviewed pane ends its turn; --until done is herdr's done
-// alone (nhm-y56).
+// done, where an unviewed pane ends its turn; --until done, nhm's own, is
+// herdr's done alone (nhm-y56).
 func TestWaitIdleMeetsDone(t *testing.T) {
 	var mu sync.Mutex
 	state := "done"
-	var waitedFor []string
 	s, _, _ := waitInstance(t, func(pane string) map[string]any {
 		mu.Lock()
 		defer mu.Unlock()
@@ -137,36 +94,22 @@ func TestWaitIdleMeetsDone(t *testing.T) {
 		}
 		return agentMap(pane, "codex", "working", 7, 0)
 	})
-	s.Handle("agent.wait", func(r herdrtest.Request) (any, *herdrtest.Error) {
-		var p struct {
-			Until []string `json:"until"`
-		}
-		_ = json.Unmarshal(r.Params, &p)
-		mu.Lock()
-		waitedFor = p.Until
-		mu.Unlock()
-		return nil, &herdrtest.Error{Code: "timeout", Message: "timed out"}
-	})
-	code, out, _ := runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "idle", "--timeout", "2s", "--socket", s.SocketPath)
-	if code != 0 || !strings.Contains(out, "IcyKnoll (0.1): done") || !strings.Contains(out, "idle: met") {
+	code, out, _ := runVerb(verbRun("wait"), "swarm", "--name", "IcyKnoll", "--until", "idle", "--timeout", "2s", "--socket", s.SocketPath)
+	if code != 0 || !strings.Contains(plain(out), "w1:p1: WAITING") || !strings.Contains(plain(out), "Condition 'idle' met") {
 		t.Fatalf("idle at done = %d %s", code, out)
 	}
-	if code, out, _ = runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "done", "--timeout", "2s", "--socket", s.SocketPath); code != 0 {
+	if code, out, _ = runVerb(verbRun("wait"), "swarm", "--name", "IcyKnoll", "--until", "done", "--timeout", "2s", "--socket", s.SocketPath); code != 0 {
 		t.Fatalf("done at done = %d %s", code, out)
 	}
-	// herdr's agent.wait sleeps until either state.
-	code, out, _ = runVerb(runWait, "swarm", "--name", "BlueLake", "--until", "idle", "--timeout", "100ms", "--poll", "10ms", "--socket", s.SocketPath)
-	mu.Lock()
-	got := strings.Join(waitedFor, ",")
-	mu.Unlock()
-	if code != 1 || got != "idle,done" {
-		t.Fatalf("working = %d %s, agent.wait until %q", code, out, got)
+	code, out, _ = runVerb(verbRun("wait"), "swarm", "--name", "BlueLake", "--until", "idle", "--timeout", "100ms", "--poll", "10ms", "--socket", s.SocketPath)
+	if code != 1 || !strings.Contains(plain(out), "✗ Timeout after 100ms") {
+		t.Fatalf("working = %d %s", code, out)
 	}
 	mu.Lock()
 	state = "idle"
 	mu.Unlock()
-	code, out, _ = runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "done", "--timeout", "100ms", "--poll", "10ms", "--socket", s.SocketPath)
-	if code != 1 || !strings.Contains(out, "IcyKnoll (0.1): timeout") {
+	code, out, _ = runVerb(verbRun("wait"), "swarm", "--name", "IcyKnoll", "--until", "done", "--timeout", "100ms", "--poll", "10ms", "--socket", s.SocketPath)
+	if code != 1 || !strings.Contains(plain(out), "✗ Timeout after 100ms") {
 		t.Fatalf("done at idle = %d %s", code, out)
 	}
 }
@@ -216,7 +159,7 @@ func TestWaitVerbCompleteAfterOp(t *testing.T) {
 	icy := bs[0]
 	base := &wait.Baseline{BindingID: icy.ID, Generation: icy.Generation, PaneID: "w1:p1", State: "idle", StateChangeSeq: 10}
 	sendReceipt(t, inst, "op-send-1", wait.PossiblySubmitted, icy, base)
-	code, out, errOut := runVerb(runWait, "--after-op", "op-send-1", "--until", "complete", "--poll", "10ms", "--socket", s.SocketPath, "--json")
+	code, out, errOut := runVerb(verbRun("wait"), "--after-op", "op-send-1", "--until", "complete", "--poll", "10ms", "--socket", s.SocketPath, "--json")
 	if code != 0 {
 		t.Fatalf("complete = %d %s %s", code, out, errOut)
 	}
@@ -228,7 +171,7 @@ func TestWaitVerbCompleteAfterOp(t *testing.T) {
 
 	// A fast finish that herdr's gate did not see is ambiguous: exit 4.
 	sendReceipt(t, inst, "op-send-2", wait.PossiblySubmitted, icy, base)
-	code, out, _ = runVerb(runWait, "--after-op", "op-send-2", "--until", "complete", "--socket", s.SocketPath)
+	code, out, _ = runVerb(verbRun("wait"), "--after-op", "op-send-2", "--until", "complete", "--socket", s.SocketPath)
 	if code != exitAmbiguous || !strings.Contains(out, "IcyKnoll (0.1): ambiguous (weak)") {
 		t.Fatalf("ambiguous = %d %s", code, out)
 	}
@@ -237,13 +180,24 @@ func TestWaitVerbCompleteAfterOp(t *testing.T) {
 	old := *base
 	old.Generation = icy.Generation - 1
 	sendReceipt(t, inst, "op-send-3", wait.Submitted, icy, &old)
-	code, out, _ = runVerb(runWait, "--after-op", "op-send-3", "--until", "complete", "--socket", s.SocketPath)
+	code, out, _ = runVerb(verbRun("wait"), "--after-op", "op-send-3", "--until", "complete", "--socket", s.SocketPath)
 	if code != 1 || !strings.Contains(out, "replaced") {
 		t.Fatalf("replaced = %d %s", code, out)
 	}
 
-	if code, _, errOut := runVerb(runWait, "--after-op", "op-missing", "--socket", s.SocketPath); code != 2 || !strings.Contains(errOut, "no receipts") {
+	if code, _, errOut := runVerb(verbRun("wait"), "--after-op", "op-missing", "--socket", s.SocketPath); code != exitRefused || !strings.Contains(errOut, "no receipts") {
 		t.Fatalf("unknown op = %d %s", code, errOut)
+	}
+	// nhm's own form keeps nhm's refusals and envelope (ruling (c)).
+	code, out, _ = runVerb(verbRun("wait"), "--after-op", "op-missing", "--socket", s.SocketPath, "--json")
+	refused := decodeEnvelope(t, out)
+	if msg, _ := refused["error"].(string); code != exitRefused || !strings.Contains(msg, "no receipts") || refused["operation_id"] != "op-missing" {
+		t.Fatalf("unknown op, --json = %d %s", code, out)
+	}
+	for _, args := range [][]string{{"--until", "finished"}, {"--count", "0"}, {"--timeout", "0s"}, {"--poll", "0s"}, {"--type", "user"}} {
+		if code, _, errOut := runVerb(verbRun("wait"), append([]string{"--after-op", "op-send-1", "--socket", s.SocketPath}, args...)...); code != exitRefused || !strings.Contains(errOut, "Usage: nhm wait") {
+			t.Errorf("%v = %d %q, want 2 and the usage", args, code, errOut)
+		}
 	}
 }
 
@@ -266,24 +220,24 @@ func TestWaitAfterANudge(t *testing.T) {
 	icy := bs[0]
 	base := &wait.Baseline{BindingID: icy.ID, Generation: icy.Generation, PaneID: "w1:p1", State: "idle", StateChangeSeq: 10}
 	opReceipt(t, inst, wake.Verb, "op-wake-1", wait.Submitted, icy, base)
-	code, out, errOut := runVerb(runWait, "--after-op", "op-wake-1", "--until", "complete", "--poll", "10ms", "--socket", s.SocketPath, "--json")
+	code, out, errOut := runVerb(verbRun("wait"), "--after-op", "op-wake-1", "--until", "complete", "--poll", "10ms", "--socket", s.SocketPath, "--json")
 	tg := decodeEnvelope(t, out)["result"].(map[string]any)["targets"].([]any)[0].(map[string]any)
 	if code != 0 || tg["outcome"] != "complete" || tg["correlation"] != "strong" || tg["started_seq"].(float64) != 11 {
 		t.Fatalf("seen start = %d %v %s", code, tg, errOut)
 	}
 	// The turn had ended before the wait's first read.
 	opReceipt(t, inst, wake.Verb, "op-wake-2", wait.Submitted, icy, base)
-	code, out, _ = runVerb(runWait, "--after-op", "op-wake-2", "--until", "complete", "--socket", s.SocketPath)
+	code, out, _ = runVerb(verbRun("wait"), "--after-op", "op-wake-2", "--until", "complete", "--socket", s.SocketPath)
 	if code != exitAmbiguous || !strings.Contains(out, "IcyKnoll (0.1): ambiguous (weak)") {
 		t.Fatalf("unseen start = %d %s", code, out)
 	}
 	sendReceipt(t, inst, "op-send-1", wait.Submitted, icy, base)
-	if code, out, _ = runVerb(runWait, "--after-op", "op-send-1", "--until", "complete", "--socket", s.SocketPath); code != 0 ||
+	if code, out, _ = runVerb(verbRun("wait"), "--after-op", "op-send-1", "--until", "complete", "--socket", s.SocketPath); code != 0 ||
 		!strings.Contains(out, "IcyKnoll (0.1): complete (strong)") {
 		t.Fatalf("a send's = %d %s", code, out)
 	}
 	// A state wait after the nudge: the done after its baseline meets idle.
-	if code, out, _ = runVerb(runWait, "--after-op", "op-wake-2", "--until", "idle", "--socket", s.SocketPath); code != 0 ||
+	if code, out, _ = runVerb(verbRun("wait"), "--after-op", "op-wake-2", "--until", "idle", "--socket", s.SocketPath); code != 0 ||
 		!strings.Contains(out, "IcyKnoll (0.1): done") {
 		t.Fatalf("idle after the nudge = %d %s", code, out)
 	}

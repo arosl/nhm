@@ -317,7 +317,6 @@ func legacyVerbs() []legacyVerb {
 		// bind's --config is herdr's config file.
 		{name: "bind", run: runBind, own: []string{"config"}},
 		{name: "ui", run: runUI},
-		{name: "wait", run: runWait},
 		{name: "send", run: runSend},
 		{name: "feedback", run: runFeedback},
 		{name: "modes", run: runModes},
@@ -427,7 +426,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd(), newKillCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd(), newKillCmd(), newWaitCmd())
 	cmd.AddCommand(newDoctorCmd(), newCopyCmd(), newGrepCmd(), newErrorsCmd(), newGetAllSessionTextCmd(), newSwitchAgentCmd(), newExtractCmd(), newListCmd(), newSaveCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))

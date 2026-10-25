@@ -69,14 +69,12 @@ func TestInterruptAndWaitRefuseANameOfTwoProjects(t *testing.T) {
 	}
 	mu.Unlock()
 
-	code, _, errOut = runVerb(runWait, "swarm", "--name", "IcyKnoll", "--until", "idle", "--socket", s.SocketPath)
-	if code != exitRefused || !strings.Contains(errOut, "name one by its slot") {
+	code, _, errOut = runVerb(verbRun("wait"), "swarm", "--name", "IcyKnoll", "--until", "idle", "--socket", s.SocketPath)
+	if code != exitError || !strings.Contains(errOut, "name one by its slot") {
 		t.Fatalf("wait without --project = %d %s", code, errOut)
 	}
-	code, out, errOut = runVerb(runWait, "swarm", "--name", "IcyKnoll", "--project", project, "--until", "idle", "--socket", s.SocketPath, "--json")
-	res, _ := decodeEnvelope(t, out)["result"].(map[string]any)
-	targets, _ := res["targets"].([]any)
-	if code != exitOK || len(targets) != 1 || !strings.Contains(out, "w1:p3") {
+	code, out, errOut = runVerb(verbRun("wait"), "swarm", "--name", "IcyKnoll", "--project", project, "--until", "idle", "--socket", s.SocketPath)
+	if code != exitOK || !strings.Contains(plain(out), "    w1:p3: WAITING\n") || strings.Count(plain(out), "WAITING") != 1 {
 		t.Fatalf("wait with --project = %d %s %s", code, out, errOut)
 	}
 }
