@@ -68,12 +68,8 @@ func TestLifecycleVerbs(t *testing.T) {
 		t.Fatalf("restore = %d %s", code, out)
 	}
 	ownNhm(t, inst)
-	// kill: a refusal (BlueLake works; no --yes) exits 2, and a herdr it
-	// cannot reach exits 1.
-	if code, _, errOut = run("kill", "swarm", "--socket", sock); code != 2 {
-		t.Fatalf("kill refused = %d %s", code, errOut)
-	}
-	if code, _, errOut = run("kill", "swarm", "--socket", filepath.Join(t.TempDir(), "gone.sock")); code != 1 {
+	// kill: a herdr it cannot reach exits 1 (kill_ntm_test.go has the rest).
+	if code, _, errOut = run("kill", "swarm", "-f", "--socket", filepath.Join(t.TempDir(), "gone.sock")); code != 1 {
 		t.Fatalf("kill without herdr = %d %s", code, errOut)
 	}
 	code, out, errOut = run("retire", "IcyKnoll", "--keep-identity", "--socket", sock, "--json")
@@ -89,51 +85,11 @@ func TestLifecycleVerbs(t *testing.T) {
 		t.Fatalf("inspect = %d %s %s", code, out, errOut)
 	}
 	for _, args := range [][]string{
-		{"retire"}, {"recycle"}, {"kill"}, {"admin", "recover", "resume", "x"},
+		{"retire"}, {"recycle"}, {"admin", "recover", "resume", "x"},
 		{"admin", "export", "--project", "/p"}, {"admin", "import"},
 	} {
 		if code, _, _ := run(append(args, "--socket", sock)...); code != 2 {
 			t.Errorf("%v = %d, want 2", args, code)
 		}
-	}
-}
-
-// ntm's kill -f and --force (ru calls both) are --yes: they close the
-// workspace after the same checks, and skip none.
-func TestKillForceIsYes(t *testing.T) {
-	for _, force := range []string{"-f", "--force"} {
-		t.Run(force, func(t *testing.T) {
-			blue := "working"
-			s, inst, _ := waitInstance(t, func(pane string) map[string]any {
-				if pane == "w1:p1" {
-					return agentMap(pane, "claude", "idle", 4, 4)
-				}
-				return agentMap(pane, "codex", blue, 7, 7)
-			})
-			t.Setenv("HOME", t.TempDir())
-			old := lifecycleFacts
-			lifecycleFacts = cliFacts{}
-			t.Cleanup(func() { lifecycleFacts = old })
-			var closed, wsClosed []string
-			s.Handle("pane.close", func(r herdrtest.Request) (any, *herdrtest.Error) {
-				closed = append(closed, string(r.Params))
-				return map[string]any{"type": "ok"}, nil
-			})
-			s.Handle("workspace.close", func(r herdrtest.Request) (any, *herdrtest.Error) {
-				wsClosed = append(wsClosed, string(r.Params))
-				return map[string]any{"type": "ok"}, nil
-			})
-			ownNhm(t, inst)
-			// BlueLake works: refused, exit 2, nothing closed.
-			code, _, errOut := run("kill", "swarm", force, "--socket", s.SocketPath)
-			if code != 2 || !strings.Contains(errOut, "BlueLake is working") || len(closed)+len(wsClosed) != 0 {
-				t.Fatalf("kill %s over a working agent = %d %s", force, code, errOut)
-			}
-			blue = "idle"
-			code, out, errOut := run("kill", "swarm", force, "--socket", s.SocketPath)
-			if code != 0 || len(closed) != 2 || len(wsClosed) != 1 || !strings.Contains(out, "closed workspace w1") {
-				t.Fatalf("kill %s = %d %s %s", force, code, out, errOut)
-			}
-		})
 	}
 }

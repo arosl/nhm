@@ -437,69 +437,30 @@ func keepPaths() []string {
 	return paths
 }
 
-const killUsage = `Usage: nhm kill <session> [--yes | -f | --force] [--no-beads] [--op-id ID] [--socket PATH] [--json]
+const killUsage = `Usage: nhm kill <session> [-f|--force] [--tag T]… [--no-hooks] [--socket PATH] [--json]
+       nhm kill -p|--project P [-f|--force] [--tag T]…
 
-Close a workspace. It runs the retire checks for every bound agent first
-and never bypasses them: one refusal refuses the kill and nothing closes.
-Then it retires each agent (its transcript preserved, its identity
-retired) and closes the workspace. Without --yes it only reports. -f and
---force are ntm's spelling of --yes: they skip no check.
---no-beads is retire's, for every agent: the workspace's agents worked no
-beads (agents spawned with --role reviewer never need it).
---op-id names the kill's operation record. An id used before is refused:
-the kill does not run again (nhm menu's recent operations shows it).
+ntm's kill: kill a session, its herdr workspace, with every pane in it.
+It asks first: a confirm on a terminal, else "[y/N]" on stdin; -f skips
+the question, and so does --json. Then it closes the workspace, ends the
+agent processes that outlived their panes (SIGTERM, then SIGKILL), and
+releases the Agent Mail file reservations of the session's agents. Their
+identities stay in Agent Mail, as in ntm; nhm retire is the verb with
+retire's checks and a kept transcript.
+
+--tag (repeatable, or a comma list) kills only the panes whose herdr pane
+label ends in one of the tags, "Name model[a,b]", and keeps the session.
+--project P kills every session whose base name is P, after one confirm.
+--pane and --summarize wait for their engines (nhm-2p6.11, nhm-2p6.8).
+nhm runs no command hooks, so --no-hooks changes nothing.
+
+Prints "Killed session 'S'", "Killed N pane(s) matching tags", "No panes
+found matching tags." or "Aborted."; --json gives ntm's KillResponse.
+Runs only when nhm owns this herdr instance. Exit 0, or 1 on an error.
 `
 
-func runKill(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, killUsage) }
-	yes := fs.Bool("yes", false, "close it")
-	// ntm's kill -f and --force skip its confirmation, as --yes does here;
-	// ru calls both spellings.
-	fs.BoolVar(yes, "force", false, "ntm's spelling of --yes")
-	fs.BoolVar(yes, "f", false, "ntm's spelling of --yes")
-	noBeads := fs.Bool("no-beads", false, "the agents worked no beads; do not require any")
-	opID := fs.String("op-id", "", "the id of the kill's operation record")
-	socket := fs.String("socket", "", "herdr API socket")
-	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
-	pos, err := parseInterleaved(fs, args)
-	if err != nil || len(pos) != 1 {
-		if err == nil {
-			fmt.Fprint(stderr, killUsage)
-		}
-		return exitRefused
-	}
-	env := envelope{Command: "kill"}
-	ctx := context.Background()
-	ie, err := openInstance(*socket)
-	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
-	}
-	defer ie.db.Close()
-	ws, err := sessionWorkspace(ctx, ie.herdr, pos[0])
-	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
-	}
-	lenv, err := ie.lifecycleEnv()
-	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
-	}
-	res, code, err := killUnderOwner(ctx, ie, lenv, lifecycle.KillRequest{WorkspaceID: ws, Yes: *yes, NoBeads: *noBeads, OperationID: *opID})
-	if res.OperationID != "" {
-		env.OperationID = res.OperationID
-	}
-	env.Result = res
-	return output(stdout, stderr, *asJSON, env, err, code, func(w io.Writer) {
-		for _, a := range res.Agents {
-			fmt.Fprintf(w, "retired %s\n", a.MailName)
-		}
-		fmt.Fprintf(w, "closed workspace %s\n", ws)
-	})
-}
-
-// killUnderOwner runs kill under the owner lock, for nhm kill and the
-// menu's kill job. Only a rule's refusal exits 2; herdr or Agent Mail
+// killUnderOwner runs nhm's guarded kill under the owner lock, for the
+// menu's kill job (nhm's own; ntm's TUI has no kill). Only a rule's refusal exits 2; herdr or Agent Mail
 // failing is 1.
 func killUnderOwner(ctx context.Context, ie *instanceEnv, lenv lifecycle.Env, req lifecycle.KillRequest) (lifecycle.KillResult, int, error) {
 	var res lifecycle.KillResult

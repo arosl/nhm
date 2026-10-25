@@ -34,8 +34,8 @@ Usage:
                          a fresh session in the same pane, with a handoff
   nhm reap [session] [--idle MIN] [--all-workspaces] [--dry-run]
                          retire agents idle past the limit whose work is done
-  nhm kill <session> [--yes]
-                         retire every agent of a workspace, then close it
+  nhm kill <session> [-f] [--tag T] | kill -p P
+                         ntm's kill: close a session's workspace, end its processes
   nhm attach [session] [--json]
                          focus a session's workspace (without one: nhm list)
   nhm zoom <session> <slot|pane-id|name|kind> [--json]

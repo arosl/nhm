@@ -279,7 +279,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "retire", run: runRetire},
 		{name: "recycle", run: runRecycle},
 		{name: "reap", run: runReap},
-		{name: "kill", run: runKill},
 		{name: "attach", run: runAttach},
 		{name: "zoom", run: runZoom},
 		// ntm's view, with its aliases (the operator's ruling, nhm-k9d,
@@ -429,7 +428,7 @@ func newRoot(stdout, stderr io.Writer) *root {
 		}
 		defaultHelp(c, args)
 	})
-	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd())
+	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd(), newKillCmd())
 	cmd.AddCommand(newDoctorCmd(), newCopyCmd(), newGrepCmd(), newErrorsCmd(), newGetAllSessionTextCmd(), newSwitchAgentCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
