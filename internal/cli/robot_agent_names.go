@@ -53,7 +53,7 @@ func runRobotAgentNames(args []string, stdout io.Writer) int {
 		Agents: []robot.AgentNameEntry{}}
 	fail := func(code, msg, hint string) int {
 		out.RobotResponse = robot.NewError(code, msg, hint, root.format, now).RobotResponse
-		out.Meta = &robot.ResponseMeta{ExitCode: robotError}
+		out.Meta = &robot.ResponseMeta{ExitCode: robotError, Command: robotCommand}
 		return robotWrite(stdout, out, robotError)
 	}
 	ie, err := openInstance(*socket)

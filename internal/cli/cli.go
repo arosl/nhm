@@ -142,6 +142,8 @@ Usage:
                          each agent's last lines, ntm's LogsOutput; each pane's addresses
   nhm --robot-watch-bead=S --bead=ID [--panes=P] [--lines=N] [--interval=D]
                          a bead's mentions in the agents' output, ntm's WatchBeadOutput
+  nhm --robot-errors=S [--panes=P] [--lines=N] [--type=K]
+                         the error lines in the agents' output, ntm's ErrorsOutput
   nhm --robot-* … --robot-format=json (or --robot-output-format=json)
       [--robot-verbosity=terse|default|debug]
                          every robot flag answers JSON (auto is JSON)

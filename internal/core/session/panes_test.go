@@ -15,7 +15,7 @@ func panesSnap() (herdr.SessionSnapshot, []bindings.Binding) {
 	snap := herdr.SessionSnapshot{
 		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "w1", ActiveTabID: "w1:t1"}, {WorkspaceID: "w2", ActiveTabID: "w2:t1"}},
 		Panes: []herdr.PaneInfo{
-			{PaneID: "w1:p3", TabID: "w1:t2", WorkspaceID: "w1", TerminalTitleStripped: "ubuntu@host:/p", Focused: true},
+			{PaneID: "w1:p3", TabID: "w1:t2", WorkspaceID: "w1", TerminalTitleStripped: "user@host:/p", Focused: true},
 			{PaneID: "w1:p2", TabID: "w1:t1", WorkspaceID: "w1", Agent: "codex", Label: "BlueLake gpt-5"},
 			{PaneID: "w1:p1", TabID: "w1:t1", WorkspaceID: "w1", Agent: "claude", Label: "IcyKnoll opus"},
 			{PaneID: "w1:p5", TabID: "w1:t1", WorkspaceID: "w1", Agent: "codex", Title: "codex"},
@@ -43,7 +43,7 @@ func TestPanesOfWorkspace(t *testing.T) {
 		active                     bool
 	}
 	want := []row{
-		{"w1:p3", "", "ubuntu@host:/p", "", UserType, 0, 0, false},
+		{"w1:p3", "", "user@host:/p", "", UserType, 0, 0, false},
 		{"w1:p5", "", "codex", "codex", "codex", 3, 0, false},
 		{"w1:p1", "3.1", "IcyKnoll opus", "claude", "claude", 3, 1, false},
 		{"w1:p2", "3.2", "BlueLake gpt-5", "codex", "codex", 3, 2, true},

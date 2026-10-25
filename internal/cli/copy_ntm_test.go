@@ -100,7 +100,7 @@ func paneSnapshot() map[string]any {
 			"pane_count": 4, "tab_count": 2, "active_tab_id": "w1:t1", "agent_status": "idle"}},
 		"tabs": []any{tab("w1:t1", 1), tab("w1:t2", 2)},
 		"panes": []any{testPane("w1:p1", "w1:t1", "claude", "IcyKnoll opus", ""), testPane("w1:p2", "w1:t1", "codex", "BlueLake gpt", ""),
-			testPane("w1:p3", "w1:t2", "", "", "ubuntu@host:/p"), testPane("w1:p4", "w1:t2", "claude", "", "loose")},
+			testPane("w1:p3", "w1:t2", "", "", "user@host:/p"), testPane("w1:p4", "w1:t2", "claude", "", "loose")},
 		"layouts": []any{map[string]any{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false, "focused_pane_id": "w1:p2"}},
 	}
 }

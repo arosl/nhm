@@ -53,6 +53,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotFlag(args, "--robot-assign") {
 		return runRobotAssign(args, stdout)
 	}
+	if hasRobotFlag(args, "--robot-errors") {
+		return runRobotErrors(args, stdout)
+	}
 	if hasRobotFlag(args, "--robot-logs") {
 		return runRobotLogs(args, stdout)
 	}

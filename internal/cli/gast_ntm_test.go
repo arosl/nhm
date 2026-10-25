@@ -10,7 +10,7 @@ import (
 func gastText(pane string) string {
 	switch pane {
 	case "w1:p3":
-		return "ubuntu@host:~$ \n"
+		return "user@host:~$ \n"
 	case "w1:p4":
 		return "Rate limit exceeded\n"
 	case "w1:p1":
@@ -30,7 +30,7 @@ func TestGASTFullTable(t *testing.T) {
 	want := "## NHM Swarm Status\n\n" +
 		"| Session | Pane | Type | State | Last Message | Issues |\n" +
 		"|---------|------|------|-------|--------------|--------|\n" +
-		"| swarm | 1 (ctrl) | user | WAITING | ubuntu@host:~$ | - |\n" +
+		"| swarm | 1 (ctrl) | user | WAITING | user@host:~$ | - |\n" +
 		"| swarm | 0 | cc | ERROR | Rate limit exceeded | RATE_LIMIT |\n" +
 		"| swarm | 1 | cc | THINKING | · thinking | - |\n" +
 		"| swarm | 2 | cod | ERROR | error: something went badly wrong here | error: something went badly wrong here |\n" +

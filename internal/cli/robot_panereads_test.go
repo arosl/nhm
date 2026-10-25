@@ -77,7 +77,7 @@ func TestRobotPaneAddressMultiTab(t *testing.T) {
 		t.Fatalf("--robot-pane-address = %d %s", code, out)
 	}
 	want := []robot.PaneAddressEntry{
-		{Selector: "w1:p3", PaneID: "w1:p3", Title: "ubuntu@host:/p", Type: "user", TmuxTarget: "w1:p3"},
+		{Selector: "w1:p3", PaneID: "w1:p3", Title: "user@host:/p", Type: "user", TmuxTarget: "w1:p3"},
 		{Selector: "w1:p4", PaneID: "w1:p4", Title: "loose", Type: "claude", TmuxTarget: "w1:p4"},
 		{Selector: "0.1", PaneID: "w1:p1", PaneIndex: 1, Title: "IcyKnoll opus", Type: "claude", TmuxTarget: "w1:p1"},
 		{Selector: "0.2", PaneID: "w1:p2", PaneIndex: 2, Title: "BlueLake gpt", Type: "codex", TmuxTarget: "w1:p2"},
