@@ -10,10 +10,10 @@ import (
 )
 
 // A bead a spawn assignment claimed for an agent (assignee
-// "<Mail name>/ntm-<key>") is the agent's in every fact that reads its
-// beads, so retire, recycle and reap see it as they see the agent's own
-// claims; another agent's claim, a longer name and an unassigned bead are
-// not (nhm-i85).
+// "<Mail name>/nhm-<key>", or an older nhm's "/ntm-<key>") is the agent's
+// in every fact that reads its beads, so retire, recycle and reap see it as
+// they see the agent's own claims; another agent's claim, a longer name and
+// an unassigned bead are not (nhm-i85, nhm-2p6.28.4).
 func TestFactsCountSpawnAssignmentClaims(t *testing.T) {
 	bin, root := t.TempDir(), t.TempDir()
 	writeFile(t, filepath.Join(root, ".beads", "beads.db"), "")
@@ -23,8 +23,8 @@ func TestFactsCountSpawnAssignmentClaims(t *testing.T) {
 	list := func(rows ...string) string {
 		return `echo '{"issues":[` + strings.Join(rows, ",") + `],"has_more":false}'`
 	}
-	inProgress := []string{row("acfs-1", "in_progress", "IcyKnoll"), row("acfs-2", "in_progress", "IcyKnoll/ntm-0123456789ab"),
-		row("acfs-3", "in_progress", "IcyKnollX/ntm-0123456789ab"), row("acfs-4", "in_progress", "BlueLake/ntm-0123456789ab"),
+	inProgress := []string{row("acfs-1", "in_progress", "IcyKnoll"), row("acfs-2", "in_progress", "IcyKnoll/nhm-0123456789ab"),
+		row("acfs-3", "in_progress", "IcyKnollX/nhm-0123456789ab"), row("acfs-4", "in_progress", "BlueLake/ntm-0123456789ab"),
 		row("acfs-5", "in_progress", "")}
 	closed := []string{row("acfs-6", "closed", "IcyKnoll/ntm-fedcba987654"), row("acfs-7", "closed", "BlueLake")}
 	writeFile(t, filepath.Join(bin, "br"), "#!/bin/sh\ncase \"$*\" in\n"+

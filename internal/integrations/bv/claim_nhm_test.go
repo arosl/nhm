@@ -68,7 +68,7 @@ func countUpdateCalls(lines []string) int {
 	return n
 }
 
-const claimedRow = `[{"id":"nhm-t1","title":"Task","status":"in_progress","priority":2,"assignee":"Actor/ntm-0123456789ab"}]`
+const claimedRow = `[{"id":"nhm-t1","title":"Task","status":"in_progress","priority":2,"assignee":"Actor/nhm-0123456789ab"}]`
 
 // The readiness-gate cases of ntm's
 // TestClaimBeadForAssignmentTransactionRejectsNonReadyOpenWork: a deferred,
@@ -91,7 +91,7 @@ func TestClaimRefusesNonReadyOpenWorkBeforeWriting(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			show := `[{"id":"` + test.id + `","title":"Task","issue_type":"task","status":"open","priority":2,"updated_at":"2026-10-13T00:00:00Z",` + test.fields + `}]`
 			dir, calls := installClaimFakeBR(t, show, `[]`, "echo "+claimedRow)
-			_, err := ClaimBeadForAssignment(t.Context(), dir, test.id, "Actor/ntm-0123456789ab")
+			_, err := ClaimBeadForAssignment(t.Context(), dir, test.id, "Actor/nhm-0123456789ab")
 			var eligibility *AssignmentEligibilityError
 			if !errors.Is(err, ErrBeadAssignmentIneligible) || !errors.As(err, &eligibility) || !test.wantReason(eligibility) {
 				t.Fatalf("claim error=%v eligibility=%+v", err, eligibility)
@@ -110,8 +110,8 @@ func TestClaimRefusesNonReadyOpenWorkBeforeWriting(t *testing.T) {
 func TestClaimWritesWithIfUnchangedFromTheRead(t *testing.T) {
 	show := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"open","priority":2,"updated_at":"2026-10-13T12:34:56.789012345Z"}]`
 	dir, calls := installClaimFakeBR(t, show, `[]`, "echo '"+claimedRow+"'")
-	result, err := ClaimBeadForAssignment(t.Context(), dir, "nhm-t1", "Actor/ntm-0123456789ab")
-	if err != nil || result.ID != "nhm-t1" || result.Actor != "Actor/ntm-0123456789ab" || result.Status != "in_progress" {
+	result, err := ClaimBeadForAssignment(t.Context(), dir, "nhm-t1", "Actor/nhm-0123456789ab")
+	if err != nil || result.ID != "nhm-t1" || result.Actor != "Actor/nhm-0123456789ab" || result.Status != "in_progress" {
 		t.Fatalf("claim=%+v error=%v", result, err)
 	}
 	var update string
@@ -120,7 +120,7 @@ func TestClaimWritesWithIfUnchangedFromTheRead(t *testing.T) {
 			update = line
 		}
 	}
-	for _, want := range []string{"update nhm-t1 --claim", "--actor Actor/ntm-0123456789ab", "--if-unchanged 2026-10-13T12:34:56.789012345Z"} {
+	for _, want := range []string{"update nhm-t1 --claim", "--actor Actor/nhm-0123456789ab", "--if-unchanged 2026-10-13T12:34:56.789012345Z"} {
 		if !strings.Contains(update, want) {
 			t.Fatalf("update call %q lacks %q", update, want)
 		}
@@ -133,7 +133,7 @@ func TestClaimWritesWithIfUnchangedFromTheRead(t *testing.T) {
 // retries itself: every update call follows its own read.
 func TestClaimMapsBrRefusals(t *testing.T) {
 	show := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"open","priority":2,"updated_at":"2026-10-13T00:00:00Z"}]`
-	const actor = "Actor/ntm-0123456789ab"
+	const actor = "Actor/nhm-0123456789ab"
 	ours := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"in_progress","priority":2,"assignee":"` + actor + `","updated_at":"2026-10-13T00:00:01Z"}]`
 	others := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"in_progress","priority":2,"assignee":"Other","updated_at":"2026-10-13T00:00:01Z"}]`
 	moved := `[{"id":"nhm-t1","title":"Task","issue_type":"task","status":"open","priority":2,"updated_at":"2026-10-13T00:00:02Z"}]`
@@ -293,7 +293,7 @@ func TestClaimMutexHoldersFromBrList(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			dir, _ := installClaimFakeBR(t, show, test.list, "echo '"+claimedRow+"'")
-			_, err := ClaimBeadForAssignment(t.Context(), dir, "nhm-t1", "Actor/ntm-0123456789ab")
+			_, err := ClaimBeadForAssignment(t.Context(), dir, "nhm-t1", "Actor/nhm-0123456789ab")
 			test.check(t, err)
 		})
 	}
@@ -318,7 +318,7 @@ func TestClaimMutexClaimsSerializeOnRealBR(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = ClaimBeadForAssignment(context.Background(), dir, ids[i], "Actor/ntm-00000000000"+string(rune('0'+i)))
+			_, errs[i] = ClaimBeadForAssignment(context.Background(), dir, ids[i], "Actor/nhm-00000000000"+string(rune('0'+i)))
 		}(i)
 	}
 	wg.Wait()
@@ -349,7 +349,7 @@ func TestClaimLeavesBrWritableAfterBvRead(t *testing.T) {
 	runRealBR(t, dir, "init", "--quiet")
 	target := createRealBRBead(t, dir, "claim target")
 	other := createRealBRBead(t, dir, "later write")
-	if _, err := ClaimBeadForAssignment(t.Context(), dir, target, "Actor/ntm-0123456789ab"); err != nil {
+	if _, err := ClaimBeadForAssignment(t.Context(), dir, target, "Actor/nhm-0123456789ab"); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	bv := exec.Command("bv", "--robot-triage")
@@ -358,5 +358,5 @@ func TestClaimLeavesBrWritableAfterBvRead(t *testing.T) {
 		t.Fatalf("bv --robot-triage: %v\n%s", err, output)
 	}
 	runRealBR(t, dir, "update", other, "--status", "in_progress", "--json")
-	assertRealBRStatusAndAssignee(t, dir, target, "in_progress", "Actor/ntm-0123456789ab")
+	assertRealBRStatusAndAssignee(t, dir, target, "in_progress", "Actor/nhm-0123456789ab")
 }

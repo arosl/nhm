@@ -66,7 +66,7 @@ The same rules apply to code from pt and dcg.
 | `internal/core/templates/LICENSE` | `LICENSE` | none |
 | `internal/core/templates/template.go` | `internal/templates/template.go` | provenance header; nhm's placeholders (`agent`, `herdr`, `model`, `thread`, `project`, `group`) in `ExecutionContext`; `Template.Enrichment` (plan-v8 2.13) |
 | `internal/core/templates/parser.go` | `internal/templates/parser.go` | provenance header; the unused `@macro` pattern removed; nhm's per-target placeholders are pane context and filled in `variables` |
-| `internal/core/templates/builtin.go` | `internal/templates/builtin.go` | provenance header |
+| `internal/core/templates/builtin.go` | `internal/templates/builtin.go` | provenance header; the variable descriptions say `nhm send` (nhm-2p6.28.4) |
 | `internal/core/templates/parser_test.go` | `internal/templates/parser_test.go` | provenance header; the loader tests use nhm's `NewLoader` and `.nhm/templates` |
 | `internal/core/templates/builtin_test.go` | `internal/templates/builtin_test.go` | provenance header |
 | `internal/core/snapshot/LICENSE` | `LICENSE` | none |
@@ -160,7 +160,7 @@ The same rules apply to code from pt and dcg.
 | `internal/ui/forms/spawn_wizard_test.go` | `internal/tui/dashboard/panels/spawn_wizard_test.go` | provenance header; the constructor takes a runner, a context and nhm's kinds; counts per kind |
 | `internal/ui/forms/spawn_wizard_flow_test.go` | `internal/tui/dashboard/panels/spawn_wizard_flow_test.go` | provenance header; nhm's steps (counts, options, review); the tests from `TestSpawnWizardReviewThenSpawnOnce` on are nhm's |
 | `internal/core/assignment/LICENSE` | `LICENSE` | none |
-| `internal/core/assignment/atomic.go` | `internal/assignment/atomic.go` | provenance header; the events import path; the occupant identity is an nhm binding id (`bnd-` and 16 lowercase hex digits) in place of a tmux pane id (`isPhysicalPaneOccupancyKey`, the `PaneIdentityMigrationError` text, comments; `strconv` dropped); `DispatchRequest.Attempt` carries the persisted attempt (nhm-i85) |
+| `internal/core/assignment/atomic.go` | `internal/assignment/atomic.go` | provenance header; the events import path; the occupant identity is an nhm binding id (`bnd-` and 16 lowercase hex digits) in place of a tmux pane id (`isPhysicalPaneOccupancyKey`, the `PaneIdentityMigrationError` text, comments; `strconv` dropped); `DispatchRequest.Attempt` carries the persisted attempt (nhm-i85); `StableClaimActor` writes `nhm` and `/nhm-<key>` in place of ntm's `ntm` and `/ntm-<key>` (nhm-2p6.28.4) |
 | `internal/core/assignment/store.go` | `internal/assignment/store.go` | provenance header; the events import path; `StorageDir` under `store.StateRoot` in place of `~/.ntm`; nhm names a store `<instance id>.<workspace id>`; the E2E failpoints read `NHM_TEST_*` in place of `NTM_TEST_*` (nhm-2p6.28.3) |
 | `internal/core/assignment/store_lock.go` | `internal/assignment/store_lock.go` | provenance header |
 | `internal/core/assignment/store_lock_unix.go` | `internal/assignment/store_lock_unix.go` | provenance header; `store_lock_windows.go` is not taken (Linux only) |

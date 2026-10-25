@@ -242,7 +242,7 @@ func brBead(ctx context.Context, projectRoot, id string) (enrich.Bead, error) {
 	}
 	for _, r := range list {
 		if r.ID == id {
-			// A spawn assignment's claim (<Mail name>/ntm-<key>) is its
+			// A spawn assignment's claim (<Mail name>/nhm-<key>) is its
 			// agent's (nhm-i85).
 			return enrich.Bead{Status: r.Status, Assignee: assignment.ClaimActorBase(r.Assignee)}, nil
 		}

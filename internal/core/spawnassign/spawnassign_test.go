@@ -236,8 +236,8 @@ func TestAssignClaimsAndDeliversOneTaskPerAgent(t *testing.T) {
 			t.Fatalf("assignment %d = %+v", i, a)
 		}
 		mail := w.binds[i].MailName
-		if !strings.HasPrefix(a.ClaimActor, mail+"/ntm-") || a.Pane != w.binds[i].Slot {
-			t.Fatalf("assignment %d actor=%q pane=%q, want %s/ntm-… in %s", i, a.ClaimActor, a.Pane, mail, w.binds[i].Slot)
+		if !strings.HasPrefix(a.ClaimActor, mail+"/nhm-") || a.Pane != w.binds[i].Slot {
+			t.Fatalf("assignment %d actor=%q pane=%q, want %s/nhm-… in %s", i, a.ClaimActor, a.Pane, mail, w.binds[i].Slot)
 		}
 	}
 	for i, pane := range []string{"w1:p1", "w1:p2"} {

@@ -8,7 +8,9 @@
 // (and the strconv import the old check used);
 // DispatchRequest.Attempt carries the attempt number that
 // RecordAtomicDispatchStarted persisted, so each attempt has its own
-// transport operation (ACFS acfs-f2mc.2, nhm-i85).
+// transport operation (ACFS acfs-f2mc.2, nhm-i85); StableClaimActor names
+// nhm, not ntm: the default actor "nhm" and the suffix "/nhm-<key>"
+// (nhm-2p6.28.4).
 
 package assignment
 
@@ -678,7 +680,7 @@ func paneIdentityMigrationError(a *Assignment) error {
 func StableClaimActor(baseActor, idempotencyKey string) string {
 	baseActor = strings.TrimSpace(baseActor)
 	if baseActor == "" {
-		baseActor = "ntm"
+		baseActor = "nhm"
 	}
 	key := strings.TrimSpace(idempotencyKey)
 	if len(key) > 12 {
@@ -687,7 +689,7 @@ func StableClaimActor(baseActor, idempotencyKey string) string {
 	if key == "" {
 		key = AssignmentIdempotencyKey(baseActor)[:12]
 	}
-	suffix := "/ntm-" + key
+	suffix := claimSuffix + key
 	if strings.HasSuffix(baseActor, suffix) {
 		return baseActor
 	}

@@ -1,6 +1,7 @@
 // Taken from ntm (github.com/Dicklesworthstone/ntm) internal/templates/builtin.go
 // at commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md.
-// Local changes: this header.
+// Local changes: this header; the variable descriptions say "nhm send"
+// where ntm's say "ntm send" (nhm-2p6.28.4).
 
 package templates
 
@@ -209,12 +210,12 @@ Explain the optimizations and their expected impact.
 		Name:        "marching_orders",
 		Description: "Initial instructions for an agent working on a bead task",
 		Variables: []VariableSpec{
-			{Name: "bead_id", Description: "Bead ID (filled by ntm send --bead)"},
-			{Name: "bead_title", Description: "Bead title (filled by ntm send --bead)"},
-			{Name: "bead_description", Description: "Bead description (filled by ntm send --bead)"},
-			{Name: "bead_priority", Description: "Bead priority, e.g. P1 (filled by ntm send --bead)"},
-			{Name: "agent_num", Description: "Target pane's agent number, N in cc_N (filled per pane by ntm send)"},
-			{Name: "agent_type", Description: "Target pane's agent type (filled per pane by ntm send)"},
+			{Name: "bead_id", Description: "Bead ID (filled by nhm send --bead)"},
+			{Name: "bead_title", Description: "Bead title (filled by nhm send --bead)"},
+			{Name: "bead_description", Description: "Bead description (filled by nhm send --bead)"},
+			{Name: "bead_priority", Description: "Bead priority, e.g. P1 (filled by nhm send --bead)"},
+			{Name: "agent_num", Description: "Target pane's agent number, N in cc_N (filled per pane by nhm send)"},
+			{Name: "agent_type", Description: "Target pane's agent type (filled per pane by nhm send)"},
 			{Name: "constraints", Description: "Additional constraints or requirements"},
 		},
 		Tags:   []string{"workflow", "bead", "assignment"},
@@ -262,9 +263,9 @@ br update {{bead_id}} --add-note "Blocked: <reason>"
 		Name:        "self_review",
 		Description: "Agent reviews its own work before marking task complete",
 		Variables: []VariableSpec{
-			{Name: "bead_id", Description: "Bead ID (filled by ntm send --bead)"},
-			{Name: "bead_title", Description: "Bead title (filled by ntm send --bead)"},
-			{Name: "agent_num", Description: "Target pane's agent number (filled per pane by ntm send)"},
+			{Name: "bead_id", Description: "Bead ID (filled by nhm send --bead)"},
+			{Name: "bead_title", Description: "Bead title (filled by nhm send --bead)"},
+			{Name: "agent_num", Description: "Target pane's agent number (filled per pane by nhm send)"},
 			{Name: "checklist", Description: "Custom checklist items to verify"},
 		},
 		Tags:   []string{"workflow", "review", "quality"},
@@ -308,9 +309,9 @@ If all checks pass, mark the bead as closed. If issues found, fix them first.`,
 		Name:        "cross_review",
 		Description: "One agent reviews another agent's work",
 		Variables: []VariableSpec{
-			{Name: "bead_id", Description: "Bead ID being reviewed (filled by ntm send --bead)"},
-			{Name: "bead_title", Description: "Bead title (filled by ntm send --bead)"},
-			{Name: "agent_num", Description: "Reviewer pane's agent number (filled per pane by ntm send)"},
+			{Name: "bead_id", Description: "Bead ID being reviewed (filled by nhm send --bead)"},
+			{Name: "bead_title", Description: "Bead title (filled by nhm send --bead)"},
+			{Name: "agent_num", Description: "Reviewer pane's agent number (filled per pane by nhm send)"},
 			{Name: "author_agent", Description: "Agent number who authored the work", Required: true},
 			{Name: "files", Description: "List of files to review"},
 			{Name: "focus", Description: "Specific areas to focus review on"},
@@ -356,9 +357,9 @@ After review, notify the author agent via Agent Mail if available.`,
 		Name:        "handoff",
 		Description: "Transfer work context from one agent to another",
 		Variables: []VariableSpec{
-			{Name: "bead_id", Description: "Bead ID (filled by ntm send --bead)"},
-			{Name: "bead_title", Description: "Bead title (filled by ntm send --bead)"},
-			{Name: "agent_num", Description: "Handing-off pane's agent number (filled per pane by ntm send)"},
+			{Name: "bead_id", Description: "Bead ID (filled by nhm send --bead)"},
+			{Name: "bead_title", Description: "Bead title (filled by nhm send --bead)"},
+			{Name: "agent_num", Description: "Handing-off pane's agent number (filled per pane by nhm send)"},
 			{Name: "target_agent", Description: "Agent number receiving the handoff", Required: true},
 			{Name: "context", Description: "Important context to transfer"},
 			{Name: "next_steps", Description: "Recommended next steps"},
@@ -399,11 +400,11 @@ Agent #{{target_agent}}: Review this handoff and continue the work.`,
 		Name:        "batch_assign",
 		Description: "Template for distributing multiple beads across agents",
 		Variables: []VariableSpec{
-			{Name: "bead_id", Description: "Bead ID (filled by ntm send --bead)"},
-			{Name: "bead_title", Description: "Bead title (filled by ntm send --bead)"},
-			{Name: "send_num", Description: "This pane's position in the send, 1-indexed (filled per pane by ntm send)"},
-			{Name: "send_total", Description: "Number of panes in the send (filled by ntm send)"},
-			{Name: "agent_num", Description: "Target pane's agent number (filled per pane by ntm send)"},
+			{Name: "bead_id", Description: "Bead ID (filled by nhm send --bead)"},
+			{Name: "bead_title", Description: "Bead title (filled by nhm send --bead)"},
+			{Name: "send_num", Description: "This pane's position in the send, 1-indexed (filled per pane by nhm send)"},
+			{Name: "send_total", Description: "Number of panes in the send (filled by nhm send)"},
+			{Name: "agent_num", Description: "Target pane's agent number (filled per pane by nhm send)"},
 		},
 		Tags:   []string{"workflow", "batch", "assignment"},
 		Source: SourceBuiltin,

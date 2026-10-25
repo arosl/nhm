@@ -353,9 +353,9 @@ type brIssue struct {
 // brList runs `br list --status S --limit 0 --json`, whose output is
 // {"issues": [...], "has_more": ...}, and keeps the agent's beads: those
 // assigned to it, and those a spawn assignment claimed for it (its name
-// with a "/ntm-<key>" suffix, which br's exact --assignee does not match;
-// nhm-i85). A page that is not the whole list is an error: a bead left out
-// could be work in progress.
+// with a "/nhm-<key>" suffix, or an older nhm's "/ntm-<key>", which br's
+// exact --assignee does not match; nhm-i85). A page that is not the whole
+// list is an error: a bead left out could be work in progress.
 func brList(ctx context.Context, lists *BrLists, root string, db []string, status, agent string) ([]brIssue, error) {
 	key := strings.Join(append([]string{root, status}, db...), "\x00")
 	var issues []brIssue
