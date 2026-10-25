@@ -2,12 +2,12 @@ package cli
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/arosl/nhm/internal/herdr/herdrtest"
+	"github.com/arosl/nhm/internal/ui/tui/theme"
 )
 
 // viewServer is waitInstance's server with workspace w1 ("swarm") of two
@@ -73,48 +73,81 @@ func viewServer(t *testing.T) (*herdrtest.Server, func() []string) {
 	}
 }
 
+// tiled is ntm's view line, with ntm's colour escapes.
+func tiled(session string) string {
+	t := theme.Current()
+	return colorize(t.Success) + "✓" + colorize(t.Text) + " Tiled layout applied to '" + session + "'\n"
+}
+
 // nhm view, tile and v are ntm's view on herdr: the zoom off in each
 // zoomed tab of the workspace, through the tab's focused pane so that its
-// focus stays, then the workspace's focus (the operator's ruling,
-// nhm-k9d, 2026-10-23).
-func TestViewTakesTheZoomOffAndFocuses(t *testing.T) {
+// focus stays (no layout: the operator's ruling, nhm-k9d, 2026-10-23),
+// ntm's line, then the workspace's focus, as ntm attaches.
+func TestViewNTMTakesTheZoomOffThenAttaches(t *testing.T) {
 	s, calls := viewServer(t)
 	for _, verb := range []string{"view", "tile", "v"} {
 		code, out, errOut := run(verb, "swarm", "--socket", s.SocketPath)
-		if code != 0 || out != "✓ Zoom off in every tab of 'swarm' (tabs: 2, zoomed before: 1); focused it; open herdr to see it\n" {
+		if code != 0 || out != tiled("swarm") || errOut != "" {
 			t.Fatalf("%s = %d %q %q", verb, code, out, errOut)
 		}
 		if got := strings.Join(calls(), ";"); got != "pane.zoom w1:p3 off;workspace.focus w1" {
 			t.Fatalf("%s calls = %s", verb, got)
 		}
 	}
-	code, out, _ := run("view", "w1", "--socket", s.SocketPath, "--json")
-	res := envelopeOf(t, out)["result"].(map[string]any)
-	if code != 0 || res["workspace_id"] != "w1" || fmt.Sprint(res["tabs"]) != "[w1:t1 w1:t2]" || fmt.Sprint(res["unzoomed"]) != "[w1:t2]" {
-		t.Fatalf("view --json = %d %s", code, out)
-	}
-	calls()
-	// Without a session: the calling pane's workspace.
-	t.Setenv("HERDR_WORKSPACE_ID", "w1")
-	if code, out, _ := run("view", "--socket", s.SocketPath); code != 0 || !strings.Contains(out, "'w1'") {
-		t.Fatalf("view without a session = %d %q", code, out)
-	}
-	calls()
-	t.Setenv("HERDR_WORKSPACE_ID", "")
-	for _, c := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{}, "name the session"},
-		{[]string{"nosuch"}, `session "nosuch": no such workspace (nhm list shows the sessions)`},
-		{[]string{"a", "b"}, "Usage: nhm view"},
-	} {
-		code, _, errOut := run(append(append([]string{"view"}, c.args...), "--socket", s.SocketPath)...)
-		if code != exitRefused || !strings.Contains(errOut, c.want) {
-			t.Errorf("view %v = %d %q, want %q", c.args, code, errOut, c.want)
+	// A unique prefix names the session, and the only one is taken
+	// without a name, as in ntm.
+	for _, args := range [][]string{{"sw"}, {}} {
+		if code, out, _ := run(append(append([]string{"view"}, args...), "--socket", s.SocketPath)...); code != 0 || out != tiled("swarm") {
+			t.Errorf("view %v = %d %q", args, code, out)
 		}
+	}
+	calls()
+}
+
+// Under --json ntm tiles and attaches nothing: SuccessResponse.
+func TestViewNTMJSONIsSuccessResponse(t *testing.T) {
+	s, calls := viewServer(t)
+	code, out, errOut := run("view", "swarm", "--socket", s.SocketPath, "--json")
+	if code != 0 || errOut != "" || out != "{\n  \"success\": true,\n  \"message\": \"tiled layout applied to 'swarm'\"\n}\n" {
+		t.Fatalf("view --json = %d %q %q", code, out, errOut)
+	}
+	if got := strings.Join(calls(), ";"); got != "pane.zoom w1:p3 off" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+// ntm's errors, exit 1: the resolver's (the root's, before the session is
+// known), a failed tiling (ntm's JSON envelope under --json), and a failed
+// attach after the line.
+func TestViewNTMErrors(t *testing.T) {
+	s, calls := viewServer(t)
+	code, out, errOut := run("view", "nosuch", "--socket", s.SocketPath)
+	if code != 1 || out != "" || !strings.HasPrefix(errOut, `Error: session "nosuch" not found`) {
+		t.Errorf("unknown session = %d %q %q", code, out, errOut)
+	}
+	if code, _, errOut := run("view", "a", "b", "--socket", s.SocketPath); code != 1 || errOut != "Error: accepts at most 1 arg(s), received 2\n" {
+		t.Errorf("two args = %d %q", code, errOut)
 	}
 	if got := calls(); len(got) != 0 {
 		t.Errorf("a refused view called herdr: %v", got)
+	}
+	fail := func(method string) {
+		s.Handle(method, func(herdrtest.Request) (any, *herdrtest.Error) {
+			return nil, &herdrtest.Error{Code: "pane_not_found", Message: method + " failed"}
+		})
+	}
+	fail("workspace.focus")
+	code, out, errOut = run("view", "swarm", "--socket", s.SocketPath)
+	if code != 1 || out != tiled("swarm") || !strings.Contains(errOut, "workspace.focus failed") {
+		t.Errorf("failed attach = %d %q %q", code, out, errOut)
+	}
+	fail("pane.zoom")
+	code, out, errOut = run("view", "swarm", "--socket", s.SocketPath)
+	if code != 1 || out != "" || !strings.HasPrefix(errOut, "Error: failed to apply layout: tab w1:t2: ") {
+		t.Errorf("failed tiling = %d %q %q", code, out, errOut)
+	}
+	code, out, _ = run("view", "swarm", "--socket", s.SocketPath, "--json")
+	if code != 1 || !strings.HasPrefix(out, `{"success":false,"error":"failed to apply layout: tab w1:t2: `) || strings.Count(out, "\n") != 1 {
+		t.Errorf("failed tiling --json = %d %q", code, out)
 	}
 }

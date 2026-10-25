@@ -41,7 +41,7 @@ Usage:
   nhm zoom [session] [pane] [--json]   (also z)
                          ntm's zoom: zoom one pane, then focus its workspace and tab
   nhm view [session] [--json]   (also tile, v)
-                         take the zoom off in every tab of a workspace, then focus it
+                         ntm's view: the zoom off in every tab of a session, then focus it
   nhm diff [session] <pane1> <pane2> [-u] [--code-only] [--json]
                          compare two agents' output, as ntm's diff
   nhm copy [session[:pane]] [-l N] [-p RE] [--code] [--all|--cc|--cod|--gmi|--agy] [-o FILE] [--json]
