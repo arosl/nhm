@@ -151,6 +151,8 @@ Usage:
                          the error lines in the agents' output, ntm's ErrorsOutput
   nhm --robot-inspect-pane=S [--index=N] [--lines=N] [--code]
                          one pane's agent, output, errors and files, ntm's InspectPaneOutput
+  nhm --robot-diff=S [--since=D]
+                         each pane's activity and git's changed files, ntm's DiffOutput
   nhm --robot-* … --robot-format=json (or --robot-output-format=json)
       [--robot-verbosity=terse|default|debug]
                          every robot flag answers JSON (auto is JSON)

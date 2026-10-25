@@ -65,6 +65,9 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	if hasRobotFlag(args, "--robot-inspect-pane") {
 		return runRobotInspectPane(args, stdout)
 	}
+	if hasRobotFlag(args, "--robot-diff") {
+		return runRobotDiff(args, stdout)
+	}
 	if hasRobotFlag(args, "--robot-watch-bead") {
 		return runRobotWatchBead(args, stdout)
 	}
