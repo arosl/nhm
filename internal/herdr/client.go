@@ -78,6 +78,9 @@ var methodResults = map[string][]string{
 	"plugin.list":    {"plugin_list"},
 	// nhm-qbi.5: the board's tab brought in front of an attached client.
 	"tab.focus": {"tab_info"},
+	// nhm-2p6.8.7: switch focuses an agent's pane (observed in the sandbox
+	// on herdr 0.9.5: pane_info, not the schema's pane_focused).
+	"pane.focus": {"pane_info"},
 	// nhm-4c4, nhm-cxh: spawn reads a project's tab to place a new pane
 	// in its grid.
 	"pane.layout": {"pane_layout"},

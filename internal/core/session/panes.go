@@ -132,6 +132,33 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// AgentEntry is one Agent Mail agent in a live pane of a session: ntm's
+// agent registry entry (agentMappingEntry), from nhm's bindings.
+type AgentEntry struct {
+	Name      string
+	PaneIndex int
+	PaneID    string
+	PaneTitle string
+	Pane      Pane
+}
+
+// Agents are the bound agents in panes, by name, each name once (the
+// first pane that holds it), as ntm's loadMappingForSession lists its
+// registry's live entries.
+func Agents(panes []Pane) []AgentEntry {
+	seen := map[string]bool{}
+	var out []AgentEntry
+	for _, p := range panes {
+		if p.Binding == nil || p.Binding.MailName == "" || seen[p.Binding.MailName] {
+			continue
+		}
+		seen[p.Binding.MailName] = true
+		out = append(out, AgentEntry{Name: p.Binding.MailName, PaneIndex: p.Index, PaneID: p.PaneID, PaneTitle: p.Title, Pane: p})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // TypeFilter is ntm's AgentFilter: --all and the type flags of copy,
 // save, grep and errors.
 type TypeFilter struct {

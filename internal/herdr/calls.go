@@ -117,6 +117,15 @@ func (c *Client) TabFocus(ctx context.Context, tabID string) (TabInfo, error) {
 	return r.Tab, err
 }
 
+// PaneFocus makes a pane the focused one, with its tab and workspace. An
+// attached client shows it, also across workspaces (seen in the sandbox
+// on herdr 0.9.5, nhm-2p6.8.7).
+func (c *Client) PaneFocus(ctx context.Context, paneID string) (PaneInfo, error) {
+	var r paneResult
+	err := c.call(ctx, "pane.focus", paneParams{PaneID: paneID}, &r, 0)
+	return r.Pane, err
+}
+
 // AgentList lists the live agents.
 func (c *Client) AgentList(ctx context.Context) ([]AgentInfo, error) {
 	var r agentListResult

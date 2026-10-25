@@ -157,10 +157,11 @@ the given pattern. Supports standard regex syntax.`,
 	return cmd
 }
 
-// namedPanes are one session's name and panes.
+// namedPanes are one session's name, workspace and panes.
 type namedPanes struct {
-	session string
-	panes   []session.Pane
+	session   string
+	workspace string
+	panes     []session.Pane
 }
 
 // allSessionPanes lists every herdr workspace's panes, by session name
@@ -176,7 +177,8 @@ func allSessionPanes(ctx context.Context, ie *instanceEnv) ([]namedPanes, error)
 	}
 	var out []namedPanes
 	for _, w := range snap.Workspaces {
-		out = append(out, namedPanes{session: firstOf(w.Label, w.WorkspaceID), panes: session.Panes(snap, w.WorkspaceID, bound)})
+		out = append(out, namedPanes{session: firstOf(w.Label, w.WorkspaceID), workspace: w.WorkspaceID,
+			panes: session.Panes(snap, w.WorkspaceID, bound)})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].session < out[j].session })
 	return out, nil

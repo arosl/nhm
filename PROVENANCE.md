@@ -301,6 +301,7 @@ The same rules apply to code from pt and dcg.
 | `internal/core/panestate/errsig_ntm_test.go` | `internal/errsig/errsig_test.go`, `errsig_helpers_test.go` | provenance header; the package; the helpers' compiled patterns local to the tests that use them (nhm-2p6.8.6) |
 | `internal/core/panestate/patterns_ntm.go` | `internal/robot/patterns.go`, `internal/robot/robot.go` (`ResolveAgentType`, `normalizeAgentType`) (in part) | provenance header; the package (nhm's panestate); errsig is this package's; ntm's aliases from `ui/tui/agent`; the library's editing and listing methods and `HasIdlePattern` left out (nhm-2p6.8.6) |
 | `internal/core/panestate/patterns_ntm_test.go` | `internal/robot/patterns_test.go` (in part) | provenance header; the package; the tests of what `patterns_ntm.go` keeps, as tables without subtests (nhm-2p6.8.6) |
+| `internal/cli/switch_ntm.go` | `internal/cli/agent_switch.go` (in part: `newSwitchAgentCmd`, `encodeAgentSwitchJSON`) | provenance header; ntm's registry is nhm's bindings in each herdr workspace's live panes (`core/session.Agents`); herdr has no attach, so switch always selects, with herdr's `pane.focus`; the sessions searched by name; output to cobra's writers (nhm-2p6.8.7) |
 
 ## Files from herdr
 

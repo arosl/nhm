@@ -33,6 +33,7 @@ var verbUsage = map[string]string{
 	"yank":          copyUsage,
 	"grep":          grepUsage,
 	"errors":        errorsUsage,
+	"switch":        switchUsage,
 	"spawn":         spawnUsage,
 	"add":           spawnUsage,
 	"new":           newUsage,

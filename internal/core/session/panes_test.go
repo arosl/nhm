@@ -146,6 +146,22 @@ func TestMatchPane(t *testing.T) {
 	}
 }
 
+// Agents lists the bound agents of live panes by name, each name once;
+// a pane without a binding is not an agent entry.
+func TestAgents(t *testing.T) {
+	snap, bound := panesSnap()
+	// A second pane that the same name holds (a stale binding) is left
+	// out.
+	snap.Panes = append(snap.Panes, herdr.PaneInfo{PaneID: "w1:p9", TabID: "w1:t1", WorkspaceID: "w1", Agent: "claude"})
+	bound = append(bound, bindings.Binding{MailName: "BlueLake", Kind: "claude", Status: bindings.Active, WorkspaceID: "w1",
+		TabID: "w1:t1", PaneID: "w1:p9", Slot: "3.9"})
+	got := Agents(Panes(snap, "w1", bound))
+	if len(got) != 2 || got[0].Name != "BlueLake" || got[0].PaneID != "w1:p2" || got[0].PaneIndex != 2 ||
+		got[0].PaneTitle != "BlueLake gpt-5" || got[1].Name != "IcyKnoll" || got[1].PaneID != "w1:p1" {
+		t.Errorf("agents = %+v", got)
+	}
+}
+
 // copy's order (ntm's runCopy): the pane named wins over the type flags;
 // with neither, the active pane, else the first.
 func TestCopyTargetsOrder(t *testing.T) {
