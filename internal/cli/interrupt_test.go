@@ -101,17 +101,19 @@ func decodeInterrupt(t *testing.T, out string) InterruptResponse {
 }
 
 // TestInterruptKeyPerKind: ntm's key whatever the agent does: Ctrl+C for
-// Claude and Codex, Escape for omp; pi (no ntm kind) keeps its Esc.
+// Claude, Codex, opencode and grok (the operator's ruling, 2026-10-25),
+// Escape for omp; pi (no ntm kind) keeps its Esc.
 func TestInterruptKeyPerKind(t *testing.T) {
 	_, sent := interruptFixture(t, []interruptAgent{
 		{"IcyKnoll", "w1:t1", "w1:p1", "claude", ""}, {"BlueLake", "w1:t1", "w1:p2", "codex", ""},
 		{"RedFox", "w1:t1", "w1:p3", "omp", ""}, {"GreenHill", "w1:t1", "w1:p4", "pi", ""},
+		{"TealBay", "w1:t1", "w1:p5", "opencode", ""}, {"GoldRun", "w1:t1", "w1:p6", "grok", ""},
 	})
 	code, out, errOut := runVerb(verbRun("interrupt"), "swarm")
-	if code != exitOK || out != "Sent interrupt to 4 agent pane(s) (Ctrl+C: 2, Escape: 2)\n" {
+	if code != exitOK || out != "Sent interrupt to 6 agent pane(s) (Ctrl+C: 4, Escape: 2)\n" {
 		t.Fatalf("interrupt = %d %q %s", code, out, errOut)
 	}
-	if got := strings.Join(sent(), " "); got != "w1:p1=ctrl+c w1:p2=ctrl+c w1:p3=esc w1:p4=esc" {
+	if got := strings.Join(sent(), " "); got != "w1:p1=ctrl+c w1:p2=ctrl+c w1:p3=esc w1:p4=esc w1:p5=ctrl+c w1:p6=ctrl+c" {
 		t.Fatalf("keys = %s", got)
 	}
 }
@@ -192,14 +194,14 @@ func TestInterruptJSONIsInterruptResponse(t *testing.T) {
 		}
 	}
 	r := decodeInterrupt(t, out)
-	if code != exitError || errOut != "" || r.Success || r.Session != "swarm" || r.Interrupted != 1 || r.Failed != 2 ||
-		r.ErrorCode != "PARTIAL_INTERRUPT" || r.Error != "interrupt partially failed: 1 pane(s) interrupted, 2 failed" {
+	if code != exitError || errOut != "" || r.Success || r.Session != "swarm" || r.Interrupted != 2 || r.Failed != 1 ||
+		r.ErrorCode != "PARTIAL_INTERRUPT" || r.Error != "interrupt partially failed: 2 pane(s) interrupted, 1 failed" {
 		t.Fatalf("partial = %d %s %s", code, out, errOut)
 	}
 	p := r.Panes
 	if len(p) != 3 || p[0].Pane != "1" || p[0].Index != 1 || p[0].AgentType != "cc" || p[0].Status != "interrupted" ||
 		p[1].AgentType != "cod" || p[1].Status != "failed" || p[1].Error == "" ||
-		p[2].AgentType != "oc" || !strings.Contains(p[2].Error, "no checked interrupt key for kind opencode") {
+		p[2].AgentType != "oc" || p[2].Status != "interrupted" {
 		t.Fatalf("panes = %+v", p)
 	}
 	if !slices.Equal(r.TargetedPanes, []int{1, 2, 3}) {
@@ -210,9 +212,8 @@ func TestInterruptJSONIsInterruptResponse(t *testing.T) {
 	}
 	// The text: ntm's count, then its error.
 	code, out, errOut = runVerb(verbRun("interrupt"), "swarm")
-	if code != exitError || out != "Sent Ctrl+C to 1 agent pane(s)\n" ||
-		!strings.HasPrefix(errOut, "Error: interrupt partially failed (1 interrupted, 2 failed): pane 2: ") ||
-		!strings.Contains(errOut, "; pane 3: nhm has no checked interrupt key for kind opencode") {
+	if code != exitError || out != "Sent Ctrl+C to 2 agent pane(s)\n" ||
+		!strings.HasPrefix(errOut, "Error: interrupt partially failed (2 interrupted, 1 failed): pane 2: ") {
 		t.Fatalf("text = %d %q %q", code, out, errOut)
 	}
 }
@@ -222,7 +223,7 @@ func TestInterruptJSONIsInterruptResponse(t *testing.T) {
 func TestInterruptAllFailed(t *testing.T) {
 	_, _ = interruptFixture(t, []interruptAgent{
 		{"IcyKnoll", "w1:t1", "w1:p1", "claude", ""}, {"BlueLake", "w1:t2", "w1:p2", "grok", ""},
-	}, "w1:p1")
+	}, "w1:p1", "w1:p2")
 	code, out, _ := runVerb(verbRun("interrupt"), "swarm", "--json")
 	r := decodeInterrupt(t, out)
 	if code != exitError || r.ErrorCode != "INTERRUPT_FAILED" || r.Error != "interrupt failed on all 2 targeted pane(s)" ||

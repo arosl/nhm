@@ -796,8 +796,12 @@ func builtins() []Adapter {
 			// plugin hook sees the command text; so it keeps "!", and the
 			// control-character refusal.
 			Name: "opencode", NTMType: "oc", Flags: []string{"oc"}, ModelFlag: "--model", ShellEscape: "!",
-			QuotaPool: "opencode", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume",
+			// ntm's interrupt key, unchecked here (the operator's ruling,
+			// 2026-10-25; nhm-2p6.5.1).
+			InterruptKeys: []string{"ctrl+c"},
+			QuotaPool:     "opencode", CodeReview: true, GuardSupported: true,
+			Cannot: []string{"its guard settings file", "its usage", "its session resume",
+				"what ntm's interrupt key does to it: nhm sends Ctrl+C, as ntm does (the operator's ruling, 2026-10-25), and the sandbox has not checked it; opencode's documented Ctrl+C clears the input or quits",
 				`a "!" shell command that a person types at its prompt: opencode runs it in its shell mode, and no plugin hook sees the command (nhm send refuses a prompt that starts with "!" or holds a control character, nhm-gb0)`,
 				`a "!" that a person leaves in its input box: herdr types nhm's next prompt after it, and opencode may run that as a shell command; nhm does not read opencode's shell mode on the screen (nhm-mowp)`},
 		},
@@ -807,8 +811,12 @@ func builtins() []Adapter {
 			// after white space, after a paste end): each went to the model
 			// and its UserPromptSubmit hook, so it has no shell escape.
 			Name: "grok", NTMType: "grok", ModelFlag: "--model", EffortArgs: []string{"--effort", "{effort}"}, NoShellEscape: true,
-			QuotaPool: "grok", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its interrupt key", "its session resume"},
+			// ntm's interrupt key, unchecked here (the operator's ruling,
+			// 2026-10-25; nhm-2p6.5.1).
+			InterruptKeys: []string{"ctrl+c"},
+			QuotaPool:     "grok", CodeReview: true, GuardSupported: true,
+			Cannot: []string{"its guard settings file", "its usage", "its session resume",
+				"what ntm's interrupt key does to it: nhm sends Ctrl+C, as ntm does (the operator's ruling, 2026-10-25), and the sandbox has not checked it"},
 		},
 	}
 }
