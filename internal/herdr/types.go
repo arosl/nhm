@@ -154,12 +154,14 @@ type SessionSnapshot struct {
 }
 
 // TabLayout is the part of a tab's layout (PaneLayoutSnapshot) that nhm
-// reads: whether the tab is zoomed, and its focused pane.
+// reads: whether the tab is zoomed, its focused pane, and where each of
+// its panes is.
 type TabLayout struct {
-	WorkspaceID   string `json:"workspace_id"`
-	TabID         string `json:"tab_id"`
-	Zoomed        bool   `json:"zoomed"`
-	FocusedPaneID string `json:"focused_pane_id"`
+	WorkspaceID   string       `json:"workspace_id"`
+	TabID         string       `json:"tab_id"`
+	Zoomed        bool         `json:"zoomed"`
+	FocusedPaneID string       `json:"focused_pane_id"`
+	Panes         []LayoutPane `json:"panes"`
 }
 
 // Pong is ping's answer.

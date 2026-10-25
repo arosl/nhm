@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/store"
@@ -140,18 +139,6 @@ func boardContextFor(ctx context.Context, h *herdr.Client, c ui.Context, session
 		c.WorkspaceLabel = session
 	}
 	return c, nil
-}
-
-func runBoard(args []string, stdout, stderr io.Writer) int {
-	args = withoutGo(args)
-	if len(args) == 1 && !strings.HasPrefix(args[0], "-") {
-		return runGoBoard(args[0], stderr)
-	}
-	if len(args) > 0 {
-		fmt.Fprint(stderr, paletteUsage)
-		return exitRefused
-	}
-	return runGoBoard("", stderr)
 }
 
 func runMenu(args []string, stdout, stderr io.Writer) int {

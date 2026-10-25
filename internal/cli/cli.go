@@ -171,8 +171,8 @@ Usage:
                          the agents a usage limit stopped
   nhm palette | board | menu
                          the prompt palette, the agent board, the nhm menu
-  nhm dashboard [session] | dash | d
-                         ntm's names for nhm board; a session shows its workspace
+  nhm dashboard [session] [--no-tui] [--json] | dash | d
+                         ntm's dashboard: nhm board, or ntm's plain and JSON forms
   nhm bind [--unbind | --force | --show | --print-client] [--dry-run]
                          herdr keys from [keys] in nhm's config (default prefix+a
                          palette, prefix+d board, prefix+m menu); --unbind opts out

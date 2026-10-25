@@ -290,7 +290,9 @@ func TestBoardAndMenuAcceptGo(t *testing.T) {
 	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
 	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", "")
 	t.Setenv(ui.ContextEnv, "")
-	if code, _, errOut := run("board", "--go", "nosuch"); code != exitRefused || !strings.Contains(errOut, `session "nosuch": no such workspace`) {
+	// board is ntm's dashboard verb, so an unknown session is ntm's
+	// resolver error, exit 1 (nhm-2p6.3.8).
+	if code, _, errOut := run("board", "--go", "nosuch"); code != exitError || !strings.Contains(errOut, `Error: session "nosuch" not found`) {
 		t.Errorf("board --go nosuch = %d %q", code, errOut)
 	}
 	if code, _, errOut := run("menu", "--go", "stray"); code != exitRefused || !strings.Contains(errOut, "Usage: nhm palette") {

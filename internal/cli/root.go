@@ -304,10 +304,6 @@ func legacyVerbs() []legacyVerb {
 		{name: "compatibility", run: runCompatibility},
 		{name: "quota", run: runQuota},
 		{name: "limits", run: runLimits},
-		// dashboard, with ntm's short names dash and d, is ntm's name for the
-		// board (the operator's F.7 ruling, nhm-k9d); dashboard <session>
-		// shows that session's workspace (the operator's ruling, 2026-10-23).
-		{name: "board", aliases: []string{"dashboard", "dash", "d"}, run: runBoard},
 		{name: "menu", run: runMenu},
 		// bind's --config is herdr's config file.
 		{name: "bind", run: runBind, own: []string{"config"}},
@@ -422,6 +418,9 @@ func newRoot(stdout, stderr io.Writer) *root {
 	})
 	cmd.AddCommand(newVersionCmd(), newMemoryCmd(), newTemplateCmd(), newMailCmd(), newPaletteCmd(), newSpawnCmd(), newAddCmd(), newInterruptCmd(), newKillCmd(), newWaitCmd(), newSendCmd())
 	cmd.AddCommand(newDoctorCmd(), newCopyCmd(), newGrepCmd(), newErrorsCmd(), newGetAllSessionTextCmd(), newSwitchAgentCmd(), newExtractCmd(), newListCmd(), newSaveCmd(), newZoomCmd(), newViewCmd(), newDiffCmd(), newSummaryCmd())
+	// ntm's dashboard, with nhm's board as its TUI; board is nhm's name for
+	// the same verb (the operator's F.7 ruling, nhm-k9d).
+	cmd.AddCommand(newDashboardCmd())
 	for _, v := range legacyVerbs() {
 		cmd.AddCommand(v.command(o, stdout, stderr))
 	}

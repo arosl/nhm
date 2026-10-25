@@ -117,9 +117,10 @@ func TestDashboardTakesASession(t *testing.T) {
 	t.Setenv("HERDR_SOCKET_PATH", s.SocketPath)
 	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", "")
 	t.Setenv(ui.ContextEnv, "")
+	// An unknown session is ntm's resolver error, exit 1 (nhm-2p6.3.8).
 	for _, verb := range []string{"dashboard", "board", "d"} {
 		code, out, errOut := run(verb, "nosuch")
-		if code != exitRefused || out != "" || !strings.Contains(errOut, `session "nosuch": no such workspace (nhm list shows the sessions)`) {
+		if code != exitError || out != "" || !strings.HasPrefix(errOut, `Error: session "nosuch" not found`) {
 			t.Errorf("%s nosuch = %d %q %q", verb, code, out, errOut)
 		}
 	}
