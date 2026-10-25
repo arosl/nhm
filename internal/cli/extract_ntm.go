@@ -1,6 +1,7 @@
 // Derived from ntm (github.com/Dicklesworthstone/ntm) internal/cli/extract.go
-// (ExtractResponse, newExtractCmd, runExtract, handleExtractApply) at
-// commit 9d5ed977; see LICENSE in this directory and PROVENANCE.md. Local
+// (ExtractResponse, newExtractCmd, runExtract, handleExtractCopy,
+// handleExtractApply) at commit 9d5ed977; see LICENSE in this directory
+// and PROVENANCE.md. Local
 // changes: the session is a herdr workspace, named exactly by its label or
 // id (before ntm's name check, as nhm's resolver does); its panes are the
 // workspace's (core/session.Panes); the pane argument takes nhm's pane
@@ -8,9 +9,9 @@
 // the focused pane of the workspace's active tab; a pane is read with
 // herdr's pane.read (recent); a block's source pane is "<session>:.<slot
 // M>", or "<session>:<pane id>" for a pane without a slot; the parser is
-// core/panediff's; the clipboard waits on the operator's ruling
-// (nhm-2p6.8.1), so --copy refuses; --apply reads its answers from cobra's
-// input and prints without colour; the output goes to cobra's writers.
+// core/panediff's; the clipboard is copy's (ntm's tools, then herdr's OSC
+// 52); --apply reads its answers from cobra's input and prints without
+// colour; the output goes to cobra's writers.
 package cli
 
 import (
@@ -41,10 +42,8 @@ part of a pane's title; --last takes the session's active pane. -n (500)
 is the lines read per pane; --lang keeps one language; --select keeps
 block N (from 1). --apply asks y, n or s for each block with a file path
 and writes it relative to the current folder (absolute and .. paths are
-refused). --json lists the blocks; it does not go with --copy or --apply.
-
-The clipboard is not in this nhm yet (it waits on a ruling): --copy
-refuses.
+refused). --copy puts the blocks on the clipboard, as copy does. --json
+lists the blocks; it does not go with --copy or --apply.
 `
 
 // ExtractResponse is ntm's ExtractResponse.
@@ -221,7 +220,7 @@ func runExtract(cmd *cobra.Command, socket, sessionName, paneArg string, opts ex
 		return nil
 	}
 	if opts.copy {
-		return fmt.Errorf("the clipboard is not in this nhm yet (deferred: nhm-2p6.8.1, a ruling); list the blocks without --copy")
+		return handleExtractCopy(ctx, ie, stdout, blocks)
 	}
 	if opts.apply {
 		return handleExtractApply(cmd.InOrStdin(), stdout, blocks)
@@ -253,6 +252,31 @@ func runExtract(cmd *cobra.Command, socket, sessionName, paneArg string, opts ex
 		fmt.Fprintln(stdout, "    └"+strings.Repeat("─", 60))
 		fmt.Fprintln(stdout)
 	}
+	return nil
+}
+
+// handleExtractCopy puts the blocks on the clipboard, each under a
+// separator line when there are several.
+func handleExtractCopy(ctx context.Context, ie *instanceEnv, w io.Writer, blocks []panediff.CodeBlock) error {
+	if len(blocks) == 0 {
+		return fmt.Errorf("no code blocks to copy")
+	}
+	var parts []string
+	for i, block := range blocks {
+		if len(blocks) > 1 {
+			langDisplay := block.Language
+			if langDisplay == "" {
+				langDisplay = "text"
+			}
+			parts = append(parts, fmt.Sprintf("// === Block %d (%s) ===", i+1, langDisplay))
+		}
+		parts = append(parts, block.Content)
+	}
+	combined := strings.Join(parts, "\n\n")
+	if err := copyToClipboard(ctx, ie, combined); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "✓ Copied %d code block(s) (%d lines) to clipboard\n", len(blocks), strings.Count(combined, "\n")+1)
 	return nil
 }
 

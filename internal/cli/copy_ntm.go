@@ -9,9 +9,10 @@
 // a pane's index in the texts is its slot's M, or its herdr pane id when
 // it has no slot; the redaction scan is nhm's (internal/redaction) in
 // ntm's default mode, warn, since nhm has no [redaction] config yet
-// (nhm-2p6.20); the clipboard waits on the operator's ruling
-// (nhm-2p6.8.1), so copy without --output refuses; the output goes to
-// cobra's writers, the check mark without colour.
+// (nhm-2p6.20); the clipboard is internal/integrations/clipboard: ntm's
+// tools, with herdr's OSC 52 where ntm has the tmux buffer, written to the
+// calling pane's terminal (herdrTerminal); the output goes to cobra's
+// writers, the check mark without colour.
 package cli
 
 import (
@@ -30,6 +31,7 @@ import (
 	"github.com/arosl/nhm/internal/core/panediff"
 	"github.com/arosl/nhm/internal/core/session"
 	"github.com/arosl/nhm/internal/herdr"
+	"github.com/arosl/nhm/internal/integrations/clipboard"
 	"github.com/arosl/nhm/internal/redaction"
 )
 
@@ -37,8 +39,8 @@ const copyUsage = `Usage: nhm copy [session[:pane]] [-l|--last N] [-p|--pattern 
                 [--all|--cc|--cod|--gmi|--agy] [-o|--output FILE] [--quiet] [--socket PATH] [--json]
        (also cp, yank)
 
-ntm's copy on herdr: a pane's recent output, to a file (--output). The
-session is a herdr workspace (its label or id); without one, nhm infers
+ntm's copy on herdr: a pane's recent output, to the clipboard or to a
+file (--output). The session is a herdr workspace (its label or id); without one, nhm infers
 it as ntm does. The pane after ":" is a pane index (pane M of the
 session's agent tab), a slot N.M, a herdr pane id, an agent's name, or
 the end of a pane id (pY for wQ:pY). Without a pane, the type flags pick
@@ -51,8 +53,10 @@ without pane headers unless --headers. Each pane's text has a header
 "═══ <title> (pane N) ═══". A secret in the text is reported on stderr,
 and the text is not changed (ntm's default mode, warn).
 
-The clipboard is not in this nhm yet (it waits on a ruling): copy
-without --output refuses.
+The clipboard is ntm's first tool found (pbcopy, clip.exe, wl-copy, xclip
+or xsel with DISPLAY); inside a herdr pane with none of them, an OSC 52
+write that herdr passes to its attached clients' terminals (at most
+100000 bytes; with no client attached, herdr drops it).
 `
 
 // copyOptions are copy's flags (ntm's CopyOptions).
@@ -244,17 +248,19 @@ func runCopy(cmd *cobra.Command, socket, name string, filter session.TypeFilter,
 		lineCount = strings.Count(trimmed, "\n") + 1
 	}
 
-	if opts.Output == "" {
-		return fmt.Errorf("the clipboard is not in this nhm yet (deferred: nhm-2p6.8.1, a ruling); give --output FILE")
+	destination := "clipboard"
+	if opts.Output != "" {
+		// The side effects come after the redaction check, as in ntm.
+		if err := os.MkdirAll(filepath.Dir(opts.Output), 0o755); err != nil && !os.IsExist(err) {
+			return fmt.Errorf("failed to create output directory: %w", err)
+		}
+		if err := os.WriteFile(opts.Output, []byte(combined), 0o644); err != nil {
+			return fmt.Errorf("failed to write output file: %w", err)
+		}
+		destination = "file"
+	} else if err := copyToClipboard(ctx, ie, combined); err != nil {
+		return err
 	}
-	// The side effects come after the redaction check, as in ntm.
-	if err := os.MkdirAll(filepath.Dir(opts.Output), 0o755); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("failed to create output directory: %w", err)
-	}
-	if err := os.WriteFile(opts.Output, []byte(combined), 0o644); err != nil {
-		return fmt.Errorf("failed to write output file: %w", err)
-	}
-	destination := "file"
 
 	source := sessionName
 	if opts.PaneSpec != "" {
@@ -266,9 +272,64 @@ func runCopy(cmd *cobra.Command, socket, name string, filter session.TypeFilter,
 		return encodeJSONIndent(stdout, result)
 	}
 	if !opts.Quiet {
-		fmt.Fprintf(stdout, "✓ Copied %d lines from %d pane(s) to file (%s)\n", lineCount, len(paneLabels), opts.Output)
+		target := destination
+		if destination == "file" {
+			target = fmt.Sprintf("file (%s)", opts.Output)
+		}
+		fmt.Fprintf(stdout, "✓ Copied %d lines from %d pane(s) to %s\n", lineCount, len(paneLabels), target)
 	}
 	return nil
+}
+
+// newClipboard picks the clipboard (ntm's clipboard.New); tests replace
+// it.
+var newClipboard = func(ctx context.Context, ie *instanceEnv) (clipboard.Clipboard, error) {
+	return clipboard.New(herdrTerminal(ctx, ie))
+}
+
+// copyToClipboard puts text on the clipboard, with ntm's errors.
+func copyToClipboard(ctx context.Context, ie *instanceEnv, text string) error {
+	clip, err := newClipboard(ctx, ie)
+	if err != nil {
+		return fmt.Errorf("failed to init clipboard: %w", err)
+	}
+	if !clip.Available() {
+		return fmt.Errorf("clipboard backend unavailable")
+	}
+	if err := clip.Copy(text); err != nil {
+		return fmt.Errorf("failed to copy to clipboard via %s: %w", clip.Backend(), err)
+	}
+	return nil
+}
+
+// openTTY opens the process's own terminal; tests replace it.
+var openTTY = func() (io.WriteCloser, error) { return os.OpenFile("/dev/tty", os.O_WRONLY, 0) }
+
+// herdrTerminal opens the calling herdr pane's terminal, for the
+// clipboard's OSC 52 write: the process's own terminal, else the pane's
+// tty that herdr names (an agent's tool runs without a terminal).
+func herdrTerminal(ctx context.Context, ie *instanceEnv) func() (io.WriteCloser, error) {
+	return func() (io.WriteCloser, error) {
+		if w, err := openTTY(); err == nil {
+			return w, nil
+		}
+		pane := ie.callerPane(ctx)
+		if pane == "" {
+			return nil, fmt.Errorf("no terminal, and no herdr pane to write to")
+		}
+		info, err := ie.herdr.PaneProcessInfo(ctx, pane)
+		if err != nil {
+			return nil, err
+		}
+		tty := info.TTY
+		if tty == "" && info.ShellPID != nil {
+			tty, _ = os.Readlink(fmt.Sprintf("/proc/%d/fd/0", *info.ShellPID))
+		}
+		if !strings.HasPrefix(tty, "/dev/") {
+			return nil, fmt.Errorf("herdr names no terminal for pane %s", pane)
+		}
+		return os.OpenFile(tty, os.O_WRONLY, 0)
+	}
 }
 
 // paneLabel is ntm's "<session>:.<index>" for a pane: the slot's M, or

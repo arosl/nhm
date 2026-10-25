@@ -44,8 +44,8 @@ Usage:
                          take the zoom off in every tab of a workspace, then focus it
   nhm diff [session] <pane1> <pane2> [-u] [--code-only] [--json]
                          compare two agents' output, as ntm's diff
-  nhm copy [session[:pane]] [-l N] [-p RE] [--code] [--all|--cc|--cod|--gmi|--agy] -o FILE [--json]
-                         a pane's recent output to a file, as ntm's copy (also cp, yank)
+  nhm copy [session[:pane]] [-l N] [-p RE] [--code] [--all|--cc|--cod|--gmi|--agy] [-o FILE] [--json]
+                         a pane's recent output to the clipboard, as ntm's copy (also cp, yank)
   nhm grep <pattern> [session] [-i] [-v] [-C N] [-A N] [-B N] [-n N] [-l] [--all] [--cc|--cod|--gmi|--agy] [--json]
                          search the panes' recent output, as ntm's grep
   nhm errors [session] [--panes N,…] [-C N] [-n N] [--cc|--cod|--gmi|--agy] [--json]
@@ -54,7 +54,7 @@ Usage:
                          every session's panes as a markdown table, as ntm's
   nhm switch <agent-name> [--session S] [--json]
                          focus an agent's pane, as ntm's switch
-  nhm extract <session> [pane] [-l L] [--last] [-n N] [-s N] [-a] [--json]
+  nhm extract <session> [pane] [-l L] [--last] [-n N] [-s N] [-c] [-a] [--json]
                          the code blocks in the panes' output, as ntm's extract
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR

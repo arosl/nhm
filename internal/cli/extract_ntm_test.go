@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +70,8 @@ func TestExtractListsBlocks(t *testing.T) {
 }
 
 // --lang keeps one language; --select keeps block N; a block past the
-// last is ntm's error; --copy waits on the clipboard ruling.
+// last is ntm's error; --copy puts the blocks on the clipboard, each
+// under ntm's separator.
 func TestExtractLangAndSelect(t *testing.T) {
 	s, _, _ := paneServer(t, extractText)
 	code, out, _ := run("extract", "swarm", "-l", "py", "--socket", s.SocketPath)
@@ -83,9 +86,24 @@ func TestExtractLangAndSelect(t *testing.T) {
 	if code != 1 || errOut != "Error: block 9 does not exist (found 3 blocks)\n" {
 		t.Errorf("--select 9 = %d %q", code, errOut)
 	}
-	code, _, errOut = run("extract", "swarm", "--copy", "--socket", s.SocketPath)
-	if code != 1 || !strings.HasPrefix(errOut, "Error: the clipboard is not in this nhm yet") {
-		t.Errorf("--copy = %d %q", code, errOut)
+	noClipboardTools(t)
+	t.Setenv("HERDR_PANE_ID", "w1:p9")
+	tty := filepath.Join(t.TempDir(), "tty")
+	old := openTTY
+	t.Cleanup(func() { openTTY = old })
+	openTTY = func() (io.WriteCloser, error) { return os.Create(tty) }
+	code, out, _ = run("extract", "swarm", "--copy", "-l", "go", "--socket", s.SocketPath)
+	if code != 0 || out != "✓ Copied 1 code block(s) (3 lines) to clipboard\n" {
+		t.Errorf("--copy -l go = %d %q", code, out)
+	}
+	if data, _ := os.ReadFile(tty); string(data) != "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("package util\n\nfunc A() {}"))+"\a" {
+		t.Errorf("tty = %q", data)
+	}
+	code, out, _ = run("extract", "swarm", "--copy", "--socket", s.SocketPath)
+	want := "// === Block 1 (text) ===\n\nplain\n\n// === Block 2 (go) ===\n\npackage util\n\nfunc A() {}\n\n// === Block 3 (python) ===\n\n# tools/x.py\nprint(1)"
+	if data, _ := os.ReadFile(tty); code != 0 || out != "✓ Copied 3 code block(s) (14 lines) to clipboard\n" ||
+		string(data) != "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte(want))+"\a" {
+		t.Errorf("--copy = %d %q, tty %q", code, out, data)
 	}
 }
 

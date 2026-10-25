@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,6 +223,7 @@ func TestCopyPatternAndCode(t *testing.T) {
 // --json.
 func TestCopyRefusals(t *testing.T) {
 	s, _, reads := paneServer(t, copyText)
+	noClipboardTools(t)
 	out := filepath.Join(t.TempDir(), "out.txt")
 	for _, c := range []struct {
 		args []string
@@ -232,7 +235,7 @@ func TestCopyRefusals(t *testing.T) {
 		{[]string{"swarm", "-p", "(", "-o", out}, "Error: invalid pattern regex: error parsing regexp: missing closing ): `(`\n"},
 		{[]string{"swarm:p3", "-o", out}, "Error: no content captured (check filters)\n"},
 		{[]string{"swarm:%12", "-o", out}, "Error: pane %12: herdr has no tmux pane ids; give a pane index, the slot N.M (nhm status shows it) or a herdr pane id\n"},
-		{[]string{"swarm"}, "Error: the clipboard is not in this nhm yet (deferred: nhm-2p6.8.1, a ruling); give --output FILE\n"},
+		{[]string{"swarm"}, "Error: failed to init clipboard: no clipboard utility found (install wl-copy, xclip, or xsel)\n"},
 		{[]string{"nosuch", "-o", out}, "Error: session \"nosuch\" not found (available: swarm)\n"},
 		{[]string{"a", "b", "-o", out}, "Error: accepts at most 1 arg(s), received 2\n"},
 	} {
@@ -252,6 +255,72 @@ func TestCopyRefusals(t *testing.T) {
 	}
 	if code != 1 || json.Unmarshal([]byte(stdout), &env) != nil || env.Success || env.Error != "--last must be positive" {
 		t.Errorf("--json refusal = %d %q", code, stdout)
+	}
+}
+
+// noClipboardTools leaves the test no clipboard tool and no display, and
+// no herdr pane.
+func noClipboardTools(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	for _, v := range []string{"DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "WSL_DISTRO_NAME", "WSL_INTEROP", "HERDR_PANE_ID"} {
+		t.Setenv(v, "")
+	}
+}
+
+// Without --output, copy puts the text on the clipboard through ntm's
+// first tool found (xclip here, with DISPLAY), and says so.
+func TestCopyToClipboard(t *testing.T) {
+	s, _, _ := paneServer(t, copyText)
+	noClipboardTools(t)
+	bin := t.TempDir()
+	clip := filepath.Join(t.TempDir(), "clip")
+	script := "#!/bin/sh\n[ \"$1 $2\" = \"-selection clipboard\" ] || exit 3\nexec /bin/cat > " + clip + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "xclip"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("DISPLAY", ":0")
+	code, stdout, stderr := run("copy", "swarm:1", "--socket", s.SocketPath)
+	if code != 0 || stderr != "" || stdout != "✓ Copied 6 lines from 1 pane(s) to clipboard\n" {
+		t.Fatalf("copy = %d %q %q", code, stdout, stderr)
+	}
+	if data, _ := os.ReadFile(clip); !strings.HasPrefix(string(data), "═══ IcyKnoll opus (pane 1) ═══\nicy one\n") {
+		t.Errorf("clipboard = %q", data)
+	}
+	code, stdout, _ = run("copy", "swarm:1", "--json", "--socket", s.SocketPath)
+	var r copyResult
+	if code != 0 || json.Unmarshal([]byte(stdout), &r) != nil || r.Destination != "clipboard" || r.OutputPath != "" {
+		t.Errorf("--json = %d %s", code, stdout)
+	}
+	// A tool that fails is ntm's error, with the backend's name.
+	if err := os.WriteFile(filepath.Join(bin, "xclip"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr = run("copy", "swarm:1", "--socket", s.SocketPath)
+	if code != 1 || stderr != "Error: failed to copy to clipboard via xclip: exit status 1\n" {
+		t.Errorf("a failing xclip = %d %q", code, stderr)
+	}
+}
+
+// Inside a herdr pane with no clipboard tool, copy writes OSC 52 to the
+// pane's terminal, which herdr passes to its clients.
+func TestCopyToHerdrClipboard(t *testing.T) {
+	s, _, _ := paneServer(t, copyText)
+	noClipboardTools(t)
+	t.Setenv("HERDR_PANE_ID", "w1:p9")
+	tty := filepath.Join(t.TempDir(), "tty")
+	old := openTTY
+	t.Cleanup(func() { openTTY = old })
+	openTTY = func() (io.WriteCloser, error) { return os.Create(tty) }
+	code, stdout, stderr := run("copy", "swarm:2", "--socket", s.SocketPath)
+	if code != 0 || stderr != "" || stdout != "✓ Copied 3 lines from 1 pane(s) to clipboard\n" {
+		t.Fatalf("copy = %d %q %q", code, stdout, stderr)
+	}
+	data, _ := os.ReadFile(tty)
+	text := "═══ BlueLake gpt (pane 2) ═══\nblue one\nERROR blue\n\n"
+	if want := "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(text)) + "\a"; string(data) != want {
+		t.Errorf("tty got %q, want %q", data, want)
 	}
 }
 
