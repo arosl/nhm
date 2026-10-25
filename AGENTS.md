@@ -30,8 +30,12 @@ it. The operator is in charge.
    coordinator, controller, pipeline, workflow and swarm verbs are in
    scope too (the operator, 2026-10-23). The code is nhm's: herdr
    replaces tmux and its pane detection, and nhm's popups replace ntm's
-   TUI. Port ntm code only where it decides what the user sees.
-   `compat/ntm-contract.md` holds a row for each verb: implemented,
+   TUI. Port ntm code only where it decides what the user sees. nhm
+   acts as ntm but is not ntm (the operator, 2026-10-24): it never uses
+   ntm's paths or `NTM_*` names. Its own are `<project>/.nhm/`,
+   `~/.config/nhm/` and `NHM_*`; where ntm has a default of its own (a
+   folder, a file, a key's value), nhm sets its own, and the row records
+   it. `compat/ntm-contract.md` holds a row for each verb: implemented,
    deferred (with its bead) or waived (with the operator's ruling). The
    forms that ACFS, its lessons, brenner and ru call come first.
 5. **Internal boundaries:** `internal/cli` (parsing and rendering),

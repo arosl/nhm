@@ -34,6 +34,10 @@ Rules:
   that nhm does not answer gives its row's disposition as the hint.
 - A **Gaps (rule 4)** note in an implemented row names what nhm does not
   do yet of that verb or flag, and the bead that does it.
+- A path, default or `NTM_*` name that a row gives as ntm's is ntm's
+  only. nhm uses its own (`<project>/.nhm/`, `~/.config/nhm/`, `NHM_*`;
+  AGENTS.md rule 4), and so does the port of a deferred row. Where nhm's
+  value is not ntm's, an implemented row says so.
 
 ## The callers' forms
 
