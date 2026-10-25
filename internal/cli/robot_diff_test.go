@@ -14,6 +14,9 @@ import (
 	"github.com/arosl/nhm/internal/robot"
 )
 
+// errFakeGit is git's failure outside a repo, for fakeGitStatus.
+var errFakeGit = errors.New("not a git repository")
+
 // fakeGitStatus makes diffGitStatus answer status (or fail with err) and
 // records the folders it was asked about.
 func fakeGitStatus(t *testing.T, status string, err error) *[]string {
@@ -98,7 +101,7 @@ func TestRobotDiff(t *testing.T) {
 // past RFC 3339 time.
 func TestRobotDiffWindowAndGitFailure(t *testing.T) {
 	s, _, _ := paneServer(t, copyText)
-	fakeGitStatus(t, "", errors.New("not a git repository"))
+	fakeGitStatus(t, "", errFakeGit)
 	for _, tc := range []struct {
 		args  []string
 		since string

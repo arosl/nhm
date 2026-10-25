@@ -157,6 +157,8 @@ Usage:
                          one pane's agent, output, errors and files, ntm's InspectPaneOutput
   nhm --robot-diff=S [--since=D]
                          each pane's activity and git's changed files, ntm's DiffOutput
+  nhm --robot-summary=S [--since=D]
+                         each pane's output counts, files and actions, ntm's SessionSummaryResponse
   nhm --robot-* … --robot-format=json (or --robot-output-format=json)
       [--robot-verbosity=terse|default|debug]
                          every robot flag answers JSON (auto is JSON)
