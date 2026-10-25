@@ -206,29 +206,23 @@ func runRobotPalette(args []string, stdout io.Writer) int {
 	for _, alias := range []string{"search", "palette-search"} {
 		fs.StringVar(&search, alias, "", "")
 	}
-	format := fs.String("robot-format", "auto", "")
 	socket := fs.String("socket", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		msg := "unexpected arguments"
 		if err != nil {
 			msg = err.Error()
 		}
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
 	if code, done := applyRobotRoot(root, now); done {
 		return code
-	}
-	switch *format {
-	case "auto", "json":
-	default:
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
-			"use --robot-format=json", "json", robotError, now)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), paletteGoWait)
 	defer cancel()
 	out, err := paletteOutput(ctx, *socket, sess, "", robot.PaletteOptions{Session: strings.TrimSpace(sess), Category: category, SearchQuery: search})
 	if err != nil {
-		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "Use 'nhm list' to see available sessions", "json", robotError, now)
+		return robotFail(stdout, robot.ErrCodeSessionNotFound, err.Error(), "Use 'nhm list' to see available sessions", root.format, robotError, now)
 	}
+	out.OutputFormat = root.format
 	return robotWrite(stdout, out, robotOK)
 }

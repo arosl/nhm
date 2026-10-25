@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"io"
 	"strings"
 	"testing"
@@ -20,8 +19,7 @@ func TestRobotSpawnTrustFolder(t *testing.T) {
 		{[]string{"--trust-folder=false"}, false},
 		{[]string{"--trust-folder", "--spawn-assign-work", "--spawn-prompt=Read AGENTS.md."}, true},
 	} {
-		fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs, _ := newRobotFlagSet(nil, io.Discard)
 		rf := addRobotSpawnFlags(fs)
 		args := append([]string{"--robot-spawn=fresh", "--spawn-dir=/p", "--spawn-cc=1", "--spawn-safety", "--robot-format=json"}, c.args...)
 		if err := fs.Parse(args); err != nil {

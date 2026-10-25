@@ -30,24 +30,17 @@ func runRobotAssign(args []string, stdout io.Writer) int {
 	session := fs.String("robot-assign", "", "")
 	beads := fs.String("beads", "", "")
 	strategy := fs.String("strategy", "simple", "")
-	format := fs.String("robot-format", "auto", "")
+	format := &root.format
 	socket := fs.String("socket", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		msg := "unexpected arguments"
 		if err != nil {
 			msg = err.Error()
 		}
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
 	if code, done := applyRobotRoot(root, now); done {
 		return code
-	}
-	switch *format {
-	case "auto", "json":
-		*format = "json"
-	default:
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
-			"use --robot-format=json", "json", robotError, now)
 	}
 	// As ntm's resolveRobotLiveSession: the name trimmed; a name of spaces
 	// only is "session is required". An empty one is GetAssign's refusal.

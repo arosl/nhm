@@ -1079,9 +1079,9 @@ func printSpawn(w io.Writer, res spawn.Result) {
 
 // robotSpawnFlags are --robot-spawn's flags.
 type robotSpawnFlags struct {
-	session, dir, format, prompt, opID, socket *string
-	promptFile, names, label                   *string
-	staggerMode, staggerDelay                  *string
+	session, dir, prompt, opID, socket *string
+	promptFile, names, label           *string
+	staggerMode, staggerDelay          *string
 	// counts are the --spawn-<kind> specs by flag (without "spawn-"),
 	// in ntm's launch order.
 	counts                              []robotCount
@@ -1110,7 +1110,6 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	f := robotSpawnFlags{}
 	f.session = fs.String("robot-spawn", "", "")
 	f.dir = fs.String("spawn-dir", "", "")
-	f.format = fs.String("robot-format", "auto", "")
 	fs.Bool("spawn-no-user", false, "")
 	f.safety = fs.Bool("spawn-safety", false, "")
 	// As ntm's: the spawn waits for the agents to be ready only with
@@ -1306,24 +1305,17 @@ func runRobotSpawn(args []string, stdout, stderr io.Writer) int {
 	fs, root := newRobotFlagSet(args, stdout)
 	defer root.undo()
 	rf := addRobotSpawnFlags(fs)
-	dir, format := rf.dir, rf.format
+	dir, format := rf.dir, &root.format
 	dryRun, assign, socket := rf.dryRun, rf.assign, rf.socket
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		msg := "unexpected arguments"
 		if err != nil {
 			msg = err.Error()
 		}
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
 	if code, done := applyRobotRoot(root, now); done {
 		return code
-	}
-	switch *format {
-	case "auto", "json":
-		*format = "json"
-	default:
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
-			"use --robot-format=json", "json", robotError, now)
 	}
 	req, prompt, refusal := robotSpawnRequest(fs, rf)
 	if refusal != nil {

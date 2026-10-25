@@ -132,7 +132,7 @@ Usage:
   nhm --robot-spawn=S --spawn-dir=R --spawn-cc=N --spawn-cod=N [--spawn-agy=N]
       --spawn-no-user --spawn-safety --spawn-wait [--ready-timeout=Ns] [--dry-run]
                          ntm's robot spawn, ntm's SpawnOutput
-  nhm --robot-* … --robot-format=json
+  nhm --robot-* … --robot-format=json (or --robot-output-format=json)
                          every robot flag answers JSON (auto is JSON)
   nhm quota [--json]     each plan's windows and the live agents per kind
   nhm limits [session] [--once|--loop] [--dry-run] [--json]

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -44,8 +43,7 @@ func TestRobotSpawnIgnoreCapacity(t *testing.T) {
 		{[]string{"--ignore-capacity"}, true},
 		{[]string{"--ignore-capacity=false"}, false},
 	} {
-		fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs, _ := newRobotFlagSet(nil, io.Discard)
 		rf := addRobotSpawnFlags(fs)
 		args := append([]string{"--robot-spawn=fresh", "--spawn-dir=/p", "--spawn-cc=1", "--spawn-safety", "--robot-format=json"}, c.args...)
 		if err := fs.Parse(args); err != nil {

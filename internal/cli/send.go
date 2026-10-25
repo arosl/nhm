@@ -615,7 +615,7 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 	sendS := fs.String("robot-send", "", "")
 	receiptOp := fs.String("robot-send-receipt", "", "")
 	ackS := fs.String("robot-ack", "", "")
-	format := fs.String("robot-format", "auto", "")
+	format := &root.format
 	var panes, types listFlag
 	fs.Var(&panes, "panes", "")
 	fs.Var(&panes, "pane", "")
@@ -636,17 +636,10 @@ func runRobotDispatch(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			msg = err.Error()
 		}
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
 	if code, done := applyRobotRoot(root, now); done {
 		return code
-	}
-	switch *format {
-	case "auto", "json":
-		*format = "json"
-	default:
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
-			"use --robot-format=json", "json", robotError, now)
 	}
 	cfg, err := loadEnrichConfig()
 	if err != nil {

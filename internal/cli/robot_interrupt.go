@@ -34,7 +34,7 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 	fs, root := newRobotFlagSet(args, stdout)
 	defer root.undo()
 	session := fs.String("robot-interrupt", "", "")
-	format := fs.String("robot-format", "auto", "")
+	format := &root.format
 	var msg, timeoutS string
 	fs.StringVar(&msg, "msg", "", "")
 	fs.StringVar(&msg, "interrupt-msg", "", "")
@@ -60,17 +60,10 @@ func runRobotInterrupt(args []string, stdout io.Writer) int {
 		if err != nil {
 			msg = err.Error()
 		}
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
 	if code, done := applyRobotRoot(root, now); done {
 		return code
-	}
-	switch *format {
-	case "auto", "json":
-		*format = "json"
-	default:
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
-			"use --robot-format=json", "json", robotError, now)
 	}
 	if *session == "" {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "--robot-interrupt requires a session", "use --robot-interrupt=SESSION", *format, robotError, now)

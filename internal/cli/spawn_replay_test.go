@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"io"
 	"reflect"
 	"runtime"
@@ -256,8 +255,7 @@ func newRobotReplayWorld(t *testing.T) *replayWorld {
 	ownNhm(t, inst)
 	w := &replayWorld{s: s, inst: inst, h: h, args: []string{"--robot-spawn=swarm", "--spawn-dir=" + project, "--spawn-cc=1",
 		"--spawn-assign-work", "--spawn-prompt=Read AGENTS.md.", "--op-id=sp-q1", "--robot-format=json", "--socket=" + s.SocketPath}}
-	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs, _ := newRobotFlagSet(nil, io.Discard)
 	rf := addRobotSpawnFlags(fs)
 	if err := fs.Parse(w.args); err != nil {
 		t.Fatal(err)

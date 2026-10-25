@@ -35,13 +35,14 @@ func TestRobotVersion(t *testing.T) {
 	if nhm["ntm_commit"] != NTMCommit || nhm["herdr_protocol"] != float64(herdr.Protocol) {
 		t.Fatalf("_nhm = %v", nhm)
 	}
-	if env.Raw["output_format"] != "json" || env.Raw["version"] != "1.0.0" {
+	// ntm's default format is auto, and its envelope says so.
+	if env.Raw["output_format"] != "auto" || env.Raw["version"] != "1.0.0" {
 		t.Fatalf("envelope = %v", env.Raw)
 	}
-	// ntm's root flags after the robot flag, and json, work; another
-	// format and a second robot flag are refused.
-	if _, code := robotRun(t, "--robot-version", "--json", "--robot-format=json"); code != 0 {
-		t.Fatalf("with --json and --robot-format=json = %d", code)
+	// ntm's root flags after the robot flag, and json, work; toon is
+	// refused.
+	if env, code := robotRun(t, "--robot-version", "--json", "--robot-format=json"); code != 0 || env.Raw["output_format"] != "json" {
+		t.Fatalf("with --json and --robot-format=json = %d %v", code, env.Raw)
 	}
 	if env, code := robotRun(t, "--robot-version", "--robot-format=toon"); code != 1 || env.ErrorCode != "INVALID_FLAG" {
 		t.Fatalf("toon = %d %+v", code, env)

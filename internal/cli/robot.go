@@ -60,11 +60,11 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 		// ntm's bare form is project health: bv's drift, bottlenecks and
 		// recommendations. nhm answers the session form only.
 		return robotFail(stdout, robot.ErrCodeNotImplemented, "--robot-health without a session is not in this nhm",
-			"use --robot-health=SESSION for each agent's health; nhm health covers the runtime", "json", robotNotImplemented, now)
+			"use --robot-health=SESSION for each agent's health; nhm health covers the runtime", "auto", robotNotImplemented, now)
 	}
 	if slices.Contains(args, "--robot-health=") {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "--robot-health requires a session name or no value for project health",
-			"Use --robot-health for project health or --robot-health=SESSION for session health", "json", robotError, now)
+			"Use --robot-health for project health or --robot-health=SESSION for session health", "auto", robotError, now)
 	}
 	fs, root := newRobotFlagSet(args, stdout)
 	defer root.undo()
@@ -75,30 +75,24 @@ func runRobot(args []string, stdout, stderr io.Writer) int {
 	activity := fs.String("robot-activity", "", "")
 	tail := fs.String("robot-tail", "", "")
 	health := fs.String("robot-health", "", "")
-	format := fs.String("robot-format", "auto", "")
+	format := &root.format
 	lines := fs.Int("lines", 20, "")
 	socket := fs.String("socket", "", "")
 	noMail := fs.Bool("no-mail", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		if name := unknownRobotFlag(args); name != "" {
 			return robotFail(stdout, "NOT_IMPLEMENTED", fmt.Sprintf("%s is not in this nhm", name),
-				notImplementedHint(name), "json", robotNotImplemented, now)
+				notImplementedHint(name), "auto", robotNotImplemented, now)
 		}
 		msg := "unexpected arguments"
 		if err != nil {
 			msg = err.Error()
 		}
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+		return robotFail(stdout, robot.ErrCodeInvalidFlag, msg, "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 	}
+	root.formatNoConfig = *caps || *version
 	if code, done := applyRobotRoot(root, now); done {
 		return code
-	}
-	switch *format {
-	case "auto", "json":
-		*format = "json"
-	default:
-		return robotFail(stdout, robot.ErrCodeInvalidFlag, fmt.Sprintf("--robot-format=%s: nhm writes json only", *format),
-			"use --robot-format=json", "json", robotError, now)
 	}
 	chosen := 0
 	for _, b := range []bool{*status, *snap, *caps, *version, *activity != "", *tail != "", *health != ""} {
@@ -240,7 +234,7 @@ func robotKinds(types []string) []string {
 func unknownRobotFlag(args []string) string {
 	known := map[string]bool{"--robot-status": true, "--robot-snapshot": true, "--robot-capabilities": true,
 		"--robot-activity": true, "--robot-tail": true, "--robot-health": true, "--robot-format": true, "--robot-version": true,
-		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true, "--robot-spawn": true}
+		"--robot-send": true, "--robot-send-receipt": true, "--robot-ack": true, "--robot-spawn": true, "--robot-output-format": true}
 	for _, a := range args {
 		name, _, _ := strings.Cut(a, "=")
 		if strings.HasPrefix(name, "--robot-") && !known[name] {

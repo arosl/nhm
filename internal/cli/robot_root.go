@@ -56,26 +56,40 @@ func runRobotCall(lead, rest []string, stdout, stderr io.Writer) int {
 			value, hasValue = lead[i], true
 		}
 		if err := o.setFlag(f, value, hasValue); err != nil {
-			return robotFail(stdout, robot.ErrCodeInvalidFlag, err.Error(), "nhm --robot-capabilities lists the robot flags", "json", robotError, now)
+			return robotFail(stdout, robot.ErrCodeInvalidFlag, err.Error(), "nhm --robot-capabilities lists the robot flags", "auto", robotError, now)
 		}
 	}
-	if code, done := applyRobotRoot(o, now); done {
+	if code, done := applyRootFlags(o, now); done {
 		return code
 	}
 	return runRobot(rest, stdout, stderr)
 }
 
-// newRobotFlagSet is a robot call's flag set, with ntm's root flags in it
-// for the root flags after the --robot-* flag. Go's flag reads the word
-// after a robot flag that takes a value as its value, as pflag does, so
-// `--msg --json` keeps --json as the message. After the parse,
-// applyRobotRoot applies the root flags that the set took, and o.undo
-// ends what they set up. A --ssh H never gets here: remoteRobotCall took
-// it, so stderr is not needed; an empty --ssh is none, as in ntm.
-func newRobotFlagSet(args []string, stdout io.Writer) (*flag.FlagSet, *rootOptions) {
+// robotOptions is a robot call's root flags and its global robot
+// modifiers (robot_modifiers.go), which in ntm are root flags too.
+type robotOptions struct {
+	*rootOptions
+	// format is --robot-format or --robot-output-format as given, ""
+	// when neither is; applyRobotRoot replaces it with the call's
+	// resolved format, which the call's output names.
+	format string
+	// formatNoConfig leaves the config out of the format: ntm's help,
+	// version and capabilities load no config.
+	formatNoConfig bool
+}
+
+// newRobotFlagSet is a robot call's flag set, with ntm's root flags and
+// global robot modifiers in it, for those after the --robot-* flag. Go's
+// flag reads the word after a robot flag that takes a value as its value,
+// as pflag does, so `--msg --json` keeps --json as the message. After the
+// parse, applyRobotRoot applies the root flags that the set took and
+// resolves the modifiers, and o.undo ends what the flags set up. A --ssh
+// H never gets here: remoteRobotCall took it, so stderr is not needed; an
+// empty --ssh is none, as in ntm.
+func newRobotFlagSet(args []string, stdout io.Writer) (*flag.FlagSet, *robotOptions) {
 	fs := flag.NewFlagSet("nhm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	o := &rootOptions{set: map[string]bool{}, args: args, stdout: stdout, stderr: io.Discard}
+	o := &robotOptions{rootOptions: &rootOptions{set: map[string]bool{}, args: args, stdout: stdout, stderr: io.Discard}}
 	for _, f := range rootFlags {
 		set := func(value string) error { return o.setFlag(f, value, true) }
 		if f.value {
@@ -84,16 +98,38 @@ func newRobotFlagSet(args []string, stdout io.Writer) (*flag.FlagSet, *rootOptio
 			fs.BoolFunc(f.name, "", set)
 		}
 	}
+	setFormat := func(value string) error { o.format = value; return nil }
+	fs.Func("robot-format", "", setFormat)
+	fs.Func("robot-output-format", "", setFormat)
 	return fs, o
 }
 
-// applyRobotRoot applies a robot call's root flags, as rootOptions.apply
+// applyRobotRoot applies a robot call's root flags (applyRootFlags), then
+// resolves its format, as ntm does before any dispatch: a format ntm does
+// not know is ntm's INVALID_FLAG. done is true when the call ends here,
+// with code.
+func applyRobotRoot(o *robotOptions, now time.Time) (code int, done bool) {
+	if code, done := applyRootFlags(o.rootOptions, now); done {
+		return code, true
+	}
+	format, err := resolveRobotFormat(o.format, !o.formatNoConfig)
+	switch {
+	case errors.Is(err, errRobotTOON):
+		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), "use --robot-format=json", "auto", robotError, now), true
+	case err != nil:
+		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), robotFormatHint, "auto", robotError, now), true
+	}
+	o.format = format
+	return 0, false
+}
+
+// applyRootFlags applies a robot call's root flags, as rootOptions.apply
 // does for a verb. --config sets NHM_CONFIG for the call; --json and
 // --no-color change nothing that it writes; --profile-startup prints
 // nothing, as ntm prints no profile after a machine call; --redact and
 // --allow-secret are not built (ntm's NOT_IMPLEMENTED). done is true when
 // the call ends here, with code.
-func applyRobotRoot(o *rootOptions, now time.Time) (code int, done bool) {
+func applyRootFlags(o *rootOptions, now time.Time) (code int, done bool) {
 	o.profileStartup = false
 	err := o.apply(&cobra.Command{Use: "robot", DisableFlagParsing: true})
 	var ve verbExit
@@ -104,9 +140,9 @@ func applyRobotRoot(o *rootOptions, now time.Time) (code int, done bool) {
 	case errors.As(err, &ve):
 		return ve.code, true
 	case errors.As(err, &nb):
-		return robotFail(o.stdout, robot.ErrCodeNotImplemented, err.Error(), "its row in compat/ntm-contract.md names the bead", "json", robotNotImplemented, now), true
+		return robotFail(o.stdout, robot.ErrCodeNotImplemented, err.Error(), "its row in compat/ntm-contract.md names the bead", "auto", robotNotImplemented, now), true
 	default:
-		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), "nhm --robot-capabilities lists the robot flags", "json", robotError, now), true
+		return robotFail(o.stdout, robot.ErrCodeInvalidFlag, err.Error(), "nhm --robot-capabilities lists the robot flags", "auto", robotError, now), true
 	}
 }
 

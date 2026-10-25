@@ -101,7 +101,7 @@ func TestRootFlagsAfterARobotFlag(t *testing.T) {
 			exit  int
 			error string
 		}{
-			{[]string{"--json", "--no-color", "--profile-startup", "--config=", "--ssh="}, robotError, "nhm writes json only"},
+			{[]string{"--json", "--no-color", "--profile-startup", "--config=", "--ssh="}, robotError, `invalid robot format "xml"`},
 			{[]string{"--json=maybe"}, robotError, `invalid boolean value "maybe" for -json`},
 			{[]string{"--redact", "warn"}, robotNotImplemented, "--redact is not in this nhm"},
 			{[]string{"--allow-secret"}, robotNotImplemented, "--allow-secret is not in this nhm"},
@@ -120,7 +120,7 @@ func TestRootFlagsAfterARobotFlag(t *testing.T) {
 		{"--robot-interrupt=s", "--msg", "--allow-secret", "--robot-format=xml"},
 		{"--robot-spawn=s", "--spawn-prompt", "--redact", "--robot-format=xml"},
 	} {
-		if _, out, _ := run(args...); !strings.Contains(out, "nhm writes json only") {
+		if _, out, _ := run(args...); !strings.Contains(out, `invalid robot format \"xml\"`) {
 			t.Errorf("%v: %q", args, out)
 		}
 	}
