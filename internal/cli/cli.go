@@ -46,6 +46,8 @@ Usage:
                          compare two agents' output, as ntm's diff
   nhm copy [session[:pane]] [-l N] [-p RE] [--code] [--all|--cc|--cod|--gmi|--agy] -o FILE [--json]
                          a pane's recent output to a file, as ntm's copy (also cp, yank)
+  nhm grep <pattern> [session] [-i] [-v] [-C N] [-A N] [-B N] [-n N] [-l] [--all] [--cc|--cod|--gmi|--agy] [--json]
+                         search the panes' recent output, as ntm's grep
   nhm admin restore | admin recover inspect | admin recover resume <binding> (--dry-run|--run)
   nhm admin export --project DIR --to DIR | admin import --from DIR
   nhm admin takeover (--dry-run | --yes)
