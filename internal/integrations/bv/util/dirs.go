@@ -5,6 +5,8 @@
 // FindBeadsRoot, FindGitRoot with its cache) are kept, for the bv port's
 // normalizeTriageDir. NTMDir, ExpandPath, EnsureDir and the project scoring
 // are left out. findGitRootUncached sets cmd.WaitDelay (nhm-fty).
+// FindProjectConfigRoot looks for nhm's .nhm/config.toml, not ntm's
+// .ntm/config.toml (nhm-2p6.28.2).
 
 // Package util is the part of ntm's util package that nhm's port of ntm's
 // bv package calls.
@@ -85,7 +87,7 @@ func findGitRootUncached(startDir string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// FindProjectConfigRoot walks up from startDir looking for a local .ntm/config.toml.
+// FindProjectConfigRoot walks up from startDir looking for a local .nhm/config.toml.
 // It returns the directory that owns the project config.
 func FindProjectConfigRoot(startDir string) (string, error) {
 	if strings.TrimSpace(startDir) == "" {
@@ -102,7 +104,7 @@ func FindProjectConfigRoot(startDir string) (string, error) {
 	}
 
 	for {
-		configPath := filepath.Join(dir, ".ntm", "config.toml")
+		configPath := filepath.Join(dir, ".nhm", "config.toml")
 		if info, err := os.Stat(configPath); err == nil && !info.IsDir() {
 			return dir, nil
 		}

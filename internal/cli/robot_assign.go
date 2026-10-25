@@ -85,7 +85,7 @@ func runRobotAssign(args []string, stdout io.Writer) int {
 	if err != nil {
 		return robotFail(stdout, robot.ErrCodeInternalError, err.Error(), "Ensure the target session has a resolvable project directory", *format, robotError, now)
 	}
-	policyHint := "Fix [assign] in nhm's config and the project's .ntm/config.toml"
+	policyHint := "Fix [assign] in nhm's config and the project's .nhm/config.toml"
 	globalPath, err := kinds.ConfigPath()
 	if err != nil {
 		return robotFail(stdout, robot.ErrCodeInvalidFlag, "locate nhm's config for the assignment safety policy: "+err.Error(),

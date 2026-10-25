@@ -140,7 +140,7 @@ func robotAssignPreflight(ctx context.Context, ie *instanceEnv, f robotAssignFla
 
 // assignPreflight is the preflight that the robot and the human form
 // share: the project's scope, the strict policy (nhm's config and the
-// project's .ntm/config.toml), and the verified actionable plan for
+// project's .nhm/config.toml), and the verified actionable plan for
 // strategy. scopeHint is the refusal's hint for a project that has no
 // scope; fetch reads the actionable work (nil: all of it). The caller sets
 // the plan's prompt context.
@@ -161,7 +161,7 @@ func assignPreflight(ctx context.Context, ie *instanceEnv, strategy, project, sc
 	policy, err := spawnassign.LoadPolicy(s.ProjectRoot, globalPath)
 	if err != nil {
 		return refuse(robot.ErrCodeInvalidFlag, "load spawn assignment safety policy: "+err.Error(),
-			"Fix [assign] in nhm's config and the project's .ntm/config.toml")
+			"Fix [assign] in nhm's config and the project's .nhm/config.toml")
 	}
 	plan, err := spawnassign.Preflight(ctx, s.ProjectRoot, strategy, policy, fetch)
 	if err != nil {

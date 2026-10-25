@@ -243,8 +243,9 @@ func TestRobotAssignContract(t *testing.T) {
 }
 
 // The project's [assign] policy reaches the classifier: a bead with a
-// label the project's .ntm/config.toml gates is unassignable, with ntm's
-// reason; without that file it is ready.
+// label the project's .nhm/config.toml gates is unassignable, with ntm's
+// reason; without that file it is ready. ntm's .ntm/config.toml plays no
+// part (nhm-2p6.28.2).
 func TestRobotAssignHonoursTheProjectsOperatorGates(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake tools use a POSIX shell")
@@ -252,11 +253,13 @@ func TestRobotAssignHonoursTheProjectsOperatorGates(t *testing.T) {
 	project, _ := assignReadTools(t, "release-approval")
 	s, _, _ := assignSession(t, project)
 	sock := "--socket=" + s.SocketPath
+	gate := "[assign]\noperator_gated_labels = [\"release-approval\"]\n"
+	writeAll(t, filepath.Join(project, ".ntm", "config.toml"), gate)
 	out, code := robotJSON(t, "--robot-assign=swarm", sock)
 	if by := recommendationsByBead(t, out); code != robotOK || len(by) != 2 {
 		t.Fatalf("no gate = %d %v", code, out["recommendations"])
 	}
-	writeAll(t, filepath.Join(project, ".ntm", "config.toml"), "[assign]\noperator_gated_labels = [\"release-approval\"]\n")
+	writeAll(t, filepath.Join(project, ".nhm", "config.toml"), gate)
 	out, code = robotJSON(t, "--robot-assign=swarm", sock)
 	unassignable, _ := json.Marshal(out["unassignable_beads"])
 	if by := recommendationsByBead(t, out); code != robotOK || len(by) != 1 || by["nhm-1"] == nil ||
@@ -264,10 +267,10 @@ func TestRobotAssignHonoursTheProjectsOperatorGates(t *testing.T) {
 		t.Fatalf("gated = %d %v %s", code, out["recommendations"], unassignable)
 	}
 	// A policy file that does not parse is refused before any read.
-	writeAll(t, filepath.Join(project, ".ntm", "config.toml"), "[assign]\nunknown_key = 1\n")
+	writeAll(t, filepath.Join(project, ".nhm", "config.toml"), "[assign]\nunknown_key = 1\n")
 	out, code = robotJSON(t, "--robot-assign=swarm", sock)
 	if code != robotError || out["error_code"] != robot.ErrCodeInvalidFlag ||
-		out["hint"] != "Fix [assign] in nhm's config and the project's .ntm/config.toml" {
+		out["hint"] != "Fix [assign] in nhm's config and the project's .nhm/config.toml" {
 		t.Fatalf("bad policy = %d %v", code, out)
 	}
 }

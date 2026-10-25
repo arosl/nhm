@@ -26,3 +26,32 @@ func TestFindGitRootEndsWhenAChildHoldsStdout(t *testing.T) {
 		t.Fatalf("git rev-parse took %v", took)
 	}
 }
+
+// The project is the nearest folder with nhm's .nhm/config.toml; ntm's
+// .ntm/config.toml does not make one, so the beads root wins over it
+// (nhm-2p6.28.2).
+func TestResolveProjectDirFindsNhmsProjectConfig(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	deep := filepath.Join(sub, "deep")
+	for _, d := range []string{filepath.Join(root, ".beads"), filepath.Join(sub, ".ntm"), deep} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".ntm", "config.toml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveProjectDir(deep); got != root {
+		t.Fatalf("with .ntm/config.toml: %q, want the beads root %q", got, root)
+	}
+	if err := os.MkdirAll(filepath.Join(sub, ".nhm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".nhm", "config.toml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveProjectDir(deep); got != sub {
+		t.Fatalf("with .nhm/config.toml: %q, want %q", got, sub)
+	}
+}

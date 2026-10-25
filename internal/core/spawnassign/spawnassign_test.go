@@ -745,14 +745,17 @@ func isCode(err error, code string) bool {
 	return errors.As(err, &perr) && perr.Code == code
 }
 
-// The policy: nhm's [assign] plus the project's .ntm/config.toml, by ntm's
-// rules (gates extend, the work source tightens); a bad file refuses.
+// The policy: nhm's [assign] plus the project's .nhm/config.toml, by ntm's
+// rules (gates extend, the work source tightens); a bad file refuses. ntm's
+// .ntm/config.toml plays no part (nhm-2p6.28.2).
 func TestLoadPolicyMergesByNtmRules(t *testing.T) {
 	root := t.TempDir()
 	global := filepath.Join(root, "config.toml")
 	project := filepath.Join(root, "proj")
+	projectConfig := filepath.Join(project, ".nhm", "config.toml")
 	writeFile(t, global, "[assign]\noperator_gated_labels = [\"Needs-Legal\"]\n[assign.work_source]\nprogram_labels = [\"program:a\"]\n")
-	writeFile(t, filepath.Join(project, ".ntm", "config.toml"),
+	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign\n")
+	writeFile(t, projectConfig,
 		"[assign]\noperator_gated_labels = [\"project-approval\", \"needs-legal\"]\n[assign.work_source]\nrequire_clean = true\nprogram_labels = [\"program:b\"]\n")
 	sub := filepath.Join(project, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -769,21 +772,21 @@ func TestLoadPolicyMergesByNtmRules(t *testing.T) {
 	if _, err := LoadPolicy(sub, filepath.Join(root, "absent.toml")); err != nil {
 		t.Fatalf("an absent global config is the defaults: %v", err)
 	}
-	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign\n")
+	writeFile(t, projectConfig, "[assign\n")
 	if _, err := LoadPolicy(sub, global); err == nil {
 		t.Fatal("a broken project config was accepted")
 	}
 	// A misspelled key under [assign] refuses, in either file; keys of
 	// other sections of nhm's config are not the policy's.
-	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign]\noperator_gate_labels = [\"prod\"]\n")
+	writeFile(t, projectConfig, "[assign]\noperator_gate_labels = [\"prod\"]\n")
 	if _, err := LoadPolicy(sub, global); err == nil || !strings.Contains(err.Error(), "operator_gate_labels") {
 		t.Fatalf("a misspelled project gate: %v", err)
 	}
-	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign.work_source]\nrequire_cleen = true\n")
+	writeFile(t, projectConfig, "[assign.work_source]\nrequire_cleen = true\n")
 	if _, err := LoadPolicy(sub, global); err == nil {
 		t.Fatal("a misspelled work-source key was accepted")
 	}
-	writeFile(t, filepath.Join(project, ".ntm", "config.toml"), "[assign]\n")
+	writeFile(t, projectConfig, "[assign]\n")
 	writeFile(t, global, "[quota]\nadmit_unknown = [\"x\"]\n[assign]\noperator_gated_labels = [\"prod\"]\n")
 	if p, err := LoadPolicy(sub, global); err != nil || strings.Join(p.OperatorGatedLabels, ",") != "prod" {
 		t.Fatalf("nhm's other sections: %+v %v", p, err)
