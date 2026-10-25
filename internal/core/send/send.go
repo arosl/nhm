@@ -85,6 +85,9 @@ type Env struct {
 	CM      enrich.CM
 	CASS    enrich.CASS
 	Budgets enrich.Budgets
+	// StartWait bounds the wait for an agent that herdr still launches
+	// (start.go); zero is DefaultStartWait.
+	StartWait time.Duration
 }
 
 func (e Env) now() time.Time {
@@ -557,6 +560,16 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 		return finish(StatusRefused, code, why)
 	}
 	a, err := env.Herdr.AgentGet(ctx, cur.PaneID)
+	// An agent that herdr still launches gets the prompt once it is
+	// ready, within the start wait (start.go; nhm-2p6.5.12).
+	deadline := env.now().Add(env.startWait())
+	if err == nil && launching(a) {
+		var started bool
+		if a, started, err = awaitStart(ctx, env, cur.PaneID, deadline); !started && err == nil {
+			return finish(StatusRefused, herdr.CodeAgentNotReady,
+				fmt.Sprintf("the agent's launch did not finish within %s", env.startWait()))
+		}
+	}
 	var agent *herdr.AgentInfo
 	if err == nil {
 		agent = &a
@@ -600,8 +613,30 @@ func dispatch(ctx context.Context, env Env, rdb receiptDB, t Target, rc *Receipt
 		return err
 	}
 	ms := promptCallMS
-	after, err := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: cur.PaneID, Text: payload,
-		Wait: &herdr.PromptWait{Until: []herdr.AgentStatus{herdr.StatusWorking, herdr.StatusBlocked}, TimeoutMS: &ms}})
+	prompt := func() (herdr.AgentInfo, error) {
+		return env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: cur.PaneID, Text: payload,
+			Wait: &herdr.PromptWait{Until: []herdr.AgentStatus{herdr.StatusWorking, herdr.StatusBlocked}, TimeoutMS: &ms}})
+	}
+	after, err := prompt()
+	// herdr can still refuse an agent whose launch it just finished; it
+	// typed nothing, so the prompt goes again once the agent is ready,
+	// within the start wait.
+	for notStarted(err) && env.now().Before(deadline) {
+		now, started, gerr := awaitStart(ctx, env, cur.PaneID, deadline)
+		if !started || gerr != nil {
+			break
+		}
+		if base, cerr := wait.Capture(cur, now, inode, env.now()); cerr == nil {
+			rc.Baseline = &base
+		}
+		timer := time.NewTimer(startPoll)
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
+		after, err = prompt()
+	}
 	status, code := classify(err)
 	if err == nil {
 		rc.Result.StateAfter = string(after.AgentStatus)

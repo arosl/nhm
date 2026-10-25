@@ -160,7 +160,7 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(func() { _ = db.Close() })
 	w := &world{t: t, herdr: &fakeHerdr{agents: map[string]herdr.AgentInfo{}, promptErr: map[string]error{}, prompts: map[string][]string{}},
 		tracker: &fakeTracker{owner: map[string]string{}}, db: db}
-	w.env = send.Env{DB: db, Bindings: bindings.NewStore(db), Herdr: w.herdr, InstanceDir: inst.Dir}
+	w.env = send.Env{DB: db, Bindings: bindings.NewStore(db), Herdr: w.herdr, InstanceDir: inst.Dir, StartWait: 300 * time.Millisecond}
 	return w
 }
 

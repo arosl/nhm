@@ -131,7 +131,8 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(func() { _ = db.Close() })
 	w := &world{fake: newFake(), db: db, created: map[string]bindings.Binding{}}
 	w.env = Env{DB: db, Bindings: bindings.NewStore(db), Herdr: w.fake, InstanceDir: inst.Dir,
-		History: func(e *history.HistoryEntry) error { w.hist = append(w.hist, e); return nil }}
+		History:   func(e *history.HistoryEntry) error { w.hist = append(w.hist, e); return nil },
+		StartWait: 300 * time.Millisecond}
 	return w
 }
 
