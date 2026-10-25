@@ -78,7 +78,7 @@ func TestPaletteJSONIsPaletteOutput(t *testing.T) {
 	}
 	// Under --json, the error is the robot error envelope on stdout.
 	if code, out, errOut := run("palette", "--json", "--show", "mine"); code != exitError || errOut != "" ||
-		!strings.Contains(out, "it does not go with --show") || !strings.Contains(out, `"success": false`) {
+		!strings.Contains(out, "it does not go with --show") || !strings.Contains(out, `"success":false`) {
 		t.Fatalf("--json --show = %d %q %q", code, out, errOut)
 	}
 }

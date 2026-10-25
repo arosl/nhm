@@ -244,7 +244,7 @@ func TestMailInboxSessionEmptyAndRefusals(t *testing.T) {
 	}
 	// Under --json, an error is ntm's robot error envelope on stdout.
 	code, out, errOut := run("mail", "inbox", "--mark-read", "--keep-unread", "--json", "--socket", s.SocketPath)
-	if code != exitError || errOut != "" || !strings.Contains(out, `"success": false`) || !strings.Contains(out, "give --mark-read or --keep-unread") {
+	if code != exitError || errOut != "" || !strings.Contains(out, `"success":false`) || !strings.Contains(out, "give --mark-read or --keep-unread") {
 		t.Errorf("--json error = %d %q %q", code, out, errOut)
 	}
 }

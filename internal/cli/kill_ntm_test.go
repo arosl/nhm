@@ -247,7 +247,7 @@ func TestKillPaneAndSummarizeWait(t *testing.T) {
 			t.Errorf("%v = %d %q, want %q", c.args, code, errOut, c.want)
 		}
 	}
-	if code, out, _ := runVerb(verbRun("kill"), "swarm", "--summarize", "--json"); code != robotNotImplemented || !strings.Contains(out, `"error_code": "NOT_IMPLEMENTED"`) {
+	if code, out, _ := runVerb(verbRun("kill"), "swarm", "--summarize", "--json"); code != robotNotImplemented || !strings.Contains(out, `"error_code":"NOT_IMPLEMENTED"`) {
 		t.Fatalf("--summarize --json = %d %s", code, out)
 	}
 	if ws, panes, _ := k.closed(); len(ws)+len(panes) != 0 {

@@ -346,13 +346,17 @@ func robotCategory(flagName string) string {
 
 // robotWrite writes a robot answer. A successful one (code robotOK, as
 // ntm's exit code is 0 only for success) gets the call's verbosity, as
-// ntm's encodeJSON applies it; an error envelope never does.
+// ntm's encodeJSON applies it; an error envelope never does. A successful
+// answer is indented, as ntm's JSONRenderer writes it; an error envelope
+// is one line, as ntm's encodeRobotFailureJSON writes it.
 func robotWrite(stdout io.Writer, v any, code int) int {
 	if code == robotOK && robotOut.verbosity != robot.VerbosityDefault {
 		v = robot.ApplyVerbosity(v, robotOut.verbosity, robotOut.format)
 	}
 	enc := json.NewEncoder(stdout)
-	enc.SetIndent("", "  ")
+	if code == robotOK {
+		enc.SetIndent("", "  ")
+	}
 	if err := enc.Encode(v); err != nil {
 		return robotError
 	}

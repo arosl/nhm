@@ -171,12 +171,14 @@ func TestRootFlagNotBuiltIsRefused(t *testing.T) {
 }
 
 // Under --json an error that no verb wrote is ntm's robot error envelope
-// on stdout, with nothing on stderr (Execute, root.go:3364-3383).
+// on stdout, on one line as ntm's EncodeErrorJSON writes it, with nothing
+// on stderr (Execute, root.go:3364-3383).
 func TestRootErrorUnderJSON(t *testing.T) {
 	for _, args := range [][]string{{"--json", "frobnicate"}, {"version", "--yaml", "--json"}} {
 		code, out, errOut := run(args...)
 		var resp robot.RobotResponse
-		if err := json.Unmarshal([]byte(out), &resp); err != nil || code != 1 || errOut != "" {
+		if err := json.Unmarshal([]byte(out), &resp); err != nil || code != 1 || errOut != "" ||
+			!strings.HasPrefix(out, `{"success":false,`) || strings.Count(out, "\n") != 1 {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
 			continue
 		}
