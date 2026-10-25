@@ -49,6 +49,9 @@ type Pane struct {
 	// active pane.
 	Active bool
 	Cwd    string
+	// State is herdr's agent state of the pane (herdr says unknown for a
+	// pane without an agent).
+	State herdr.AgentStatus
 	// Binding is the active binding of the pane, if any.
 	Binding *bindings.Binding
 }
@@ -94,7 +97,8 @@ func Panes(snap herdr.SessionSnapshot, workspaceID string, bound []bindings.Bind
 			continue
 		}
 		p := Pane{PaneID: hp.PaneID, TabID: hp.TabID, Window: window[hp.TabID], Kind: hp.Agent, Type: UserType,
-			Title: firstNonEmpty(hp.Label, hp.Title, hp.TerminalTitleStripped), Cwd: firstNonEmpty(hp.ForegroundCwd, hp.Cwd)}
+			Title: firstNonEmpty(hp.Label, hp.Title, hp.TerminalTitleStripped), Cwd: firstNonEmpty(hp.ForegroundCwd, hp.Cwd),
+			State: hp.AgentStatus}
 		if active != "" {
 			p.Active = hp.PaneID == active
 		} else {
