@@ -108,3 +108,51 @@ func TestPaneAloneInItsTab(t *testing.T) {
 		t.Fatalf("already zoomed = %v", err)
 	}
 }
+
+// Show focuses the workspace, then brings the zoomed pane's tab in front;
+// a failed focus is the error, a tab that stays behind an *Unshown.
+func TestShowFocusesTheWorkspaceThenTheTab(t *testing.T) {
+	z := herdr.ZoomResult{PaneID: "w1:p2", Layout: herdr.ZoomLayout{WorkspaceID: "w1", TabID: "w1:t2"}}
+	h := &fakeHerdr{}
+	if err := Show(context.Background(), h, "w1", "w1:p2", z); err != nil {
+		t.Fatalf("show = %v", err)
+	}
+	if got := strings.Join(h.calls, ";"); got != "workspace.focus w1;tab.focus w1:t2" {
+		t.Fatalf("calls = %s", got)
+	}
+	boom := errors.New("herdr: workspace.focus failed")
+	h = &fakeHerdr{errs: map[string]error{"workspace.focus": boom}}
+	if err := Show(context.Background(), h, "w1", "w1:p2", z); !errors.Is(err, boom) || strings.Contains(strings.Join(h.calls, ";"), "tab.focus") {
+		t.Fatalf("failed focus = %v, calls %v", err, h.calls)
+	}
+	var unshown *Unshown
+	h = &fakeHerdr{errs: map[string]error{"tab.focus": errors.New("no such tab")}}
+	if err := Show(context.Background(), h, "w1", "w1:p2", z); !errors.As(err, &unshown) || unshown.PaneID != "w1:p2" {
+		t.Fatalf("tab behind = %v", err)
+	}
+	if err := Show(context.Background(), &fakeHerdr{}, "w1", "w1:p2", herdr.ZoomResult{}); !errors.As(err, &unshown) {
+		t.Fatalf("no tab = %v", err)
+	}
+}
+
+// Only zooms the pane and focuses nothing, as ntm's zoom under --json.
+func TestOnlyZoomsAndFocusesNothing(t *testing.T) {
+	h := &fakeHerdr{tab: "w1:t2"}
+	z, err := Only(context.Background(), h, "w1:p2")
+	if err != nil || !z.Zoomed {
+		t.Fatalf("zoom = %+v %v", z, err)
+	}
+	if got := strings.Join(h.calls, ";"); got != "pane.zoom w1:p2 on" {
+		t.Fatalf("calls = %s", got)
+	}
+	h = &fakeHerdr{tab: "w1:t2", reason: herdr.ZoomSinglePane}
+	var alone *Alone
+	if _, err := Only(context.Background(), h, "w1:p2"); !errors.As(err, &alone) {
+		t.Fatalf("single pane = %v", err)
+	}
+	boom := errors.New("herdr: pane.zoom failed")
+	h = &fakeHerdr{errs: map[string]error{"pane.zoom": boom}}
+	if _, err := Only(context.Background(), h, "w1:p2"); !errors.Is(err, boom) {
+		t.Fatalf("failed zoom = %v", err)
+	}
+}

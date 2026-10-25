@@ -24,6 +24,7 @@ var verbUsage = map[string]string{
 	"kill":          killUsage,
 	"attach":        attachUsage,
 	"zoom":          zoomUsage,
+	"z":             zoomUsage,
 	"view":          viewUsage,
 	"tile":          viewUsage,
 	"v":             viewUsage,

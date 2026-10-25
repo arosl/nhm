@@ -64,3 +64,33 @@ func Pane(ctx context.Context, h Herdr, ws, pane string) (herdr.ZoomResult, erro
 	}
 	return z, nil
 }
+
+// Show is ntm's attach after its zoom, on herdr: it focuses workspace ws,
+// then brings the tab of z, pane's zoom, in front. A failed workspace
+// focus is the error; a tab that stays behind is an *Unshown.
+func Show(ctx context.Context, h Herdr, ws, pane string, z herdr.ZoomResult) error {
+	if err := h.WorkspaceFocus(ctx, ws); err != nil {
+		return err
+	}
+	if z.Layout.TabID == "" {
+		return &Unshown{PaneID: pane, Reason: "herdr named no tab for the pane"}
+	}
+	if _, err := h.TabFocus(ctx, z.Layout.TabID); err != nil {
+		return &Unshown{PaneID: pane, Reason: err.Error()}
+	}
+	return nil
+}
+
+// Only zooms pane on and focuses nothing: ntm's zoom under --json, which
+// zooms the pane and attaches no client. A pane alone in its tab is an
+// *Alone.
+func Only(ctx context.Context, h Herdr, pane string) (herdr.ZoomResult, error) {
+	z, err := h.PaneZoom(ctx, pane, "on")
+	if err != nil {
+		return z, err
+	}
+	if z.Reason == herdr.ZoomSinglePane {
+		return z, &Alone{PaneID: pane}
+	}
+	return z, nil
+}

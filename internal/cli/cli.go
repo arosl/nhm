@@ -38,8 +38,8 @@ Usage:
                          ntm's kill: close a session's workspace, end its processes
   nhm attach [session] [--json]
                          focus a session's workspace (without one: nhm list)
-  nhm zoom <session> <slot|pane-id|name|kind> [--json]
-                         focus a session's workspace and zoom one pane
+  nhm zoom [session] [pane] [--json]   (also z)
+                         ntm's zoom: zoom one pane, then focus its workspace and tab
   nhm view [session] [--json]   (also tile, v)
                          take the zoom off in every tab of a workspace, then focus it
   nhm diff [session] <pane1> <pane2> [-u] [--code-only] [--json]

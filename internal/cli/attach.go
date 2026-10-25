@@ -9,9 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/arosl/nhm/internal/core/bindings"
 	"github.com/arosl/nhm/internal/core/wait"
-	"github.com/arosl/nhm/internal/core/zoom"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 )
@@ -20,17 +18,8 @@ const attachUsage = `Usage: nhm attach [session] [--socket PATH] [--json]
 
 ntm's attach on herdr: focus the session's workspace (a workspace id or
 label), so that every herdr client shows it. Open herdr to see it. Without
-a session, it runs nhm list (the sessions), as ntm runs its list. Changes no agent, so it runs whoever owns this herdr instance.
-`
-
-const zoomUsage = `Usage: nhm zoom <session> <pane> [--socket PATH] [--json]
-
-ntm's zoom on herdr: focus the session's workspace, zoom one pane, and
-bring the pane's tab in front. The pane is a slot N.M (as nhm status shows
-it), a herdr pane id such as w1:p3, an Agent Mail or herdr name, or a kind
-(cc, cod, agy, or a kind's name), which zooms that kind's first agent.
-ntm's tmux pane indexes do not exist on herdr: use the slot. Changes no
-agent, so it runs whoever owns this herdr instance.
+a session, it runs nhm list (the sessions), as ntm runs its list. Changes
+no agent, so it runs whoever owns this herdr instance.
 `
 
 var (
@@ -39,13 +28,12 @@ var (
 	paneIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*:p[0-9A-Za-z]+$`)
 )
 
-// AttachResult is attach's and zoom's result.
+// AttachResult is attach's result, and the pane that zoomTarget finds.
 type AttachResult struct {
 	WorkspaceID string `json:"workspace_id"`
 	PaneID      string `json:"pane_id,omitempty"`
 	Slot        string `json:"slot,omitempty"`
 	MailName    string `json:"mail_name,omitempty"`
-	Zoomed      bool   `json:"zoomed,omitempty"`
 }
 
 func runAttach(args []string, stdout, stderr io.Writer) int {
@@ -83,62 +71,6 @@ func runAttach(args []string, stdout, stderr io.Writer) int {
 	env.Result = res
 	return output(stdout, stderr, *asJSON, env, nil, exitOK, func(w io.Writer) {
 		fmt.Fprintf(w, "focused %s (%s); open herdr to see it\n", pos[0], res.WorkspaceID)
-	})
-}
-
-func runZoom(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("zoom", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, zoomUsage) }
-	socket := fs.String("socket", "", "herdr API socket")
-	asJSON := fs.Bool("json", false, "nhm's JSON envelope")
-	pos, err := parseInterleaved(fs, args)
-	if err != nil {
-		return exitRefused
-	}
-	if len(pos) != 2 {
-		fmt.Fprint(stderr, zoomUsage)
-		return exitRefused
-	}
-	env := envelope{Command: "zoom"}
-	ctx := context.Background()
-	ie, err := openInstance(*socket)
-	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
-	}
-	defer ie.db.Close()
-	ws, err := sessionWorkspace(ctx, ie.herdr, pos[0])
-	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
-	}
-	res, err := zoomTarget(ctx, ie.herdr, bindings.NewStore(ie.db), ws, pos[1])
-	if err != nil {
-		return output(stdout, stderr, *asJSON, env, err, exitRefused, nil)
-	}
-	z, err := zoom.Pane(ctx, ie.herdr, ws, res.PaneID)
-	var unshown *zoom.Unshown
-	var alone *zoom.Alone
-	switch {
-	case errors.As(err, &unshown):
-		// The pane is zoomed; only its tab did not come in front.
-		env.Warnings = append(env.Warnings, unshown.Error())
-	case errors.As(err, &alone):
-		// Nothing to zoom; the pane's tab is in front.
-	case err != nil:
-		return output(stdout, stderr, *asJSON, env, err, exitError, nil)
-	}
-	res.Zoomed = z.Zoomed
-	env.Result = res
-	return output(stdout, stderr, *asJSON, env, nil, exitOK, func(w io.Writer) {
-		who := res.PaneID
-		if res.MailName != "" {
-			who = fmt.Sprintf("%s (%s, %s)", res.MailName, dash(res.Slot), res.PaneID)
-		}
-		if alone != nil {
-			fmt.Fprintf(w, "%s is alone in its tab in %s: nothing to zoom; open herdr to see it\n", who, pos[0])
-			return
-		}
-		fmt.Fprintf(w, "zoomed %s in %s; open herdr to see it\n", who, pos[0])
 	})
 }
 
