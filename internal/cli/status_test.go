@@ -22,8 +22,13 @@ import (
 
 // swarmInstance serves a session with workspace "swarm" (w1: IcyKnoll
 // idle and bound, a blocked unbound codex) and "other" (w2: empty), and
-// binds IcyKnoll in an enrolled instance.
+// binds IcyKnoll in an enrolled instance, as Claude on opus.
 func swarmInstance(t *testing.T) *herdrtest.Server {
+	return swarmInstanceKind(t, "claude", "opus")
+}
+
+// swarmInstanceKind is swarmInstance with IcyKnoll's kind and model chosen.
+func swarmInstanceKind(t *testing.T, kind, model string) *herdrtest.Server {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", "")
@@ -48,7 +53,7 @@ func swarmInstance(t *testing.T) *herdrtest.Server {
 	}
 	_, err = bindings.NewStore(db).Create(context.Background(), bindings.New{MailName: "IcyKnoll", MailProjectKey: "/p",
 		ProjectID: "proj", Provenance: bindings.Created, Occupant: bindings.Occupant{WorkspaceID: "w1", TabID: "w1:t1",
-			PaneID: "w1:p1", HerdrAlias: "icyknoll", Kind: "claude", Model: "opus"}})
+			PaneID: "w1:p1", HerdrAlias: "icyknoll", Kind: kind, Model: model}})
 	_ = db.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +74,7 @@ func swarmInstance(t *testing.T) *herdrtest.Server {
 		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
 			"protocol": 22, "version": "0.9.3", "layouts": []any{}, "tabs": []any{}, "panes": []any{},
 			"workspaces": []any{ws("w1", "swarm", 1), ws("w2", "other", 2)},
-			"agents":     []any{agent("w1:p1", "claude", "icyknoll", "idle"), agent("w1:p2", "codex", "", "blocked")},
+			"agents":     []any{agent("w1:p1", kind, "icyknoll", "idle"), agent("w1:p2", "codex", "", "blocked")},
 		}}, nil
 	})
 	read := func(r herdrtest.Request) (any, *herdrtest.Error) {
@@ -117,6 +122,72 @@ func TestStatusVerb(t *testing.T) {
 	}
 	if code, out, _ := run("status", "other", "--no-mail", "--socket", s.SocketPath); code != 0 || !strings.Contains(out, "no agents") {
 		t.Fatalf("empty session = %d %s", code, out)
+	}
+}
+
+// An omp agent's model shows in status's table and JSON, in the snapshot
+// and on the dashboard, where a person reads it. The binding holds it:
+// spawn, recycle, recover and adopt write it there.
+func TestReadsShowTheOmpModel(t *testing.T) {
+	const model = "opencode-go/deepseek-v4-pro"
+	s := swarmInstanceKind(t, "omp", model)
+	// The dashboard reads herdr's panes, and the status fixture serves
+	// agents only.
+	s.Handle("session.snapshot", func(herdrtest.Request) (any, *herdrtest.Error) {
+		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
+			"protocol": 22, "version": "0.9.3", "layouts": []any{}, "tabs": []any{},
+			"panes": []any{
+				map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "t-w1:p1",
+					"agent_status": "idle", "focused": false, "revision": 1, "agent": "omp", "name": "icyknoll"},
+				map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "t-w1:p2",
+					"agent_status": "blocked", "focused": false, "revision": 1, "agent": "codex"},
+			},
+			"workspaces": []any{map[string]any{"workspace_id": "w1", "number": 1, "label": "swarm", "focused": true,
+				"pane_count": 2, "tab_count": 1, "active_tab_id": "w1:t1", "agent_status": "idle"}},
+			"agents": []any{
+				map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "t-w1:p1",
+					"agent_status": "idle", "focused": false, "revision": 1, "agent": "omp", "name": "icyknoll", "state_change_seq": 2},
+				map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "t-w1:p2",
+					"agent_status": "blocked", "focused": false, "revision": 1, "agent": "codex", "state_change_seq": 2},
+			},
+		}}, nil
+	})
+	code, out, errOut := run("status", "swarm", "--no-mail", "--socket", s.SocketPath)
+	if code != 0 || !strings.Contains(out, "MODEL") || !strings.Contains(out, model) {
+		t.Fatalf("status table = %d\n%s%s", code, out, errOut)
+	}
+	bindingModel := func(agents []any) bool {
+		for _, a := range agents {
+			if b, ok := a.(map[string]any)["binding"].(map[string]any); ok && b["mail_name"] == "IcyKnoll" && b["model"] == model {
+				return true
+			}
+		}
+		return false
+	}
+	code, out, _ = run("status", "swarm", "--no-mail", "--json", "--socket", s.SocketPath)
+	agents, _ := envelopeOf(t, out)["result"].(map[string]any)["agents"].([]any)
+	if code != 0 || !bindingModel(agents) {
+		t.Fatalf("status json = %d %s", code, out)
+	}
+	code, out, _ = run("snapshot", "--no-mail", "--json", "--socket", s.SocketPath)
+	m, _ := envelopeOf(t, out)["result"].(map[string]any)["model"].(map[string]any)
+	agents, _ = m["agents"].([]any)
+	if code != 0 || !bindingModel(agents) {
+		t.Fatalf("snapshot = %d %s", code, out)
+	}
+	code, out, _ = run("dashboard", "swarm", "--json", "--socket", s.SocketPath)
+	var dash dashboardOutput
+	if code != 0 || json.Unmarshal([]byte(out), &dash) != nil {
+		t.Fatalf("dashboard = %d %s", code, out)
+	}
+	found := false
+	for _, p := range dash.Panes {
+		if p.ID == "w1:p1" {
+			found = p.Type == "omp" && p.Variant == model
+		}
+	}
+	if !found {
+		t.Fatalf("dashboard panes = %+v", dash.Panes)
 	}
 }
 
