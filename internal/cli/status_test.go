@@ -62,9 +62,9 @@ func swarmInstanceKind(t *testing.T, kind, model string) *herdrtest.Server {
 		return map[string]any{"workspace_id": id, "number": n, "label": label, "focused": n == 1, "pane_count": 2,
 			"tab_count": 2, "active_tab_id": id + ":t1", "agent_status": "idle"}
 	}
-	agent := func(pane, kind, name, status string) map[string]any {
+	agent := func(pane, agentKind, name, status string) map[string]any {
 		a := map[string]any{"pane_id": pane, "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "t-" + pane,
-			"agent_status": status, "focused": false, "revision": 1, "agent": kind, "state_change_seq": 2}
+			"agent_status": status, "focused": false, "revision": 1, "agent": agentKind, "state_change_seq": 2}
 		if name != "" {
 			a["name"] = name
 		}
