@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -472,6 +473,52 @@ func TestSpawnIdentityPaneBindingKickoff(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(w.h.calls, "\n"), "pane.split "+res.Targets[0].PaneID) {
 		t.Fatalf("per-tab did not split: %v", w.h.calls)
+	}
+}
+
+// omp starts on the model and the thinking level of the spec
+// (--omp=1:opencode-go/deepseek-v4-pro, or --agent omp=...), as ntm's
+// DefaultOmpCommand does. The stored binding keeps both, and the argv
+// that a recycle builds from it is the same.
+func TestSpawnOmpModelReachesArgvAndBinding(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	const model = "opencode-go/deepseek-v4-pro"
+	r := req(Want{Kind: "omp", Count: 2, Model: model, Effort: "high"})
+	r.OperationID = "op-omp-model"
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Spawn(ctx, w.env, r)
+	if err != nil || !res.Ready() || len(res.Targets) != 2 {
+		t.Fatalf("spawn = %+v %v", res.Targets, err)
+	}
+	calls := strings.Join(w.h.calls, "\n")
+	for _, want := range []string{
+		"agent.start icyknoll omp w1:p1 [--model " + model + " --thinking high]",
+		"agent.start bluelake omp w1:p2 [--model " + model + " --thinking high]",
+		// The pane's label keeps the model, as every kind's does.
+		"pane.rename w1:p1 IcyKnoll " + model,
+		"pane.rename w1:p2 BlueLake " + model,
+	} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("no %q in\n%s", want, calls)
+		}
+	}
+	want := []string{"omp", "--model", model, "--thinking", "high"}
+	for _, name := range []string{"IcyKnoll", "BlueLake"} {
+		b, err := w.env.Bindings.ActiveByName(ctx, "/p", name)
+		if err != nil || b.Kind != "omp" || b.Model != model || b.Effort != "high" {
+			t.Fatalf("%s binding = %+v %v", name, b, err)
+		}
+		if got := LaunchArgv(kinds.Lookup(b.Kind), b.Model, b.Effort, ""); !slices.Equal(got, want) {
+			t.Errorf("%s launch from its binding = %q, want %q", name, got, want)
+		}
+	}
+	// The robot answer carries the model as ntm's variant.
+	out := SpawnOutput(res, nil, "json", time.Now())
+	if len(out.Agents) != 2 || out.Agents[0].Type != "omp" || out.Agents[0].Variant != model || out.Agents[1].Variant != model {
+		t.Fatalf("robot agents = %+v", out.Agents)
 	}
 }
 

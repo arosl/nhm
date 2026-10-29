@@ -57,11 +57,42 @@ func TestLaunchArgvModelAndEffort(t *testing.T) {
 	}{
 		{"grok", "grok-5", "high", []string{"grok", "--model", "grok-5", "--effort", "high"}},
 		{"omp", "opus", "xhigh", []string{"omp", "--model", "opus", "--thinking", "xhigh"}},
+		{"omp", "opencode-go/deepseek-v4-pro", "", []string{"omp", "--model", "opencode-go/deepseek-v4-pro"}},
+		{"omp", "opencode-go/deepseek-v4-pro", "auto", []string{"omp", "--model", "opencode-go/deepseek-v4-pro", "--thinking", "auto"}},
 		{"opencode", "openrouter/m@beta", "high", []string{"opencode", "--model", "openrouter/m@beta"}},
 		{"grok", "", "", []string{"grok"}},
 	} {
 		if got := LaunchArgv(kinds.Lookup(tt.kind), tt.model, tt.effort, ""); !slices.Equal(got, tt.want) {
 			t.Errorf("%s %q %q = %q, want %q", tt.kind, tt.model, tt.effort, got, tt.want)
 		}
+	}
+}
+
+// omp takes ntm's spec forms of a provider model and a thinking level
+// (ntm's DefaultOmpCommand): alone, with "@effort", and with ":effort".
+// The model is a value of its own in the argv, so one that starts with
+// "-" stays refused.
+func TestOmpModelSpecs(t *testing.T) {
+	for _, tt := range []struct{ value, model, effort string }{
+		{"1:opencode-go/deepseek-v4-pro", "opencode-go/deepseek-v4-pro", ""},
+		{"2:opencode-go/deepseek-v4-pro:high", "opencode-go/deepseek-v4-pro", "high"},
+		{"1:opencode-go/deepseek-v4-pro@auto", "opencode-go/deepseek-v4-pro", "auto"},
+		{"1:opus", "opus", ""},
+	} {
+		w, err := ParseCount("omp", tt.value)
+		if err != nil || w.Kind != "omp" || w.Model != tt.model || w.Effort != tt.effort {
+			t.Errorf("omp %s = %+v, %v", tt.value, w, err)
+		}
+		r := req(w)
+		if err := r.Validate(); err != nil {
+			t.Errorf("omp %s: Validate = %v", tt.value, err)
+		}
+	}
+	r := req(Want{Kind: "omp", Count: 1, Model: "--thinking", Effort: "high"})
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "starts with a letter or a number") {
+		t.Fatalf("omp model that reads as a flag = %v", err)
+	}
+	if kinds.Lookup("omp").ModelFlag != "--model" {
+		t.Fatalf("omp model flag = %q", kinds.Lookup("omp").ModelFlag)
 	}
 }
