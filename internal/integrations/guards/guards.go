@@ -16,6 +16,7 @@
 // every layer, the project's only when the project is trusted, and runs
 // a hook only when config.toml holds its current trusted_hash. pi's dcg
 // guard is nhm's own extension, which the launch loads with -e (pi.go).
+// omp's is the extension that dcg install --omp writes (omp.go).
 package guards
 
 import (
@@ -69,6 +70,8 @@ type Env struct {
 	Home        string
 	CodexHome   string
 	ProjectRoot string
+	// OmpAgentDir is omp's agent dir (ompAgentDir).
+	OmpAgentDir string
 }
 
 func (e Env) withDefaults() Env {
@@ -80,6 +83,9 @@ func (e Env) withDefaults() Env {
 	}
 	if e.CodexHome == "" && e.Home != "" {
 		e.CodexHome = filepath.Join(e.Home, ".codex")
+	}
+	if e.OmpAgentDir == "" && e.Home != "" {
+		e.OmpAgentDir = ompAgentDir(e.Home, os.Getenv)
 	}
 	return e
 }
@@ -95,6 +101,7 @@ var checkers = map[string]func(Env) []Result{
 	"codex":  checkCodex,
 	"agy":    checkAgy,
 	"pi":     checkPi,
+	"omp":    checkOmp,
 }
 
 // Check reports every guard for a kind.
@@ -223,6 +230,9 @@ func fixFor(kind, guard string) string {
 		return "acfs update adds dcg's Bash guard to Codex's hooks.json and records its trust (nhm_hooks.sh codex-dcg register, then trust codex); dcg install covers Claude Code only"
 	case guard == DCG && kind == "pi":
 		return "install dcg (ACFS's install does); nhm writes and loads pi's guard extension itself"
+	case guard == DCG && kind == "omp":
+		// ACFS's install runs dcg install, which covers Claude Code only.
+		return "dcg install --omp (it writes dcg's omp extension)"
 	case guard == DCG:
 		return "dcg install (ACFS's install runs it)"
 	case guard == RCH:
@@ -348,6 +358,12 @@ func VerifyLaunch(results []Result, argv []string) []Result {
 		case "pi":
 			if keep, why := piKeeps(argv); keep {
 				out[i].State, out[i].Detail = VerifiedForLaunch, "the launch's -e loads nhm's pi guard extension"
+			} else {
+				out[i].State, out[i].Detail = Missing, why
+			}
+		case "omp":
+			if keep, why := ompKeeps(argv, r.Sources); keep {
+				out[i].State = VerifiedForLaunch
 			} else {
 				out[i].State, out[i].Detail = Missing, why
 			}

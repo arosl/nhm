@@ -829,10 +829,18 @@ func builtins() []Adapter {
 			// takes a session id, an id prefix or a path; herdr reports the
 			// .jsonl path, and nhm passes the id in its name (nhm-dv41).
 			ResumeArgv: []string{"omp", "--resume", "{session}"}, ResumeFlags: []string{"--resume", "-r"}, SessionID: ompSessionID,
-			InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage",
+			InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true,
+			// dcg's guard for omp is the extension that dcg install --omp
+			// writes, in omp's agent dir or the project's .omp; guards.go's
+			// omp reader finds it (nhm-yncb).
+			GuardSettings: ".omp/agent/extensions/dcg-guard.ts", GuardSupported: true,
+			Cannot: []string{"its usage",
+				"rch: rch installs no hook for omp (rch's cargo shim can offload builds: rch shim)",
+				"the Agent Mail stop hook: Agent Mail installs none for omp",
+				"a tool call other than bash that runs code (omp's python tool among others): dcg's omp extension screens bash tool calls only",
+				"a dcg extension that omp loads from elsewhere than its agent dir's or the project's .omp/extensions (its extensions setting, or a profile that nhm's environment does not name): nhm's omp guard reader does not see it",
 				"a fresh session after a recycle when omp's autoResume setting is on: omp then resumes the newest session in the folder, the one recycle stopped (the sandbox, nhm-dv41)",
-				`a "!" shell command or a "$" Python line that a person types at its prompt: omp runs it at once, and nhm installs no omp guard (nhm send refuses a prompt that starts with either, or holds a control character, nhm-gb0)`,
+				`a "!" shell command or a "$" Python line that a person types at its prompt: omp runs it at once, and dcg's omp extension screens only omp's bash tool calls (nhm send refuses a prompt that starts with either, or holds a control character, nhm-gb0)`,
 				`a "!" or "$" that a person leaves in its input box: herdr types nhm's next prompt after it, and omp may run that as a shell command or Python; nhm does not read omp's input box on the screen (nhm-mowp)`},
 		},
 		{
