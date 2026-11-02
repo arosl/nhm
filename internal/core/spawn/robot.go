@@ -1,17 +1,43 @@
 package spawn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/pressure"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/robot"
 )
 
-// AdmissionHint is the hint of a refused admission.
-const AdmissionHint = "nhm quota, nhm doctor and the capacity provider say why"
+// AdmissionHint is the hint of an admission that nhm's own checks
+// (quota, guards) refused.
+const AdmissionHint = "nhm quota and nhm doctor say why"
+
+// admissionDefaultHint is ntm's hint when a deferral or refusal has none
+// (robot/spawn.go).
+const admissionDefaultHint = "Reduce requested agents or wait for resource headroom"
+
+// RobotAdmission projects an admission onto ntm's SpawnAdmission: ntm's
+// fields when ntm's admission ran, with the decision, reason and hint of
+// the whole admission (nhm's quota and guards too), and nhm's reasons
+// and warnings.
+func RobotAdmission(ad Admission, session string, requested int) *robot.SpawnAdmission {
+	out := &robot.SpawnAdmission{Reasons: ad.Reasons, Warnings: ad.Warnings}
+	if ad.Pressure != nil {
+		out.SpawnAdmission = *ad.Pressure
+	} else {
+		out.RequestedAgents, out.Session = requested, session
+	}
+	out.Decision, out.Reason, out.Hint = pressure.SpawnAdmissionDecision(ad.Decision), ad.Reason, ad.Hint
+	// No admission ran before an early error (decision ""): no hint.
+	if (out.Decision == pressure.SpawnAdmissionDefer || out.Decision == pressure.SpawnAdmissionRefuse) && out.Hint == "" {
+		out.Hint = admissionDefaultHint
+	}
+	return out
+}
 
 // ntmType is a kind's ntm agent type, as robot output writes it.
 func ntmType(kind string) string { return kinds.Lookup(kind).NTMType }
@@ -33,8 +59,7 @@ func SpawnOutput(res Result, err error, format string, now time.Time) robot.Spaw
 	out := robot.SpawnOutput{RobotResponse: robot.NewResponse(ok, format, now), Session: res.Session,
 		CreatedAt: now.UTC().Format(time.RFC3339), WorkingDir: res.ProjectRoot, Agents: []robot.SpawnedAgent{},
 		Layout: "tabs", TotalStartupMs: res.TotalStartupMS, DryRun: res.DryRun, Assignments: []robot.SpawnAssignment{},
-		Admission: &robot.SpawnAdmission{Decision: res.Admission.Decision, Reason: res.Admission.Reason,
-			Session: res.Session, RequestedAgents: len(res.Targets), Reasons: res.Admission.Reasons, Warnings: res.Admission.Warnings},
+		Admission: RobotAdmission(res.Admission, res.Session, len(res.Targets)),
 		NHM: map[string]any{"operation_id": res.OperationID, "workspace_id": res.WorkspaceID, "agents": res.Targets,
 			"warnings": res.Warnings, "exceptions": res.Admission.Exceptions}}
 	if !res.CreatedAt.IsZero() {
@@ -46,13 +71,21 @@ func SpawnOutput(res Result, err error, format string, now time.Time) robot.Spaw
 	if err != nil {
 		out.Error = err.Error()
 		out.ErrorCode = robot.ErrCodeInternalError
-		if res.Admission.Decision == Refuse {
-			// ntm's refusal: RESOURCE_BUSY, "spawn admission <decision>:
-			// <reason>" and the admission's hint.
+		switch {
+		case errors.Is(err, ErrRefused) && res.Admission.fenceErr != nil:
+			// ntm's beginSpawnAdmission: the lock was busy or failed.
+			out.ErrorCode = robot.ErrCodeResourceBusy
+			out.Error = fmt.Sprintf("spawn admission unavailable: %v", res.Admission.fenceErr)
+			out.Hint = out.Admission.Hint
+		case errors.Is(err, ErrRefused) && res.Admission.Decision != Admit:
+			// ntm's refusal or deferral: RESOURCE_BUSY, "spawn admission
+			// <decision>: <reason>" and the admission's hint.
 			out.ErrorCode = robot.ErrCodeResourceBusy
 			out.Error = fmt.Sprintf("spawn admission %s: %s", res.Admission.Decision, res.Admission.Reason)
-			out.Admission.Hint = AdmissionHint
-			out.Hint = AdmissionHint
+			out.Hint = out.Admission.Hint
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			// ntm's setSpawnCancellation.
+			out.ErrorCode, out.Hint = robot.ErrCodeTimeout, "Retry the command after cancellation"
 		}
 	}
 	for _, t := range res.Targets {

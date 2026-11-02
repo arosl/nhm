@@ -115,8 +115,13 @@ type Request struct {
 	// AllowUnguarded records an exception for a missing guard, for this
 	// launch only.
 	AllowUnguarded bool
-	// IgnoreCapacity admits a red or unknown capacity with a warning,
-	// for this launch only (nhm-1pq).
+	// NTMAdmission runs ntm's spawn admission (pressure, agent caps;
+	// nhm-a421): add and --robot-spawn, as ntm's add and robot spawn;
+	// ntm's spawn runs none.
+	NTMAdmission bool
+	// IgnoreCapacity admits what ntm's admission defers or refuses, with
+	// a warning, for this launch only (nhm-1pq), and skips the agent caps'
+	// lock.
 	IgnoreCapacity bool
 	// RequireObservations is the robot profile of admission.
 	RequireObservations bool

@@ -17,6 +17,7 @@ import (
 	"github.com/arosl/nhm/internal/core/privacy"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/core/templates"
+	"github.com/arosl/nhm/internal/core/uilaunch"
 	"github.com/arosl/nhm/internal/core/wake"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/kinds"
@@ -252,14 +253,48 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 		return res, err
 	}
 	res.KickoffTemplate = kickoff.template
-	res.Admission = Decide(ctx, env.Admission, req)
+	// ntm's fence: a real spawn under an agent cap counts the fleet and
+	// starts its agents under one lock, so two spawns cannot spend the
+	// same headroom (nhm-a421). It ends after the last agent.start.
+	aenv := env.Admission
+	if aenv.Fleet == nil && env.Herdr != nil {
+		aenv.Fleet = env.Herdr.Snapshot
+	}
+	if aenv.Boards == nil && env.Herdr != nil {
+		aenv.Boards = func(ctx context.Context, fleet herdr.SessionSnapshot) (map[string]bool, error) {
+			found, err := uilaunch.BoardsAt(ctx, uilaunch.Env{InstanceDir: env.InstanceDir, LockWait: time.Second}, env.Herdr, fleet)
+			out := make(map[string]bool, len(found))
+			for pane := range found {
+				out[pane] = true
+			}
+			return out, err
+		}
+	}
+	fenced := req.NTMAdmission && !req.IgnoreCapacity && aenv.Pacing.needsFence(req.DryRun)
+	unfence := func() {}
+	if fenced {
+		release, err := store.LockSpawnAdmission(ctx, env.InstanceDir)
+		if cerr := ctx.Err(); cerr != nil {
+			if release != nil {
+				release()
+			}
+			return res, cerr
+		}
+		if err != nil {
+			res.Admission = fenceAdmission(req, err)
+			return res, refused(req, res.Admission)
+		}
+		unfence = release
+		defer unfence()
+	}
+	res.Admission = decide(ctx, aenv, req, ws, fenced)
 	targets, err := plan(ctx, env, ws, req)
 	if err != nil {
 		return res, err
 	}
 	res.Targets, res.DryRun, res.NoWait = targets, req.DryRun, req.NoWait
 	if res.Admission.Decision != Admit {
-		return res, fmt.Errorf("%w: %s", ErrRefused, res.Admission.Reason)
+		return res, refused(req, res.Admission)
 	}
 	if req.DryRun {
 		// The kickoffs' schedule, as ntm plans it in a dry run: the agents
@@ -337,6 +372,9 @@ func Spawn(ctx context.Context, env Env, req Request) (Result, error) {
 			stopped = true
 		}
 	}
+	// No agent.start remains: the ready wait and the kickoffs hold no
+	// headroom (ntm's add releases here too).
+	unfence()
 	if !req.NoWait {
 		for i := range res.Targets {
 			t := &res.Targets[i]

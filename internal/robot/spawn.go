@@ -2,29 +2,22 @@
 // (SpawnOutput, SpawnedAgent, SpawnAssignment), internal/robot/spawn_pacing.go
 // (SpawnStaggerPlan, SpawnStaggerSlot) and internal/pressure/pressure.go
 // (SpawnAdmission) at commit 9d5ed977; see LICENSE in this directory and
-// PROVENANCE.md. Local changes: only the fields nhm fills; nhm's admission
-// reasons and warnings in SpawnAdmission; nhm's extras under "_nhm";
-// assignments is always present ([] when there are none), where ntm omits
-// an empty list.
+// PROVENANCE.md. Local changes: only the fields nhm fills; SpawnAdmission
+// is ntm's, ported in internal/core/pressure (nhm-a421), with nhm's
+// admission reasons and warnings; nhm's extras under "_nhm"; assignments
+// is always present ([] when there are none), where ntm omits an empty
+// list.
 
 package robot
 
-// Spawn admission decisions, ntm's.
-const (
-	SpawnAdmit  = "admit"
-	SpawnRefuse = "refuse"
-)
+import "github.com/arosl/nhm/internal/core/pressure"
 
-// SpawnAdmission is the admission before a spawn.
+// SpawnAdmission is the admission before a spawn: ntm's, and nhm's own
+// reasons (quota, guards) and warnings.
 type SpawnAdmission struct {
-	Serialized      bool     `json:"serialized"`
-	Decision        string   `json:"decision"`
-	Reason          string   `json:"reason"`
-	Hint            string   `json:"hint,omitempty"`
-	Session         string   `json:"session,omitempty"`
-	RequestedAgents int      `json:"requested_agents"`
-	Reasons         []string `json:"reasons,omitempty"`
-	Warnings        []string `json:"warnings,omitempty"`
+	pressure.SpawnAdmission
+	Reasons  []string `json:"reasons,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // SpawnedAgent is one agent of a spawn.

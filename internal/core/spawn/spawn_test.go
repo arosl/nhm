@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/pressure"
 	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/guards"
@@ -625,9 +626,7 @@ func TestAdmission(t *testing.T) {
 	noAnswer := func(context.Context, []string) (guards.Verdict, error) {
 		return guards.Verdict{}, errors.New("guards: dcg test gave no answer (limit 30s): context deadline exceeded")
 	}
-	red := func(context.Context) (Capacity, error) {
-		return Capacity{Status: "red", Reasons: []string{"no memory"}}, nil
-	}
+	critical := func(context.Context) pressure.Snapshot { return criticalMemory() }
 	cases := []struct {
 		name  string
 		env   AdmissionEnv
@@ -644,7 +643,8 @@ func TestAdmission(t *testing.T) {
 		{"unknown, robot", AdmissionEnv{Quota: func() []quota.Observation { return nil }}, func(r *Request) { r.RequireObservations = true }, Refuse, "needs an observation"},
 		{"unknown, robot, config", AdmissionEnv{Quota: func() []quota.Observation { return nil }, AdmitUnknown: []string{"claude"}},
 			func(r *Request) { r.RequireObservations = true }, Admit, ""},
-		{"capacity red, forced", AdmissionEnv{Capacity: red}, func(r *Request) { r.Force = true }, Refuse, "capacity red"},
+		{"pressure critical, forced", AdmissionEnv{Pacing: Pacing{Enabled: true, MaxConcurrentSpawns: 1}, Pressure: critical},
+			func(r *Request) { r.Force, r.NTMAdmission = true, true }, Refuse, "pressure_critical"},
 		{"guard missing", AdmissionEnv{Guards: missing, Screen: allow}, nil, Refuse, "guard dcg is missing"},
 		{"guard missing, exception", AdmissionEnv{Guards: missing, Screen: allow}, func(r *Request) { r.AllowUnguarded = true }, Admit, ""},
 		{"argv denied, even unguarded", AdmissionEnv{Guards: configured, Screen: deny}, func(r *Request) { r.AllowUnguarded = true }, Refuse, "DCG denies"},
@@ -674,7 +674,7 @@ func TestAdmission(t *testing.T) {
 	}
 	// A refusal creates nothing.
 	w := newWorld(t)
-	w.env.Admission = AdmissionEnv{Capacity: red}
+	w.env.Admission = AdmissionEnv{Quota: func() []quota.Observation { return full }}
 	res, err := Spawn(context.Background(), w.env, req(Want{Kind: "claude", Count: 1}))
 	if !errors.Is(err, ErrRefused) || len(w.h.calls) != 0 || res.Admission.Decision != Refuse {
 		t.Fatalf("refused spawn = %v, calls %v", err, w.h.calls)

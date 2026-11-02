@@ -12,21 +12,24 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/arosl/nhm/internal/core/pressure"
+	"github.com/arosl/nhm/internal/herdr"
 	"github.com/arosl/nhm/internal/integrations/guards"
 	"github.com/arosl/nhm/internal/integrations/kinds"
 	"github.com/arosl/nhm/internal/integrations/quota"
+	"github.com/arosl/nhm/internal/store"
 )
 
 // Admission decisions, ntm's names.
 const (
 	Admit  = "admit"
+	Defer  = "defer"
 	Refuse = "refuse"
 )
 
@@ -36,14 +39,11 @@ const quotaLimitPct = 90
 // quotaStaleAfter is the age at which a quota observation is stale.
 const quotaStaleAfter = time.Hour
 
-// capacityWayOut ends a capacity refusal: the two ways to start anyway.
-const capacityWayOut = "to start anyway: --ignore-capacity for this spawn, " +
-	"or capacity = [] under [providers] in ~/.config/nhm/config.toml for every spawn"
-
 // Admission is the decision before anything starts.
 type Admission struct {
 	Decision string   `json:"decision"`
 	Reason   string   `json:"reason,omitempty"`
+	Hint     string   `json:"hint,omitempty"`
 	Reasons  []string `json:"reasons"`
 	Warnings []string `json:"warnings"`
 	// Exceptions are the guards --allow-unguarded let through, for this
@@ -51,12 +51,16 @@ type Admission struct {
 	Exceptions []string `json:"exceptions,omitempty"`
 	// Profile is "operator" or "require_observations".
 	Profile string `json:"profile"`
-}
-
-// Capacity is a capacity provider's answer: green, yellow or red.
-type Capacity struct {
-	Status  string   `json:"status"`
-	Reasons []string `json:"reasons"`
+	// Pressure is ntm's spawn admission (pressure, agent caps), on add
+	// and --robot-spawn (Request.NTMAdmission); nil on spawn, as ntm's
+	// spawn runs none.
+	Pressure *pressure.SpawnAdmission `json:"pressure,omitempty"`
+	// byNTM: ntm's admission decided a refusal or a deferral, so the
+	// error is in ntm's words (refused).
+	byNTM bool
+	// fenceErr: the spawn admission lock was busy or could not be taken
+	// (fenceAdmission); the error carries it, as ntm's does.
+	fenceErr error
 }
 
 // AdmissionEnv is where admission reads its facts. nil functions skip
@@ -64,8 +68,22 @@ type Capacity struct {
 type AdmissionEnv struct {
 	// Quota returns the pools' observations.
 	Quota func() []quota.Observation
-	// Capacity runs the capacity provider; nil means "none".
-	Capacity func(ctx context.Context) (Capacity, error)
+	// Pacing is nhm's [spawn_pacing] table, ntm's keys (DefaultPacing
+	// when the config sets none).
+	Pacing Pacing
+	// Pressure samples the host's pressure (ntm's SystemProvider); nil
+	// reads none, a low pressure.
+	Pressure func(ctx context.Context) pressure.Snapshot
+	// Fleet reads the herdr instance's workspaces and panes: ntm's tmux
+	// fleet. Spawn sets it to herdr's snapshot when nil.
+	Fleet func(ctx context.Context) (herdr.SessionSnapshot, error)
+	// Boards are nhm's own boards in a fleet snapshot, by pane: no
+	// agent, whatever herdr names in them. Spawn sets it to
+	// uilaunch.BoardsAt when nil.
+	Boards func(ctx context.Context, fleet herdr.SessionSnapshot) (map[string]bool, error)
+	// ConfigWarnings are warnings about the config that each admission
+	// repeats (a retired key).
+	ConfigWarnings []string
 	// Guards checks a kind's guards.
 	Guards func(kind string) []guards.Result
 	// Screen screens a launch argv against DCG's policy.
@@ -232,6 +250,13 @@ func shellQuote(s string) string {
 // Decide decides whether the agents of a request may start (plan-v8 2.2,
 // the admission table). It runs before any identity or pane exists.
 func Decide(ctx context.Context, env AdmissionEnv, req Request) Admission {
+	return decide(ctx, env, req, req.WorkspaceID, false)
+}
+
+// decide is Decide for the workspace the agents go into ("" for a new
+// one); fenced says that the caller holds the spawn admission lock
+// (ntm's serialized).
+func decide(ctx context.Context, env AdmissionEnv, req Request, workspaceID string, fenced bool) Admission {
 	ad := Admission{Decision: Admit, Reasons: []string{}, Warnings: []string{}, Profile: "operator"}
 	if req.RequireObservations {
 		ad.Profile = "require_observations"
@@ -242,27 +267,41 @@ func Decide(ctx context.Context, env AdmissionEnv, req Request) Admission {
 	if env.Now != nil {
 		now = env.Now()
 	}
+	ad.Warnings = append(ad.Warnings, env.ConfigWarnings...)
 
-	// Capacity: red refuses, and so does unknown in the robot profile;
-	// --ignore-capacity admits both with a warning (nhm-1pq).
-	if env.Capacity != nil {
-		c, err := env.Capacity(ctx)
-		blocked := ""
-		switch {
-		case err != nil && req.RequireObservations:
-			blocked = fmt.Sprintf("capacity unknown: %v", err)
-		case err != nil:
-			warn("capacity unknown: %v", err)
-		case c.Status == "red":
-			blocked = "capacity red: " + strings.Join(c.Reasons, "; ")
-		case c.Status == "yellow":
-			warn("capacity yellow: %s", strings.Join(c.Reasons, "; "))
+	// ntm's admission (nhm-a421): pressure, agent caps and the fleet, on
+	// add and --robot-spawn. --ignore-capacity admits its deferral or
+	// refusal with a warning (nhm-1pq).
+	var blocked string
+	if req.NTMAdmission {
+		var snap pressure.Snapshot
+		if env.Pacing.Enabled && env.Pressure != nil {
+			snap = env.Pressure(ctx)
 		}
-		switch {
-		case blocked != "" && req.IgnoreCapacity:
-			warn("%s (overridden by --ignore-capacity)", blocked)
-		case blocked != "":
-			refuse("%s (%s)", blocked, capacityWayOut)
+		fleet, fleetErr := herdr.SessionSnapshot{}, errors.New("no herdr fleet")
+		if env.Fleet != nil {
+			fleet, fleetErr = env.Fleet(ctx)
+		}
+		var boards map[string]bool
+		if fleetErr == nil && env.Boards != nil {
+			var err error
+			if boards, err = env.Boards(ctx, fleet); err != nil {
+				warn("nhm's boards not left out of the fleet count: %v", err)
+			}
+		}
+		pa := pressure.EvaluateSpawnAdmission(admissionInput(req, workspaceID, env.Pacing, snap, fleet, fleetErr, boards))
+		pa.Serialized = fenced
+		ad.Pressure = &pa
+		if pa.Decision != pressure.SpawnAdmissionAdmit {
+			line := fmt.Sprintf("spawn admission %s: %s", pa.Decision, pa.Reason)
+			if pa.Hint != "" {
+				line += " (" + pa.Hint + ")"
+			}
+			if req.IgnoreCapacity {
+				warn("%s (overridden by --ignore-capacity)", line)
+			} else {
+				blocked = line
+			}
 		}
 	}
 
@@ -287,10 +326,70 @@ func Decide(ctx context.Context, env AdmissionEnv, req Request) Admission {
 		seenArgv[key] = true
 		admitGuards(ctx, &ad, req, env, a, argv, refuse, warn)
 	}
-	if len(ad.Reasons) > 0 {
-		ad.Decision, ad.Reason = Refuse, strings.Join(ad.Reasons, "; ")
+	switch {
+	case len(ad.Reasons) > 0:
+		// nhm's own refusals (quota, guards) come first; ntm's deferral
+		// or refusal joins them.
+		if blocked != "" {
+			ad.Reasons = append(ad.Reasons, blocked)
+		}
+		ad.Decision, ad.Reason, ad.Hint = Refuse, strings.Join(ad.Reasons, "; "), AdmissionHint
+	case blocked != "":
+		ad.Decision, ad.Reason, ad.Hint = string(ad.Pressure.Decision), ad.Pressure.Reason, ad.Pressure.Hint
+		ad.Reasons, ad.byNTM = append(ad.Reasons, blocked), true
+	case ad.Pressure != nil:
+		ad.Reason = ad.Pressure.Reason
 	}
 	return ad
+}
+
+// fenceAdmission is ntm's deferral when the spawn admission lock is busy
+// or cannot be taken (beginSpawnAdmission): the fleet was not read.
+func fenceAdmission(req Request, err error) Admission {
+	reason, hint := "spawn_admission_unavailable", "Restore local admission locking in the instance's locks directory before retrying"
+	if errors.Is(err, store.ErrSpawnAdmissionBusy) {
+		reason, hint = "spawn_admission_busy", "Another local spawn is still launching; retry after it finishes"
+	}
+	total := 0
+	for _, w := range req.Agents {
+		total += w.Count
+	}
+	ad := Admission{Decision: Defer, Reason: reason, Hint: hint, Warnings: []string{}, Profile: "operator", byNTM: true, fenceErr: err,
+		Reasons: []string{fmt.Sprintf("spawn admission %s: %s (%v)", Defer, reason, err)},
+		Pressure: &pressure.SpawnAdmission{Decision: pressure.SpawnAdmissionDefer, Reason: reason, Hint: hint,
+			Session: req.Session, RequestedAgents: total, RequestedPanes: total,
+			AgentInventoryError: "fleet was not read because admission ownership was not acquired"}}
+	if req.RequireObservations {
+		ad.Profile = "require_observations"
+	}
+	return ad
+}
+
+// refusal is an admission that did not admit, in ntm's words when ntm's
+// admission decided it; it is ErrRefused.
+type refusal struct{ msg string }
+
+func (r *refusal) Error() string        { return r.msg }
+func (r *refusal) Is(target error) bool { return target == ErrRefused }
+
+// refused is the error of an admission that did not admit: ntm's
+// "agent addition <decision>: <reason>; <hint>" for add
+// (spawn_pacing.go) and "spawn admission <decision>: <reason>" for a
+// spawn (robot/spawn.go), and nhm's "admission refused the spawn" for
+// its own refusals. A lock that was busy or failed is ntm's too: add
+// gives the lock's error, a spawn "spawn admission unavailable: <it>".
+func refused(req Request, ad Admission) error {
+	switch {
+	case ad.fenceErr != nil && req.Add:
+		return &refusal{ad.fenceErr.Error()}
+	case ad.fenceErr != nil:
+		return &refusal{fmt.Sprintf("spawn admission unavailable: %v", ad.fenceErr)}
+	case ad.byNTM && req.Add:
+		return &refusal{fmt.Sprintf("agent addition %s: %s; %s", ad.Decision, ad.Reason, ad.Hint)}
+	case ad.byNTM:
+		return &refusal{fmt.Sprintf("spawn admission %s: %s", ad.Decision, ad.Reason)}
+	}
+	return &refusal{fmt.Sprintf("%v: %s", ErrRefused, ad.Reason)}
 }
 
 func admitQuota(ad *Admission, req Request, env AdmissionEnv, obs []quota.Observation, a kinds.Adapter, now time.Time,
@@ -385,25 +484,11 @@ func effortOf(req Request, w Want) string {
 	return req.Effort
 }
 
-// CommandCapacity runs a capacity provider command (ACFS configures
-// `acfs capacity --guard --json`) and reads its status and reasons.
-func CommandCapacity(argv []string) func(ctx context.Context) (Capacity, error) {
-	return func(ctx context.Context) (Capacity, error) {
-		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-		// A provider is often a script: a child of it that holds stdout
-		// open must not keep the spawn past the timeout (nhm-fty).
-		cmd.WaitDelay = time.Second
-		out, err := cmd.Output()
-		var c Capacity
-		if jerr := json.Unmarshal(out, &c); jerr != nil || c.Status == "" {
-			if err == nil {
-				err = fmt.Errorf("%s answered no status", argv[0])
-			}
-			return Capacity{}, fmt.Errorf("capacity provider: %w", err)
-		}
-		// `--check` style providers exit 1 at red; the JSON says so too.
-		return c, nil
-	}
+// SamplePressure is ntm's collectSystemPressureSnapshot: one reading of
+// the host's pressure (ntm's SystemProvider, with nhm's cgroup reading),
+// bounded to 250 ms.
+func SamplePressure(ctx context.Context) pressure.Snapshot {
+	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
+	return pressure.Sample(ctx, time.Now(), pressure.NewSystemProvider())
 }

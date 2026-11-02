@@ -120,11 +120,15 @@ joined: the agent opens a tab, so no pane gets narrower than a column.
 
 Admission runs first: a quota at 90 % or a known limit refuses (--force
 overrides the quota only); unknown quota is a warning (refused with
---require-observations). A red capacity refuses, and so does an unknown
-one with --require-observations; --ignore-capacity starts anyway, with a
-warning. The capacity provider is [providers] capacity in
-~/.config/nhm/config.toml: none by default, and capacity = [] turns it
-off. A guard that is not configured refuses unless --allow-unguarded,
+--require-observations). add also runs ntm's admission, as ntm's add
+does (spawn runs none, as ntm's): with [spawn_pacing] in
+~/.config/nhm/config.toml (ntm's keys), it refuses agents over an agent
+cap (none by default) and defers a large spawn (16 agents by default:
+max_concurrent_spawns) at high host pressure and refuses one at critical
+pressure. Memory pressure counts page cache as free; in a container nhm
+reads its cgroup's limit and task count. --ignore-capacity starts anyway,
+with a warning. [providers] capacity is retired: nhm ignores it, with a
+warning. A guard that is not configured refuses unless --allow-unguarded,
 which records an exception for this launch. pi's guard is nhm's own pi
 extension, which runs dcg on each bash call; it needs dcg. --dry-run
 prints the plan and the admission and creates nothing.
@@ -262,9 +266,9 @@ func addSpawnFlags(fs *pflag.FlagSet) *spawnFlags {
 	fs.DurationVar(&f.readyWait, "ready-timeout", 60*time.Second, "the wait for each agent to be ready")
 	fs.BoolVar(&f.trustFolder, "trust-folder", false, "answer the kind's folder-trust dialog")
 	fs.BoolVar(&f.force, "force", false, "start over a quota at 90 % (not over a limit)")
-	fs.BoolVar(&f.ignoreCapacity, "ignore-capacity", false, "start over a red or unknown capacity, with a warning")
+	fs.BoolVar(&f.ignoreCapacity, "ignore-capacity", false, "add: start when ntm's admission (pressure, agent caps) defers or refuses, with a warning")
 	fs.BoolVar(&f.allowUnguarded, "allow-unguarded", false, "start with a guard missing, recorded as an exception")
-	fs.BoolVar(&f.require, "require-observations", false, "the robot admission profile: unknown quota or capacity refuses")
+	fs.BoolVar(&f.require, "require-observations", false, "the robot admission profile: unknown quota refuses")
 	fs.BoolVar(&f.withMemory, "with-memory", true, "CM rules in the kickoff (best-effort; the default)")
 	fs.BoolVar(&f.withCASS, "with-cass", false, "CASS context in the kickoff (best-effort)")
 	fs.BoolVar(&f.noCASSContext, "no-cass-context", false, "no CASS context in the kickoff")
@@ -304,7 +308,7 @@ func (f *spawnFlags) request(session string, add bool) (spawn.Request, error) {
 		NoKickoff: f.noKickoff, StaggerMode: f.staggerMode, StaggerDelay: f.staggerDelay,
 		ReadyTimeout: f.readyWait, TrustFolder: f.trustFolder, Force: f.force, AllowUnguarded: f.allowUnguarded,
 		IgnoreCapacity: f.ignoreCapacity, RequireObservations: f.require, DryRun: f.dryRun, OperationID: f.opID,
-		Safety: f.safety, SafetyFlag: "--safety"}
+		Safety: f.safety, SafetyFlag: "--safety", NTMAdmission: add}
 	switch {
 	case f.prompt != "" && f.promptFile != "":
 		return req, errors.New("give --prompt or --prompt-file, not both")
@@ -665,25 +669,32 @@ func herdrWorkspace(label, cwd string, focus *bool) herdr.WorkspaceCreateParams 
 
 // spawnConfig is the spawn part of ~/.config/nhm/config.toml:
 //
-//	[providers]
-//	capacity = ["acfs", "capacity", "--guard", "--json"]   # default: none
 //	[quota]
 //	admit_unknown = ["agy", "pi"]   # pools a robot spawn admits without an observation
+//	[spawn_pacing]                  # ntm's admission (add, --robot-spawn); ntm's keys
+//	enabled = true                  # the default
+//	max_concurrent_spawns = 16      # a large spawn; nhm's default 16 (ntm's config: 4)
+//	[spawn_pacing.agent_caps]       # one fleet-wide budget, their sum; none by default
+//	claude_max_concurrent = 3       # also codex_, gemini_, omp_max_concurrent
+//	[spawn_pacing.agent_type_limits]
+//	claude = 6                      # per type; none by default
 //	[spawn]                         # ntm's [spawn] table
 //	stagger_mode = "none"           # none (the default), fixed or smart
 //	stagger_delay = "30s"           # 0 to 5m; 30s by default
 //	[prompts]                       # ntm's [prompts] table: spawn's defaults
 //	cc_default = "Read AGENTS.md."  # also cod_, gmi_, agy_, omp_; or *_default_file
 //
-// Other keys belong to other parts of nhm.
+// Other keys belong to other parts of nhm. [providers] capacity, the
+// external capacity provider, is retired (nhm-a421): a config that sets
+// it gets a warning that nhm ignores it (Warnings).
 type spawnConfig struct {
-	Providers struct {
-		Capacity []string `toml:"capacity"`
-	} `toml:"providers"`
 	Quota struct {
 		AdmitUnknown []string `toml:"admit_unknown"`
 	} `toml:"quota"`
-	Spawn struct {
+	SpawnPacing spawn.Pacing `toml:"spawn_pacing"`
+	// Warnings are about retired keys.
+	Warnings []string `toml:"-"`
+	Spawn    struct {
 		StaggerMode string `toml:"stagger_mode"`
 		// StaggerDelay is nil when the key is not set (ntm's default 30s).
 		StaggerDelay *time.Duration `toml:"stagger_delay"`
@@ -717,7 +728,7 @@ func resolveSpawnStaggerDefaults(cfg spawnConfig, mode string, modeSet bool, del
 }
 
 func loadSpawnConfig() (spawnConfig, error) {
-	var c spawnConfig
+	c := spawnConfig{SpawnPacing: spawn.DefaultPacing()}
 	path, err := kinds.ConfigPath()
 	if err != nil {
 		return c, nil
@@ -729,8 +740,15 @@ func loadSpawnConfig() (spawnConfig, error) {
 	if err != nil {
 		return c, err
 	}
-	if _, err := toml.Decode(string(data), &c); err != nil {
+	md, err := toml.Decode(string(data), &c)
+	if err != nil {
 		return c, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := spawn.ValidatePacing(c.SpawnPacing); err != nil {
+		return c, fmt.Errorf("%s: [spawn_pacing] %w", path, err)
+	}
+	if md.IsDefined("providers", "capacity") {
+		c.Warnings = append(c.Warnings, fmt.Sprintf("[providers] capacity in %s is ignored: nhm's own admission (ntm's) decides; remove the key", path))
 	}
 	return c, nil
 }
@@ -749,9 +767,9 @@ func (ie *instanceEnv) spawnEnv(projectRoot string) (spawn.Env, error) {
 		Screen: guards.ScreenArgv,
 	}
 	if cfg, err := loadSpawnConfig(); err == nil {
-		if len(cfg.Providers.Capacity) > 0 {
-			ad.Capacity = spawn.CommandCapacity(cfg.Providers.Capacity)
-		}
+		// ntm's admission: [spawn_pacing], the host's pressure and the
+		// herdr fleet (spawn reads it); add and --robot-spawn run it.
+		ad.Pacing, ad.Pressure, ad.ConfigWarnings = cfg.SpawnPacing, spawn.SamplePressure, cfg.Warnings
 		ad.AdmitUnknown = cfg.Quota.AdmitUnknown
 		// ntm's launch: Claude gets the dcg and rch hooks on --settings;
 		// pi gets nhm's guard extension on -e (nhm-dyr).
@@ -1132,8 +1150,8 @@ func addRobotSpawnFlags(fs *flag.FlagSet) robotSpawnFlags {
 	// wait; without it an agent at the dialog ends unresolved (nhm-cvg).
 	f.trustFolder = fs.Bool("trust-folder", false, "")
 	// nhm's own, as spawn's --ignore-capacity: ntm 9d5ed977 overrides no
-	// spawn admission. ACFS newproj passes it on a host whose capacity
-	// provider answers red, as ACFS's old spawn took --force (nhm-1pq).
+	// spawn admission. It admits what ntm's admission defers or refuses
+	// (nhm-1pq, nhm-a421); ACFS newproj passes it.
 	f.ignoreCapacity = fs.Bool("ignore-capacity", false, "")
 	f.dryRun = fs.Bool("dry-run", false, "")
 	f.assign = fs.Bool("spawn-assign-work", false, "")
@@ -1185,8 +1203,9 @@ func robotReadyWait(fs *flag.FlagSet, rf robotSpawnFlags) (time.Duration, error)
 // sends no kickoff unless --spawn-prompt. With --spawn-assign-work (the
 // caller's consent) the assignment phase sends each agent its work, with
 // --spawn-prompt ahead of it, so the spawn itself sends nothing. Only
-// --trust-folder answers a folder-trust dialog, and only
-// --ignore-capacity admits a red or unknown capacity. The agents are in
+// --trust-folder answers a folder-trust dialog. ntm's admission runs
+// (pressure, agent caps), and only --ignore-capacity admits what it
+// defers or refuses. The agents are in
 // ntm's launch order. It also returns the prompt (--spawn-prompt, or the
 // text of --spawn-prompt-file), which the assignment phase puts ahead of
 // each work prompt. A refusal is ntm's: its code, text and hint.
@@ -1271,7 +1290,7 @@ func robotSpawnRequest(fs *flag.FlagSet, rf robotSpawnFlags) (spawn.Request, str
 	req := spawn.Request{Session: session, Prompt: prompt, NoKickoff: prompt == "",
 		ReadyTimeout: wait, NoWait: !*rf.wait && prompt == "", KickoffAllReady: true, StaggerMode: mode, StaggerDelay: delay,
 		TrustFolder: *rf.trustFolder, RequireObservations: true, DryRun: *rf.dryRun,
-		OperationID: *rf.opID, Safety: *rf.safety, IgnoreCapacity: *rf.ignoreCapacity}
+		OperationID: *rf.opID, Safety: *rf.safety, IgnoreCapacity: *rf.ignoreCapacity, NTMAdmission: true}
 	if *rf.assign {
 		req.Prompt, req.NoKickoff, req.AssignOptions = "", true, rf.assignFlags.options(prompt)
 	}

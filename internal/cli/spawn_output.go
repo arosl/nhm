@@ -354,8 +354,7 @@ func writeAddNTM(stdout, stderr io.Writer, asJSON bool, out spawnOut, err error)
 func addResponseOf(o spawnOut) addResponse {
 	res := o.res
 	out := addResponse{timestampedResponse: newTimestamped(), Session: res.Session, NHM: spawnNHM(res, o.scope, o.warnings),
-		Admission: &robot.SpawnAdmission{Decision: res.Admission.Decision, Reason: res.Admission.Reason, Session: res.Session,
-			RequestedAgents: len(res.Targets), Reasons: res.Admission.Reasons, Warnings: res.Admission.Warnings}}
+		Admission: spawn.RobotAdmission(res.Admission, res.Session, len(res.Targets))}
 	if res.DryRun {
 		return out
 	}
@@ -415,9 +414,7 @@ func spawnFailureOf(o spawnOut, err error) agentLifecycleFailureResponse {
 	switch {
 	case errors.Is(err, spawn.ErrRefused):
 		code = robot.ErrCodeResourceBusy
-		admission = &robot.SpawnAdmission{Decision: res.Admission.Decision, Reason: res.Admission.Reason,
-			Hint: spawn.AdmissionHint, Session: res.Session,
-			RequestedAgents: len(res.Targets), Reasons: res.Admission.Reasons, Warnings: res.Admission.Warnings}
+		admission = spawn.RobotAdmission(res.Admission, res.Session, len(res.Targets))
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = robot.ErrCodeTimeout
 	case errors.As(err, &outcome) && outcome.timedOut():
