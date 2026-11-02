@@ -234,8 +234,8 @@ func rawExcerpt(tail string, cut bool) string {
 type turn struct{ role, text string }
 
 // transcriptRecord is what excerpt reads of a transcript line: Claude
-// Code's user and assistant records (message), and Codex's response items
-// (payload).
+// Code's user and assistant records and omp's message records (message),
+// and Codex's response items (payload).
 type transcriptRecord struct {
 	Type             string `json:"type"`
 	IsMeta           bool   `json:"isMeta"`
@@ -288,6 +288,9 @@ func transcriptTurns(lines []string) ([]turn, int) {
 			if r.IsMeta || r.IsCompactSummary {
 				continue
 			}
+			role, texts = r.Message.Role, contentTexts(r.Message.Content, "text")
+		case r.Type == "message" && r.Message != nil:
+			// omp 18.14.1; a tool's output is a message of role toolResult.
 			role, texts = r.Message.Role, contentTexts(r.Message.Content, "text")
 		case r.Type == "response_item" && r.Payload != nil && r.Payload.Type == "message":
 			// Codex; its developer messages are instructions.

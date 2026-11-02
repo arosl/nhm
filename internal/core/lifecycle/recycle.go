@@ -262,9 +262,8 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 		if _, why := send.ShellDraft(ctx, env.Herdr, b.PaneID, a); why != "" {
 			return fail(StageStop, fmt.Errorf("%s was not stopped, and nothing started: %s", b.MailName, why))
 		}
-		if _, err := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: b.PaneID, Text: a.ExitCommand}); err != nil &&
-			herdr.ErrorCode(err) != herdr.CodeAgentPromptStalled {
-			return fail(StageStop, fmt.Errorf("typing %s: %w", a.ExitCommand, err))
+		if err := sendExit(ctx, env, b, a); err != nil {
+			return fail(StageStop, err)
 		}
 		if err := stopAgent(ctx, env, b, a, &res.Warnings); err != nil {
 			return fail(StageStop, err)
@@ -381,6 +380,43 @@ func keepMarks(ctx context.Context, env Env, b bindings.Binding) []string {
 // pane for a dialog, and how long between two reads.
 const exitRead = time.Second
 
+// sendExit asks the old agent to exit: it types the kind's exit command,
+// or sends ntm's exit keys for the kind's ntm type (omp's Escape, Ctrl+C,
+// Ctrl+D; kinds.Adapter.ExitByKeys), each after its pause. The keys go to
+// herdr directly: recycle holds the target lock that send.Keys takes. A
+// key goes only while the shell does not hold the pane's foreground, and
+// herdr sends it only to the pane's agent: a Ctrl+D that reached the
+// shell would end it and close the pane. An agent that herdr no longer
+// lists has exited. stopAgent then waits for the exit.
+func sendExit(ctx context.Context, env Env, b bindings.Binding, a kinds.Adapter) error {
+	if a.ExitCommand != "" {
+		if _, err := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: b.PaneID, Text: a.ExitCommand}); err != nil &&
+			herdr.ErrorCode(err) != herdr.CodeAgentPromptStalled {
+			return fmt.Errorf("typing %s: %w", a.ExitCommand, err)
+		}
+		return nil
+	}
+	keys, pauses := ExitKeys(a.NTMType)
+	for i, key := range keys {
+		if i < len(pauses) && pauses[i] > 0 {
+			env.sleep(ctx, pauses[i])
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, why := atShell(ctx, env, b.PaneID); why == "" {
+			return nil
+		}
+		switch err := env.Herdr.AgentSendKeys(ctx, b.PaneID, key); {
+		case noAgent(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("sending the exit key %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
 // stopAgent waits until the pane's shell holds the foreground again and
 // herdr no longer lists an agent in the pane. The exit command can open
 // a dialog in place of an exit (kinds.Adapter.ExitDialog): Claude Code's
@@ -492,10 +528,11 @@ func jobLeft(env Env, shellPID int, pane, command string) string {
 }
 
 // CheckRecycle runs recycle's checks that need neither the agent's turn
-// nor its lock: the binding is active, nhm knows its kind's exit
-// command, and the kickoff renders. nhm recycle --self runs them before
-// it hands the recycle to a job of its own, so a bad -t or a missing bead
-// is refused while the agent can still read the answer.
+// nor its lock: the binding is active, nhm knows how its kind exits (an
+// exit command or ntm's exit keys), and the kickoff renders. nhm
+// recycle --self runs them before it hands the recycle to a job of its
+// own, so a bad -t or a missing bead is refused while the agent can still
+// read the answer.
 func CheckRecycle(ctx context.Context, env Env, req RecycleRequest) (bindings.Binding, error) {
 	b, err := find(ctx, env, req.Target, req.ProjectKey)
 	if err != nil {
@@ -507,10 +544,10 @@ func CheckRecycle(ctx context.Context, env Env, req RecycleRequest) (bindings.Bi
 
 // recycleStatic checks the binding and its kind and renders the kickoff.
 func recycleStatic(ctx context.Context, env Env, req RecycleRequest, b bindings.Binding) (string, error) {
-	switch {
+	switch a := kinds.Lookup(b.Kind); {
 	case b.Status != bindings.Active:
 		return "", fmt.Errorf("%s is %s", b.MailName, b.Status)
-	case kinds.Lookup(b.Kind).ExitCommand == "":
+	case a.ExitCommand == "" && !a.ExitByKeys:
 		return "", fmt.Errorf("nhm knows no exit command for %s; retire it and spawn anew", b.Kind)
 	}
 	return recycleKickoff(ctx, env, req, b, assignedReader(ctx, env, b))

@@ -209,7 +209,8 @@ var herdrAgentKinds = map[string]bool{"pi": true, "claude": true, "codex": true,
 // resumeFlagsByKind are the resume flags each CLI documents for a session
 // id, checked against its docs (acfs-9hkh.79): claude --resume/-r, codex's
 // resume subcommand, gemini --resume, opencode --session/-s, copilot
-// --resume, cursor --resume. {session} after any other flag could name a
+// --resume, cursor --resume, omp --resume/-r (omp 18.14.1's --help;
+// nhm-dv41). {session} after any other flag could name a
 // file the CLI loads (--settings, --mcp-config, --session-file), and
 // SessionPattern accepts "evil.json"; a shape rule let any short flag
 // through. A kind without an entry has no resume until its flags are
@@ -221,6 +222,7 @@ var resumeFlagsByKind = map[string][]string{
 	"opencode": {"--session", "-s"},
 	"copilot":  {"--resume"},
 	"cursor":   {"--resume"},
+	"omp":      {"--resume", "-r"},
 }
 
 // checkResumeArgv: the program is the kind itself, by its bare name, and

@@ -211,8 +211,9 @@ Give the same agent a fresh session in the same pane, with the same name,
 tab and slot: preserve its transcript, compose a handoff (the newest
 handoff comment on the agent's beads in progress, cass pack of the
 session, cm context; the output names the bead), stop the
-old agent with its kind's exit command, start the successor in the same
-pane, bump the binding's generation, and send the kickoff with the
+old agent with its kind's exit command (omp: ntm's exit keys, Escape,
+Ctrl+C, Ctrl+D), start the successor in the same pane, bump the
+binding's generation, and send the kickoff with the
 handoff. Sends and wakes skip the agent while it recycles. On a failure
 it reports the stage and starts nothing twice. An agent that already
 exited, with its pane back at the shell, gets its successor there

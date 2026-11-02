@@ -73,6 +73,30 @@ func TestExcerptCodexTranscript(t *testing.T) {
 	}
 }
 
+// An omp session (omp 18.14.1's records) gives the user's and the agent's
+// text: no thinking, tool call, tool result, background-job notice or
+// other record (nhm-dv41).
+func TestExcerptOmpTranscript(t *testing.T) {
+	path := writeTranscript(t,
+		`{"type":"title","v":1,"title":"OMP: fix the parser","source":"auto"}`,
+		`{"type":"session","version":3,"id":"01a188f4-3d60-77bf-ad5f-f7fb5c327082","cwd":"/p"}`,
+		`{"type":"model_change","id":"4daad87c","parentId":null,"model":"opencode-go/glm-5.3"}`,
+		`{"type":"message","id":"f4478979","message":{"role":"user","content":[{"type":"text","text":"Please fix the parser in nhm-1."}]}}`,
+		`{"type":"custom","customType":"system-prompt-digest","data":"2ecc985ad331ea25"}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private thoughts"},{"type":"text","text":"I will read the parser first."},{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"go test"}}]}}`,
+		`{"type":"message","id":"r1","message":{"role":"toolResult","toolCallId":"c1","toolName":"bash","content":[{"type":"text","text":"ok"}]}}`,
+		`{"type":"custom_message","customType":"async-result","content":"<system-notice>Background job bg_2 has completed.</system-notice>","display":true}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"text","text":"The parser is fixed; tests pass."}]}}`,
+	)
+	got, err := excerpt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "```\n[user] Please fix the parser in nhm-1.\n\n[assistant] I will read the parser first.\n\n[assistant] The parser is fixed; tests pass.\n```"; got != want {
+		t.Fatalf("excerpt =\n%s\nwant\n%s", got, want)
+	}
+}
+
 // The newest turns that fit the budget, oldest first; a single turn longer
 // than the budget keeps its end.
 func TestExcerptBudget(t *testing.T) {

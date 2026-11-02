@@ -107,11 +107,20 @@ type Adapter struct {
 	// ResumeFlags are the CLI's own flags (or "resume", a subcommand)
 	// whose value it reads as the session to resume; {session} follows one.
 	ResumeFlags []string `json:"resume_flags,omitempty"`
+	// SessionID gives the session id that the resume flag takes for the
+	// native session herdr reports (omp's is the path of its .jsonl), or
+	// "" when the value holds none. nil: the value is the id.
+	SessionID func(native string) string `json:"-"`
 	// NewSession is the prompt that starts a fresh session in place
 	// (recycle).
 	NewSession string `json:"new_session,omitempty"`
 	// ExitCommand is the prompt that ends the agent.
 	ExitCommand string `json:"exit_command,omitempty"`
+	// ExitByKeys: the agent ends by ntm's exit keys for its ntm type
+	// (lifecycle.ExitKeys), not by a prompt. Recycle sends them when the
+	// kind has no ExitCommand; they type no text, so a draft that a
+	// person left in the input box cannot make the exit a shell command.
+	ExitByKeys bool `json:"exit_by_keys,omitempty"`
 	// ShellEscape is the prefix that makes the kind run a prompt as a
 	// shell command: at once, with no approval question, and no hook sees
 	// the command, so no guard (dcg) screens it (nhm-ubi). "" is
@@ -213,8 +222,12 @@ var EffortPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$`)
 // nhm's flags go right after the session id, before any tail of the
 // kind's own (checkResumeArgv refuses "--", so none becomes prompt text).
 // It also returns nil when the program on PATH is not the kind's CLI
-// (ProgramIsKind).
+// (ProgramIsKind). session is the native session as herdr reports it;
+// the kind's SessionID gives the id in it.
 func (a Adapter) Resume(session, model, effort, settings string) []string {
+	if a.SessionID != nil {
+		session = a.SessionID(session)
+	}
 	if a.ResumeArgv == nil || !SessionPattern.MatchString(session) || !ProgramIsKind(a.ResumeArgv[0], a.Name) {
 		return nil
 	}
@@ -670,6 +683,31 @@ func piShellDraft(screen string) string {
 	return ""
 }
 
+// ompSessionPattern is a session id that omp looks up by id: its
+// resolver takes letters, digits, "_" and "-", and nhm takes the part of
+// the file name after its "_", so the id holds no "_".
+var ompSessionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
+
+// ompSessionID is the session id in omp's native session: herdr reports
+// the path of the session's .jsonl, which omp 18.14.1 names
+// <time>_<id>.jsonl, and a value that is no path is taken as the id.
+// "" when the value holds no such id.
+func ompSessionID(native string) string {
+	id := native
+	if strings.ContainsRune(native, '/') {
+		stem, ok := strings.CutSuffix(filepath.Base(native), ".jsonl")
+		_, after, found := strings.Cut(stem, "_")
+		if !ok || !found || !filepath.IsAbs(native) {
+			return ""
+		}
+		id = after
+	}
+	if !ompSessionPattern.MatchString(id) {
+		return ""
+	}
+	return id
+}
+
 func fromCodex(e Event, bound string, launch bool) Decision {
 	d := codex.Classify(codex.Event{HookEvent: e.HookEvent, Source: e.Source, SessionID: e.SessionID}, bound, launch)
 	return Decision{Verdict: d.Verdict, Reason: d.Reason, Compacted: d.Compacted, Resumed: d.Resumed, TakeSession: d.TakeSession}
@@ -782,8 +820,18 @@ func builtins() []Adapter {
 			// extension's input and user_bash events see the command.
 			Name: "omp", NTMType: "omp", ModelFlag: "--model", EffortArgs: []string{"--thinking", "{effort}"},
 			ShellEscape: "!", ExtraEscapes: []string{"$"},
+			// ntm's exit for omp (SendOmpExitContext, robot exit_sequences'
+			// exitOmp): Escape, Ctrl+C, Ctrl+D. omp 18.14.1 has /exit and
+			// /new too, but herdr would type /exit after a "!" or "$" draft
+			// (nhm-dv41).
+			ExitByKeys: true, NewSession: "/new",
+			// ntm's native resume (agentsession.ResumeCommand): omp --resume
+			// takes a session id, an id prefix or a path; herdr reports the
+			// .jsonl path, and nhm passes the id in its name (nhm-dv41).
+			ResumeArgv: []string{"omp", "--resume", "{session}"}, ResumeFlags: []string{"--resume", "-r"}, SessionID: ompSessionID,
 			InterruptKeys: []string{"esc"}, QuotaPool: "omp", CodeReview: true, GuardSupported: true,
-			Cannot: []string{"its guard settings file", "its usage", "its session resume",
+			Cannot: []string{"its guard settings file", "its usage",
+				"a fresh session after a recycle when omp's autoResume setting is on: omp then resumes the newest session in the folder, the one recycle stopped (the sandbox, nhm-dv41)",
 				`a "!" shell command or a "$" Python line that a person types at its prompt: omp runs it at once, and nhm installs no omp guard (nhm send refuses a prompt that starts with either, or holds a control character, nhm-gb0)`,
 				`a "!" or "$" that a person leaves in its input box: herdr types nhm's next prompt after it, and omp may run that as a shell command or Python; nhm does not read omp's input box on the screen (nhm-mowp)`},
 		},
