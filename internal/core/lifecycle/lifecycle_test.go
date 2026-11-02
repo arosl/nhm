@@ -115,6 +115,10 @@ func (f *fakeHerdr) AgentRead(_ context.Context, p herdr.AgentReadParams) (herdr
 	return herdr.PaneRead{PaneID: p.Target}, nil
 }
 
+func (f *fakeHerdr) PaneRead(_ context.Context, p herdr.PaneReadParams) (herdr.PaneRead, error) {
+	return herdr.PaneRead{PaneID: p.PaneID}, nil
+}
+
 func (f *fakeHerdr) AgentSendKeys(_ context.Context, target string, keys ...string) error {
 	return fmt.Errorf("the fake herdr sends no keys (%s %v)", target, keys)
 }

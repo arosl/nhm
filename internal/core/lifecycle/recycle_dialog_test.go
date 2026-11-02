@@ -58,6 +58,15 @@ type dialogPane struct {
 	// last one stays); readErr fails every read.
 	screens []string
 	readErr bool
+	// status is the agent's herdr state ("": idle). exitReadErr fails
+	// every agent.read after the exit command, as the host's herdr did
+	// (nhm-nng3); paneReadErr fails pane.read, which reads the screen.
+	status      string
+	exitReadErr bool
+	paneReadErr bool
+	paneReads   int
+	// waitTimeout answers every agent.wait with herdr's timeout.
+	waitTimeout bool
 }
 
 func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialogPane, *herdr.Client) {
@@ -83,7 +92,7 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 	s.Handle("agent.wait", func(herdrtest.Request) (any, *herdrtest.Error) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		if p.startScreen != "" {
+		if p.startScreen != "" || p.waitTimeout {
 			return nil, &herdrtest.Error{Code: "timeout", Message: "agent did not reach the state"}
 		}
 		return agent()
@@ -115,7 +124,7 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 			return nil, &herdrtest.Error{Code: "invalid_request", Message: fmt.Sprintf("read %s %d", q.Source, q.Lines)}
 		}
 		p.reads++
-		if p.readErr {
+		if p.readErr || (p.exitReadErr && p.exiting) {
 			return nil, &herdrtest.Error{Code: "internal", Message: "read failed"}
 		}
 		text := p.screen
@@ -124,6 +133,25 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 		}
 		return map[string]any{"type": "pane_read", "read": map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
 			"source": "recent", "format": "text", "revision": 1, "text": text, "truncated": false}}, nil
+	})
+	s.Handle("pane.read", func(r herdrtest.Request) (any, *herdrtest.Error) {
+		var q struct {
+			PaneID string `json:"pane_id"`
+			Source string
+			Lines  int
+		}
+		_ = json.Unmarshal(r.Params, &q)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if q.PaneID != "w1:p1" || q.Source != "recent" || q.Lines != 40 {
+			return nil, &herdrtest.Error{Code: "invalid_request", Message: fmt.Sprintf("pane.read %s %s %d", q.PaneID, q.Source, q.Lines)}
+		}
+		p.paneReads++
+		if p.paneReadErr {
+			return nil, &herdrtest.Error{Code: "internal", Message: "pane read failed"}
+		}
+		return map[string]any{"type": "pane_read", "read": map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
+			"source": "recent", "format": "text", "revision": 1, "text": p.screen, "truncated": false}}, nil
 	})
 	s.Handle("agent.send_keys", func(r herdrtest.Request) (any, *herdrtest.Error) {
 		var q struct{ Keys []string }
@@ -166,8 +194,12 @@ func newDialogPane(t *testing.T, kind, dialog string, exitKeys []string) (*dialo
 
 // agentJSON is the pane's agent; the caller holds p.mu.
 func (p *dialogPane) agentJSON() map[string]any {
+	status := p.status
+	if status == "" {
+		status = "idle"
+	}
 	return map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "term_1",
-		"name": "icyknoll", "agent": p.kind, "agent_status": "idle", "focused": false, "revision": 1, "state_change_seq": 3, "cwd": "/p"}
+		"name": "icyknoll", "agent": p.kind, "agent_status": status, "focused": false, "revision": 1, "state_change_seq": 3, "cwd": "/p"}
 }
 
 // bindKind binds IcyKnoll of a kind in pane w1:p1, for the stub.

@@ -176,7 +176,7 @@ func Recycle(ctx context.Context, env Env, req RecycleRequest) (RecycleResult, e
 	case err != nil:
 		return fail(StageCheck, fmt.Errorf("herdr: %w", err))
 	case agent.AgentStatus != herdr.StatusIdle && agent.AgentStatus != herdr.StatusDone:
-		return fail(StageCheck, fmt.Errorf("%s is %s; an agent is recycled only between turns (interrupt it first)", b.MailName, agent.AgentStatus))
+		return fail(StageCheck, busy(ctx, env, b, agent.AgentStatus))
 	case agent.Agent != "" && agent.Agent != b.Kind:
 		return fail(StageCheck, fmt.Errorf("pane %s holds a %s agent; the binding is %s", b.PaneID, agent.Agent, b.Kind))
 	}
@@ -424,7 +424,7 @@ func sendExit(ctx context.Context, env Env, b bindings.Binding, a kinds.Adapter)
 // agent runs, stopAgent reads the pane's last lines every exitRead. It
 // answers a dialog that the kind answers once, with a warning, and fails
 // at once on one that nhm does not answer. The failure names the dialog
-// the pane shows.
+// the pane shows, or herdr's error when the pane could not be read.
 func stopAgent(ctx context.Context, env Env, b bindings.Binding, a kinds.Adapter, warnings *[]string) error {
 	deadline := env.now().Add(stopWait)
 	next := env.now().Add(exitRead)
@@ -439,7 +439,7 @@ func stopAgent(ctx context.Context, env Env, b bindings.Binding, a kinds.Adapter
 		}
 		if !answered && !env.now().Before(next) {
 			next = env.now().Add(exitRead)
-			switch name, answer, keys := exitDialog(ctx, env, b.PaneID, a); {
+			switch name, answer, keys, _ := exitDialog(ctx, env, b.PaneID, a); {
 			case name == "":
 			case keys == nil:
 				return fmt.Errorf("%s did not exit: %s opened %s, which recycle does not answer; nothing started: answer it in pane %s",
@@ -455,29 +455,112 @@ func stopAgent(ctx context.Context, env Env, b bindings.Binding, a kinds.Adapter
 		}
 		env.sleep(ctx, 250*time.Millisecond)
 	}
-	switch name, _, _ := exitDialog(ctx, env, b.PaneID, a); {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s did not exit: %w; nothing started: look at pane %s", b.MailName, err, b.PaneID)
+	}
+	switch name, _, _, err := exitDialog(ctx, env, b.PaneID, a); {
 	case name != "" && answered:
 		return fmt.Errorf("%s did not exit within %s: the pane still shows %s after recycle answered it; nothing started: answer it in pane %s",
 			b.MailName, stopWait, name, b.PaneID)
 	case name != "":
 		return fmt.Errorf("%s did not exit within %s: the pane shows %s; nothing started: answer it in pane %s", b.MailName, stopWait, name, b.PaneID)
+	case err != nil:
+		// A dialog that recycle could not see may still be open, and a
+		// later Enter would answer it (dive, 2026-10-31).
+		return fmt.Errorf("%s did not exit within %s; nothing started. herdr could not read pane %s (%v), so recycle could not see what holds the exit: look at the pane",
+			b.MailName, stopWait, b.PaneID, err)
 	}
 	return fmt.Errorf("%s did not exit within %s; nothing started, the pane is as it was", b.MailName, stopWait)
 }
 
 // exitDialog reads the dialog that the pane's last lines show, as the
 // kind names it (kinds.Adapter.ExitDialog). A kind that names none, or a
-// read that fails, gives "".
-func exitDialog(ctx context.Context, env Env, pane string, a kinds.Adapter) (name, answer string, keys []string) {
+// read that fails, gives ""; err is the read's error.
+func exitDialog(ctx context.Context, env Env, pane string, a kinds.Adapter) (name, answer string, keys []string, err error) {
 	if a.ExitDialog == nil {
-		return "", "", nil
+		return "", "", nil, nil
 	}
-	n := 40
-	screen, err := env.Herdr.AgentRead(ctx, herdr.AgentReadParams{Target: pane, Source: herdr.ReadRecent, Lines: &n})
+	screen, err := readScreen(ctx, env, pane)
 	if err != nil {
-		return "", "", nil
+		return "", "", nil, err
 	}
-	return a.ExitDialog(screen.Text)
+	name, answer, keys = a.ExitDialog(screen)
+	return name, answer, keys, nil
+}
+
+// screenLines is how many of a pane's last lines recycle reads: an exit
+// dialog, or the prompt box and what is above it.
+const screenLines = 40
+
+// readScreen reads the pane's last lines with herdr's agent.read, and
+// with pane.read when that fails. On the host's herdr 0.9.3, every
+// agent.read failed for the whole 30 s of four failed stops of Claude
+// agents (2026-10-29 and 10-31; the three on 10-31 had background work),
+// so recycle saw no 'Background work is running' dialog to answer; the
+// sandbox never failed such a read (nhm-nng3). The error names both
+// reads when both fail.
+func readScreen(ctx context.Context, env Env, pane string) (string, error) {
+	n := screenLines
+	screen, err := env.Herdr.AgentRead(ctx, herdr.AgentReadParams{Target: pane, Source: herdr.ReadRecent, Lines: &n})
+	if err == nil {
+		return screen.Text, nil
+	}
+	pr, perr := env.Herdr.PaneRead(ctx, herdr.PaneReadParams{PaneID: pane, Source: herdr.ReadRecent, Lines: &n})
+	if perr != nil {
+		return "", fmt.Errorf("%v; %v", err, perr)
+	}
+	return pr.Text, nil
+}
+
+// busy is the check's refusal of an agent in a turn. A Claude agent whose
+// turn waits for background agents of its own shows an empty input box,
+// so it looks idle to a person (dive, nhm-nng3): the refusal names them
+// and what ends the wait. In the sandbox, nhm interrupt (Ctrl+C) ended
+// the wait and stopped the background agent, and recycle then ran.
+func busy(ctx context.Context, env Env, b bindings.Binding, status herdr.AgentStatus) error {
+	what := fmt.Sprintf("%s is %s", b.MailName, status)
+	if status == herdr.StatusWorking {
+		switch n, waiting := backgroundAgents(ctx, env, b); {
+		case waiting:
+			return fmt.Errorf("%s: its turn waits until %s of its own %s; recycle it after that, or interrupt it first (nhm interrupt <session> --name %s), which stops %s too",
+				what, agents(n), plural(n, "finishes", "finish"), b.MailName, plural(n, "that agent", "those agents"))
+		case n > 0:
+			return fmt.Errorf("%s, and %s of its own %s; an agent is recycled only between turns (interrupt it first)", what, agents(n), plural(n, "runs", "run"))
+		}
+	}
+	return fmt.Errorf("%s; an agent is recycled only between turns (interrupt it first)", what)
+}
+
+// backgroundRead bounds backgroundAgents' read: it only words a refusal.
+const backgroundRead = 5 * time.Second
+
+// backgroundAgents counts the background agents that b's pane shows, and
+// whether its turn waits only for them (kinds.BackgroundAgents). Only a
+// kind that shows them is read; a read that fails gives none.
+func backgroundAgents(ctx context.Context, env Env, b bindings.Binding) (int, bool) {
+	if !kinds.ShowsBackgroundAgents(b.Kind) {
+		return 0, false
+	}
+	rctx, cancel := context.WithTimeout(ctx, backgroundRead)
+	defer cancel()
+	screen, err := readScreen(rctx, env, b.PaneID)
+	if err != nil {
+		return 0, false
+	}
+	return kinds.BackgroundAgents(b.Kind, screen)
+}
+
+// agents is "1 background agent" or "N background agents".
+func agents(n int) string {
+	return fmt.Sprintf("%d %s", n, plural(n, "background agent", "background agents"))
+}
+
+// plural is one for n == 1, else many.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // noAgent reports herdr's answer that a pane holds no agent: none is
@@ -577,11 +660,29 @@ func waitTurn(ctx context.Context, env Env, req RecycleRequest, b bindings.Bindi
 	case noAgent(err):
 		return nil
 	case err != nil:
+		if herdr.ErrorCode(err) == herdr.CodeTimeout {
+			if why := waitsFor(ctx, env, b); why != "" {
+				return fmt.Errorf("%s did not end its turn within %s (%s): %w", b.MailName, req.WaitTurn, why, err)
+			}
+		}
 		return fmt.Errorf("%s did not end its turn within %s: %w", b.MailName, req.WaitTurn, err)
 	case info.AgentStatus != herdr.StatusIdle && info.AgentStatus != herdr.StatusDone:
+		if why := waitsFor(ctx, env, b); why != "" {
+			return fmt.Errorf("%s did not end its turn within %s (it is %s; %s)", b.MailName, req.WaitTurn, info.AgentStatus, why)
+		}
 		return fmt.Errorf("%s did not end its turn within %s (it is %s)", b.MailName, req.WaitTurn, info.AgentStatus)
 	}
 	return nil
+}
+
+// waitsFor says what b's turn waits for when it waits only for background
+// agents of its own, as a Claude agent's does when it asks for its own
+// recycle (--self) with one still running; else "".
+func waitsFor(ctx context.Context, env Env, b bindings.Binding) string {
+	if n, waiting := backgroundAgents(ctx, env, b); waiting {
+		return fmt.Sprintf("its turn waits until %s of its own %s", agents(n), plural(n, "finishes", "finish"))
+	}
+	return ""
 }
 
 // recycleKickoff is the successor's prompt: --prompt as typed, a

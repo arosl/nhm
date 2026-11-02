@@ -31,6 +31,7 @@ type Herdr interface {
 	AgentRead(ctx context.Context, p herdr.AgentReadParams) (herdr.PaneRead, error)
 	AgentSendKeys(ctx context.Context, target string, keys ...string) error
 	AgentRename(ctx context.Context, target, name string) (herdr.AgentInfo, error)
+	PaneRead(ctx context.Context, p herdr.PaneReadParams) (herdr.PaneRead, error)
 	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
 	PaneGet(ctx context.Context, paneID string) (herdr.PaneInfo, error)
 	PaneRename(ctx context.Context, paneID, label string) (herdr.PaneInfo, error)
