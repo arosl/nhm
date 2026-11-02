@@ -222,8 +222,9 @@ func opTargets(ctx context.Context, ie *instanceEnv, store *bindings.Store, opID
 	if err != nil {
 		return nil, err
 	}
-	// A nudge types its line without a wait for the turn's start
-	// (nhm-qaa): herdr took it, but nobody saw the turn begin.
+	// A hook's nudge types its line without a wait for the turn's start
+	// (nhm-qaa), and a nudge's receipt does not say whether its nudge
+	// waited (nhm-ew51): the wait must see the turn begin.
 	nudge := op.Verb == wake.Verb
 	var list []bindings.Binding
 	byID := map[string]wait.Receipt{}

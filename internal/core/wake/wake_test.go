@@ -23,6 +23,8 @@ type fakeHerdr struct {
 	agents    map[string]herdr.AgentInfo
 	promptErr map[string]error
 	prompts   []herdr.AgentPromptParams
+	// onPrompt changes a pane's agent when it gets a prompt.
+	onPrompt map[string]func(*herdr.AgentInfo)
 	// screens are the panes' last lines (none: an empty screen); readErr
 	// fails every read.
 	screens map[string]string
@@ -52,6 +54,11 @@ func (f *fakeHerdr) AgentPrompt(_ context.Context, p herdr.AgentPromptParams) (h
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prompts = append(f.prompts, p)
+	if fn := f.onPrompt[p.Target]; fn != nil {
+		a := f.agents[p.Target]
+		fn(&a)
+		f.agents[p.Target] = a
+	}
 	if err := f.promptErr[p.Target]; err != nil {
 		return herdr.AgentInfo{}, err
 	}
@@ -292,6 +299,131 @@ func TestPossiblySubmittedIsAnnouncedAndVisible(t *testing.T) {
 	u, err := PossiblySubmitted(ctx, w.env)
 	if err != nil || len(u) != 1 || u[0].MailName != "IcyKnoll" {
 		t.Fatalf("uncertain = %+v, %v", u, err)
+	}
+}
+
+// A maintenance nudge waits as a send does (nhm-ew51): herdr answers when
+// it sees the turn start, so its "submitted" is a turn that started.
+// Without PromptWait (the hooks) a nudge does not wait.
+func TestAMaintenanceNudgeWaitsForTheTurn(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.env.PromptWait = send.PromptWait
+	w.bind(t, "IcyKnoll", "w1:p1", "claude", herdr.StatusIdle)
+	w.mail.inbox["IcyKnoll"] = []InboxMessage{{ID: 1, From: "SageOak", ThreadID: "t1", Kind: "to"}}
+	rep, err := Pass(ctx, w.env, nil, TriggerMaintain)
+	if err != nil || len(rep.Decisions) != 1 || rep.Decisions[0].Outcome != send.StatusSubmitted {
+		t.Fatalf("report = %+v, %v", rep, err)
+	}
+	p := w.h.prompts[0]
+	if p.Text != Prompt || p.Wait == nil || p.Wait.TimeoutMS == nil || *p.Wait.TimeoutMS != send.PromptWait.Milliseconds() ||
+		len(p.Wait.Until) != 2 || p.Wait.Until[0] != herdr.StatusWorking || p.Wait.Until[1] != herdr.StatusBlocked {
+		t.Fatalf("prompt = %+v, wait %+v", p, p.Wait)
+	}
+	w.env.PromptWait = 0
+	w.bind(t, "BlueLake", "w1:p2", "claude", herdr.StatusIdle)
+	if _, err := MailSent(ctx, w.env, []Sent{sent(2, "SageOak", "t1", "BlueLake")}); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.h.prompts) != 2 || w.h.prompts[1].Wait != nil {
+		t.Fatalf("prompts = %+v", w.h.prompts)
+	}
+}
+
+// A maintenance nudge that herdr sees start no turn (agent_prompt_stalled:
+// herdr took the text and its Enter, but the agent took no input) is
+// possibly submitted (nhm-ew51). Its mail counts as announced, it gets no
+// receipt, PossiblySubmitted lists it, and a later pass does not repeat
+// it. The reason says where the text may be left; nhm types nothing to
+// clear it, and the pass warns, so a timer's journal keeps it. A
+// completion past the baseline, or a turn that started after herdr's
+// wait, makes delivery likely, as for a send. herdr's timeout counts as
+// a stall; a refusal under the wait typed nothing and stays pending.
+func TestANudgeThatStartsNoTurnIsPossiblySubmitted(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.env.PromptWait = send.PromptWait
+	w.h.onPrompt = map[string]func(*herdr.AgentInfo){}
+	seq := uint64(5)
+	stall := &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentPromptStalled, Message: "no working or blocked state within 5000ms"}
+	cases := []struct {
+		name, pane string
+		msg        int64
+		err        error
+		onPrompt   func(*herdr.AgentInfo)
+		outcome    string
+		reason     string
+	}{
+		{"IcyKnoll", "w1:p1", 1, stall, nil, send.StatusPossiblySubmitted,
+			"agent_prompt_stalled: herdr agent.prompt: agent_prompt_stalled: no working or blocked state within 5000ms; " +
+				"herdr saw the agent start no turn: the text may be left in the input box of pane w1:p1; the nudge is not repeated"},
+		// The turn ended inside herdr's gate.
+		{"BlueLake", "w1:p2", 2, stall, func(a *herdr.AgentInfo) {
+			next, done := uint64(7), uint64(7)
+			a.StateChangeSeq, a.CompletionSeq, a.AgentStatus = &next, &done, herdr.StatusDone
+		}, send.StatusPossiblySubmitted, "a turn completed after the baseline (completion_seq 7 > 5), so delivery is likely"},
+		// The turn started after herdr's gate.
+		{"TealFern", "w1:p3", 3, stall, func(a *herdr.AgentInfo) {
+			next := uint64(6)
+			a.StateChangeSeq, a.AgentStatus = &next, herdr.StatusWorking
+		}, send.StatusPossiblySubmitted, "the agent is working after the baseline (state_change_seq 6 > 5): " +
+			"a turn started after herdr's wait, so delivery is likely"},
+		{"SageOak", "w1:p4", 4, &herdr.Error{Method: "agent.prompt", Code: herdr.CodeTimeout}, nil, send.StatusPossiblySubmitted,
+			"herdr saw the agent start no turn: the text may be left in the input box of pane w1:p4"},
+		{"RedFox", "w1:p5", 5, &herdr.Error{Method: "agent.prompt", Code: herdr.CodeAgentNotReady}, nil, send.StatusRefused,
+			"agent_not_ready"},
+	}
+	for _, c := range cases {
+		w.bind(t, c.name, c.pane, "claude", herdr.StatusIdle)
+		a := w.h.agents[c.pane]
+		a.StateChangeSeq = &seq
+		w.h.agents[c.pane] = a
+		w.h.promptErr[c.pane] = c.err
+		w.h.onPrompt[c.pane] = c.onPrompt
+		w.mail.inbox[c.name] = []InboxMessage{{ID: c.msg, From: "GoldLark", ThreadID: "t1", Kind: "to"}}
+	}
+	rep, err := Pass(ctx, w.env, nil, TriggerMaintain)
+	if err != nil || len(rep.Decisions) != len(cases) {
+		t.Fatalf("report = %+v, %v", rep, err)
+	}
+	got := map[string]Decision{}
+	for _, d := range rep.Decisions {
+		got[d.MailName] = d
+	}
+	warned := strings.Join(rep.Warnings, "\n")
+	for _, c := range cases {
+		d := got[c.name]
+		if d.Outcome != c.outcome || !strings.Contains(d.Reason, c.reason) {
+			t.Errorf("%s = %+v, want %s with %q", c.name, d, c.outcome, c.reason)
+		}
+		if _, err := wait.Receipts(ctx, w.env.DB.SQL(), d.OperationID); !errors.Is(err, wait.ErrNoReceipts) {
+			t.Errorf("%s receipts err = %v, want none", c.name, err)
+		}
+		warn := c.name + " (" + c.pane + "): the nudge is possibly submitted and is not repeated: " + d.Reason
+		pend := pendingIDs(t, w, c.name)
+		if c.outcome == send.StatusRefused {
+			if len(pend) != 1 || strings.Contains(warned, c.name) {
+				t.Errorf("%s: pending %v, warnings %q", c.name, pend, warned)
+			}
+		} else if len(pend) != 0 || !strings.Contains(warned, warn) {
+			t.Errorf("%s: pending %v, warnings %q, want %q", c.name, pend, warned, warn)
+		}
+	}
+	u, err := PossiblySubmitted(ctx, w.env)
+	if err != nil || len(u) != 4 {
+		t.Fatalf("uncertain = %+v, %v", u, err)
+	}
+	// Past the cooldown, the announced mail is still unread: no second
+	// nudge. The refused one goes again.
+	w.now = w.now.Add(3 * time.Minute)
+	for _, c := range cases {
+		w.h.set(c.pane, herdr.StatusIdle)
+	}
+	delete(w.h.promptErr, "w1:p5")
+	rep, err = Pass(ctx, w.env, nil, TriggerMaintain)
+	if err != nil || len(rep.Decisions) != 1 || rep.Decisions[0].MailName != "RedFox" ||
+		rep.Decisions[0].Outcome != send.StatusSubmitted || len(w.h.prompts) != len(cases)+1 {
+		t.Fatalf("second pass = %+v, %v, prompts %d", rep, err, len(w.h.prompts))
 	}
 }
 

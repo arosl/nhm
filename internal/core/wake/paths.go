@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/arosl/nhm/internal/core/bindings"
+	"github.com/arosl/nhm/internal/core/send"
 	"github.com/arosl/nhm/internal/herdr"
 )
 
@@ -281,6 +282,13 @@ func Pass(ctx context.Context, env Env, targets []bindings.Binding, trigger stri
 		}
 		if d.Reason != ReasonNoPending {
 			rep.Decisions = append(rep.Decisions, d)
+		}
+		// A pass's output can go nowhere (ACFS's timer keeps only
+		// warnings): a nudge that may not have reached the agent is a
+		// warning too (nhm-ew51).
+		if d.Outcome == send.StatusPossiblySubmitted {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s (%s): the nudge is possibly submitted and is not repeated: %s",
+				d.MailName, d.PaneID, d.Reason))
 		}
 	}
 	if _, err := Prune(ctx, env); err != nil {

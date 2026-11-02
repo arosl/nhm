@@ -47,6 +47,11 @@ const promptGateMS int64 = 5000
 // answered timeout (nhm-0li, probed in the sandbox).
 const promptCallMS = promptGateMS + 1000
 
+// PromptWait is how long a send's agent.prompt waits for the turn that
+// it starts: herdr's gate and a second. A maintenance nudge waits the
+// same (wake.Env.PromptWait; nhm-ew51).
+const PromptWait = time.Duration(promptCallMS) * time.Millisecond
+
 // lockWait bounds the wait for a target's lock.
 const lockWait = 10 * time.Second
 

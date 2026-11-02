@@ -131,9 +131,9 @@ type Target struct {
 	Baseline *Baseline
 	// Submission is the receipt's status; empty without --after-op.
 	Submission string
-	// StartUnseen: the submission did not wait for the turn to start (a
-	// wake nudge, nhm-qaa), so even a submitted receipt shows no start;
-	// the wait must see it.
+	// StartUnseen: the submission may not have waited for the turn to
+	// start (a wake nudge: a hook's does not, nhm-qaa, nhm-ew51), so even a
+	// submitted receipt shows no start; the wait must see it.
 	StartUnseen bool
 }
 

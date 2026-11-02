@@ -25,6 +25,12 @@
 // submitted nudge also gets a receipt, as a send's target does, so nhm
 // wait --after-op can wait for the turn it started (nhm-qaa).
 //
+// The maintenance paths (Env.PromptWait) wait, as a send does, until
+// herdr sees the agent start the turn: their "submitted" is a turn that
+// started, and a nudge that starts none is possibly submitted, listed by
+// PossiblySubmitted (nhm-ew51). The hooks' budget is shorter than that
+// wait, so their "submitted" means that herdr took the text and its Enter.
+//
 // The caller holds the owner lock and checks that nhm owns the instance;
 // no SQLite transaction stays open across a herdr or Agent Mail call.
 package wake
@@ -88,7 +94,10 @@ type Config struct {
 	// InFlight is how long an attempt may stay attempt_started; after it
 	// the attempt counts as possibly submitted (the process that made it
 	// died after the claim, as a hook does at its 1.9 s hard stop). A
-	// prompt without a wait returns well inside it.
+	// prompt without a wait returns well inside it. herdr answers one with
+	// a wait (Env.PromptWait) at its 5 s gate, though the client allows it
+	// 11 s; an outcome that comes after a stale settle still lands right
+	// (finish).
 	InFlight time.Duration
 	// InboxLimit bounds one fetch_inbox.
 	InboxLimit int
@@ -127,6 +136,12 @@ type Env struct {
 	// unknown). nil: not recorded.
 	Inode func() uint64
 	Now   func() time.Time
+	// PromptWait makes a nudge wait, as a send does (send.PromptWait),
+	// until herdr sees the agent start the turn (working or blocked). A
+	// nudge that starts none, such as one typed into an agent that took
+	// no input, is possibly submitted (nhm-ew51). 0: no wait, for the
+	// hooks, whose budget is shorter.
+	PromptWait time.Duration
 }
 
 func (e Env) now() time.Time {
@@ -395,19 +410,61 @@ func Nudge(ctx context.Context, env Env, b bindings.Binding, trigger string) (De
 	if base, err := wait.Capture(b, agent, env.inode(), env.now()); err == nil {
 		rc = &nudgeReceipt{b: b, base: base}
 	}
-	// Without a wait: the sender spends nothing, and the gate above saw
-	// the agent idle or done.
-	_, perr := env.Herdr.AgentPrompt(ctx, herdr.AgentPromptParams{Target: b.PaneID, Text: Prompt})
+	// The gate above saw the agent idle or done. A hook's nudge does not
+	// wait: the wait does not fit the hook's budget. A maintenance nudge
+	// waits as a send does, so that its "submitted" is a turn that
+	// started: herdr can take the text and its Enter from an agent that
+	// takes no input (nhm-ew51).
+	p := herdr.AgentPromptParams{Target: b.PaneID, Text: Prompt}
+	if env.PromptWait > 0 {
+		ms := env.PromptWait.Milliseconds()
+		p.Wait = &herdr.PromptWait{Until: []herdr.AgentStatus{herdr.StatusWorking, herdr.StatusBlocked}, TimeoutMS: &ms}
+	}
+	_, perr := env.Herdr.AgentPrompt(ctx, p)
 	status, code := send.Classify(perr)
 	d.Action, d.Outcome = ActionNudged, status
 	if perr != nil {
 		d.Reason = code + ": " + perr.Error()
+		if p.Wait != nil && (code == herdr.CodeAgentPromptStalled || code == herdr.CodeTimeout) {
+			d.Reason += "; " + noTurn(ctx, env, b, rc)
+		}
 	}
 	// The outcome is written even when the caller's deadline has passed:
 	// a prompt that went out must not stay attempt_started.
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
 	return d, finish(fctx, env, opID, b.ID, claimed, status, rc, env.now())
+}
+
+// noTurnRead bounds noTurn's read of the agent: the attempt stays
+// attempt_started until finish.
+const noTurnRead = 2 * time.Second
+
+// noTurn says what a nudge that herdr saw start no turn means. As with a
+// send (exp.3), a fast turn can end inside herdr's gate, and a slow one
+// can start after it: a completion past the baseline, or a working or
+// blocked agent past it, makes delivery likely. A person could have
+// caused either, so the nudge stays possibly submitted. Else the text
+// may be left in the agent's input box; nhm does not clear it.
+func noTurn(ctx context.Context, env Env, b bindings.Binding, rc *nudgeReceipt) string {
+	if rc != nil {
+		gctx, cancel := context.WithTimeout(ctx, noTurnRead)
+		defer cancel()
+		now, err := env.Herdr.AgentGet(gctx, b.PaneID)
+		base := rc.base.StateChangeSeq
+		switch {
+		case err != nil:
+		case now.CompletionSeq != nil && *now.CompletionSeq > base:
+			return fmt.Sprintf("a turn completed after the baseline (completion_seq %d > %d), so delivery is likely",
+				*now.CompletionSeq, base)
+		case now.StateChangeSeq != nil && *now.StateChangeSeq > base &&
+			(now.AgentStatus == herdr.StatusWorking || now.AgentStatus == herdr.StatusBlocked):
+			return fmt.Sprintf("the agent is %s after the baseline (state_change_seq %d > %d): a turn started after herdr's wait, "+
+				"so delivery is likely", now.AgentStatus, *now.StateChangeSeq, base)
+		}
+	}
+	return fmt.Sprintf("herdr saw the agent start no turn: the text may be left in the input box of pane %s; "+
+		"the nudge is not repeated", b.PaneID)
 }
 
 func anyInFlight(rows []pendingRow) bool {

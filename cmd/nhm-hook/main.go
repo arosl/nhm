@@ -193,7 +193,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 }
 
 // wakeEnv is the wake side of an opened instance. Settle reads an inbox,
-// so it gets an Agent Mail client; mail-sent reads none.
+// so it gets an Agent Mail client; mail-sent reads none. Its nudges do
+// not wait for the turn (no PromptWait): a send's wait is longer than
+// the hook's budget, and nhm maintain's nudges wait (nhm-ew51).
 func wakeEnv(env hooks.Env, getenv func(string) string, withMail bool) (wake.Env, error) {
 	h := herdr.New(getenv("HERDR_SOCKET_PATH"))
 	w := wake.Env{DB: env.DB, Bindings: env.Bindings, Herdr: h, Config: wake.DefaultConfig(), Now: env.Now,

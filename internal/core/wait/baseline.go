@@ -82,9 +82,11 @@ func SocketInode(path string) uint64 {
 }
 
 // Submission statuses of a receipt (plan-v8 2.3). Only "submitted" means
-// that herdr saw the agent working or blocked after the prompt. A wake
-// nudge's prompt does not wait, so its "submitted" means only that herdr
-// took the line (Target.StartUnseen, nhm-qaa).
+// that herdr saw the agent working or blocked after the prompt. A hook's
+// wake nudge does not wait, so its "submitted" means only that herdr took
+// the line. A maintenance nudge waits (nhm-ew51), but its receipt does
+// not say which it was, so every nudge's start counts as unseen
+// (Target.StartUnseen, nhm-qaa).
 const (
 	Submitted         = "submitted"
 	PossiblySubmitted = "possibly_submitted"
