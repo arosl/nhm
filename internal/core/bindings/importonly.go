@@ -216,6 +216,14 @@ func importOne(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequ
 		}
 		cands = keep
 	}
+	// Before the dry run's verdict: an operator's pane is never importable,
+	// so no run claims an operation for it (nhm-h85k).
+	if op, err := env.Bindings.IsOperator(ctx, a.PaneID); err != nil {
+		return skip(err.Error())
+	} else if op {
+		item.ProjectKey = cands[0].key
+		return skip("the pane is an operator's (nhm operator); nhm never binds it")
+	}
 
 	fromFile, fromBash, why := "", "", ""
 	var evidence []Evidence

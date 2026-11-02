@@ -269,6 +269,7 @@ pane is --pane or the calling pane. --handoff-from gives the pane's agent
 the identity of that binding (for example a session casr converted) and
 bumps its generation. As spawn does, it labels the pane "<MailName>
 <model>" and, when the pane is alone in its tab, the tab "<MailName>".
+It refuses a pane marked as an operator's (nhm operator), exit 2.
 Runs only when nhm owns this herdr instance.
 `
 
@@ -342,9 +343,9 @@ func adoptUnderOwner(ctx context.Context, ie *instanceEnv, req bindings.AdoptReq
 		return aerr
 	})
 	switch {
-	case errors.Is(err, bindings.ErrAgentChanged), errors.Is(err, bindings.ErrBoardPane):
+	case errors.Is(err, bindings.ErrAgentChanged), errors.Is(err, bindings.ErrBoardPane), errors.Is(err, bindings.ErrOperatorPane):
 		// Another agent is in the pane since the review, or the pane is
-		// nhm's board: a refusal.
+		// nhm's board or an operator's: a refusal.
 		code = exitRefused
 	case err != nil && code == exitOK:
 		code = exitError

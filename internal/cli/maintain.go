@@ -31,6 +31,10 @@ from the am CLI or the web UI that no hook saw), deliver the due wakes
 (cooldown and rate limit passed, agent idle or done), and reconcile each
 bound pane's name. A bound agent's tab that still has herdr's default
 label (a number) and holds only that pane gets the agent's Mail name.
+A binding whose Agent Mail identity has been retired or deregistered for
+a minute is retired: the agent runs on, and nhm sends it nothing until
+it registers again. The mark of an operator pane (nhm operator) that
+herdr no longer has is dropped.
 With --mail-from, it also runs the limits scan and
 mails each new limit event (nhm limits).
 
@@ -221,6 +225,12 @@ type maintainResult struct {
 	At      *time.Time  `json:"at,omitempty"`
 	Wake    *wakeResult `json:"wake,omitempty"`
 	Names   []string    `json:"names"`
+	// Released are the bindings the pass retired because Agent Mail
+	// reports their identity retired or deregistered.
+	Released []bindings.GoneIdentity `json:"released"`
+	// OperatorMarksDropped are the operator marks of panes that herdr no
+	// longer has.
+	OperatorMarksDropped []bindings.OperatorPane `json:"operator_marks_dropped"`
 	// Recycles are the recycles on close the pass started ([maintain]
 	// recycle_on_close).
 	Recycles []string      `json:"recycles,omitempty"`
@@ -233,7 +243,8 @@ type maintainResult struct {
 // maintainPass runs one maintenance pass. The board calls it on each
 // refresh with runner "board".
 func (ie *instanceEnv) maintainPass(ctx context.Context, opts maintainOptions) (maintainResult, error) {
-	res := maintainResult{Names: []string{}, Limits: []limitReport{}, Warnings: []string{}}
+	res := maintainResult{Names: []string{}, Released: []bindings.GoneIdentity{}, OperatorMarksDropped: []bindings.OperatorPane{},
+		Limits: []limitReport{}, Warnings: []string{}}
 	w, err := ie.wakeEnv(true)
 	if err != nil {
 		return res, err
@@ -249,6 +260,12 @@ func (ie *instanceEnv) maintainPass(ctx context.Context, opts maintainOptions) (
 	}
 	res.Wake = &wr
 	res.Warnings = append(res.Warnings, wr.Warnings...)
+
+	// Bindings of Agent Mail identities that are retired or deregistered,
+	// and the marks of operator panes that herdr no longer has (nhm-h85k).
+	var idWarnings []string
+	res.Released, res.OperatorMarksDropped, idWarnings = ie.identityPass(ctx, w.Mail)
+	res.Warnings = append(res.Warnings, idWarnings...)
 
 	// The cheap name reconcile: each bound pane, as a plugin event would,
 	// and its tab when herdr's default label (a number) is still on it.
@@ -347,6 +364,12 @@ func printMaintain(w io.Writer, res maintainResult, quiet bool) {
 		} else {
 			printWake(w, *res.Wake)
 		}
+	}
+	for _, g := range res.Released {
+		fmt.Fprintf(w, "%sreleased: %s (%s): its Agent Mail identity was %s; binding %s retired\n", stamp, g.MailName, dash(g.PaneID), g.State, g.BindingID)
+	}
+	for _, m := range res.OperatorMarksDropped {
+		fmt.Fprintf(w, "%soperator mark dropped: herdr has no pane %s\n", stamp, m.PaneID)
 	}
 	for _, n := range res.Names {
 		fmt.Fprintf(w, "%sname: %s\n", stamp, n)

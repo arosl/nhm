@@ -16,16 +16,20 @@ import (
 )
 
 // fakeAgentMail serves fetch_inbox from inbox (by agent) and records
-// mark_message_read; AGENT_MAIL_URL points nhm at it.
+// mark_message_read; AGENT_MAIL_URL points nhm at it. list_agents lists
+// no identity, and whois answers who's fields for a name (none: an
+// active identity), so maintain's identity check finds every identity
+// active unless a test says otherwise.
 type fakeAgentMail struct {
 	mu     sync.Mutex
 	inbox  map[string][]map[string]any
 	marked []string
+	who    map[string]map[string]any
 }
 
 func newFakeAgentMail(t *testing.T) *fakeAgentMail {
 	t.Helper()
-	m := &fakeAgentMail{inbox: map[string][]map[string]any{}}
+	m := &fakeAgentMail{inbox: map[string][]map[string]any{}, who: map[string]map[string]any{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var call struct {
@@ -51,6 +55,13 @@ func newFakeAgentMail(t *testing.T) *fakeAgentMail {
 			text = string(data)
 		case "mark_message_read":
 			m.marked = append(m.marked, args["agent_name"].(string)+"#"+jsonNumber(args["message_id"]))
+		case "list_agents":
+			text = "[]"
+		case "whois":
+			data, _ := json.Marshal(m.who[args["agent_name"].(string)])
+			if string(data) != "null" {
+				text = string(data)
+			}
 		}
 		m.mu.Unlock()
 		res, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1,

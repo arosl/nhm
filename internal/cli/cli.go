@@ -180,6 +180,8 @@ Usage:
                          print a binding and how nhm verified it
   nhm adopt <MailName> [--pane ID] [--handoff-from BINDING] [--json]
                          bind an identity to the agent in a pane, by hand
+  nhm operator [PANE] [--off | --list] [--json]
+                         mark a pane as an operator's: nhm never binds it or sends to it
   nhm move <Name> --workspace W [--dry-run] [--json]
                          move an agent's pane to a new tab of W; its binding follows
   nhm move <Name> --tab T [--per-tab N] [--dry-run] [--json]

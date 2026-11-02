@@ -291,7 +291,8 @@ func (s *Store) setStatus(ctx context.Context, id string, expected int64, st Sta
 }
 
 // checkFree refuses when another active binding holds the identity or
-// the pane; self is the binding being changed ("" for a new one).
+// the pane, or when the pane is an operator's (nhm-h85k); self is the
+// binding being changed ("" for a new one).
 func (s *Store) checkFree(ctx context.Context, tx *sql.Tx, self, projectKey, name, pane string) error {
 	var other string
 	err := tx.QueryRowContext(ctx, `SELECT binding_id FROM bindings WHERE status = 'active'
@@ -312,6 +313,11 @@ func (s *Store) checkFree(ctx context.Context, tx *sql.Tx, self, projectKey, nam
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("bindings: %w", err)
+	}
+	if _, ok, err := s.operator(ctx, tx, pane); err != nil {
+		return err
+	} else if ok {
+		return fmt.Errorf("%w: %s (nhm operator --off %s clears the mark)", ErrOperatorPane, pane, pane)
 	}
 	return nil
 }

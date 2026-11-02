@@ -435,7 +435,9 @@ func applyRegistration(ctx context.Context, env Env, c Candidate, st paneState, 
 	envWarning := bindings.WithMailAgentWarning(name, &occ)
 	b, err := env.Bindings.Create(ctx, bindings.New{MailName: name, MailProjectKey: root, ProjectID: core.ProjectID(root),
 		Provenance: bindings.Adopted, Occupant: occ})
-	if errors.Is(err, bindings.ErrIdentityBusy) || errors.Is(err, bindings.ErrPaneBusy) {
+	// An operator's pane is never bound (nhm-h85k): the person's own
+	// session registers to use Agent Mail, not to become a worker.
+	if errors.Is(err, bindings.ErrIdentityBusy) || errors.Is(err, bindings.ErrPaneBusy) || errors.Is(err, bindings.ErrOperatorPane) {
 		return "refused: " + err.Error(), nil
 	}
 	if err != nil {

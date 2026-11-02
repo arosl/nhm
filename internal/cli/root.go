@@ -274,6 +274,7 @@ func legacyVerbs() []legacyVerb {
 	return []legacyVerb{
 		{name: "resolve", run: runResolve},
 		{name: "adopt", run: runAdopt},
+		{name: "operator", run: runOperator},
 		{name: "move", run: runMove},
 		{name: "arrange", run: runArrange},
 		{name: "retire", run: runRetire},

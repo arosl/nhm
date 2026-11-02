@@ -149,9 +149,9 @@ func Adopt(ctx context.Context, env Env, req AdoptRequest) (AdoptResult, error) 
 	res, err := adopt(ctx, env, req, source, opID)
 	status := "done"
 	switch {
-	case errors.Is(err, ErrAgentChanged), errors.Is(err, ErrBoardPane):
-		// Not the reviewed agent, or nhm's board: refused before anything
-		// was bound, as nhm adopt's exit 2 says.
+	case errors.Is(err, ErrAgentChanged), errors.Is(err, ErrBoardPane), errors.Is(err, ErrOperatorPane):
+		// Not the reviewed agent, nhm's board or an operator's pane:
+		// refused before anything was bound, as nhm adopt's exit 2 says.
 		status = "refused"
 	case err != nil:
 		status = "failed"

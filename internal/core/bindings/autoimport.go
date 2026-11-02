@@ -41,8 +41,15 @@ type AutoImportResult struct {
 // import. The caller holds the owner lock shared.
 func AutoImport(ctx context.Context, env Env, projectOf ProjectOf, req ImportRequest) (AutoImportResult, error) {
 	res := AutoImportResult{Warnings: []string{}}
-	if req.PaneID != "" && !mayHaveEvidence(ctx, env, projectOf, req) {
-		return res, nil
+	if req.PaneID != "" {
+		// An operator's pane is never imported (nhm-h85k): no snapshot for
+		// each of its agent events.
+		if op, err := env.Bindings.IsOperator(ctx, req.PaneID); err == nil && op {
+			return res, nil
+		}
+		if !mayHaveEvidence(ctx, env, projectOf, req) {
+			return res, nil
+		}
 	}
 	req.DryRun = true
 	dry, err := ImportOnly(ctx, env, projectOf, req)
